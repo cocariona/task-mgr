@@ -25,13 +25,20 @@
       .tab-bar::-webkit-scrollbar { display: none; }
       .tab-bar button { white-space: nowrap; padding: 8px 10px !important; font-size: 12px !important; min-height: 40px; }
       .form-row { flex-direction: column !important; gap: 8px !important; }
-      .form-row input, .form-row select, .form-row button { width: 100% !important; min-height: 40px; flex: none !important; }
+      .form-row input, .form-row select, .form-row button { width: 100% !important; min-height: 40px; flex: none !important; box-sizing: border-box !important; }
+      .form-row > div { width: 100% !important; flex-direction: column !important; }
+      .form-row > div > * { width: 100% !important; flex: none !important; box-sizing: border-box !important; }
       .form-row .star-btn { width: 40px !important; }
       .task-row { padding: 10px 8px !important; }
       .task-row .grip { display: none; }
       .hdr-wrap { flex-direction: column; gap: 8px; align-items: flex-start !important; }
       .plan-fields { flex-direction: column !important; }
-      .plan-fields > * { width: 100% !important; flex: none !important; }
+      .plan-fields > * { width: 100% !important; flex: none !important; box-sizing: border-box !important; }
+      .modal-content { width: 95% !important; max-width: none !important; padding: 16px !important; margin: 8px !important; }
+      .modal-content input, .modal-content select, .modal-content textarea { width: 100% !important; box-sizing: border-box !important; }
+      .modal-content .plan-fields > * { width: 100% !important; }
+      .modal-row { flex-direction: column !important; gap: 8px !important; }
+      .modal-row > div { width: 100% !important; }
     }
     @media (hover: none) and (pointer: coarse) {
       .task-actions { display: flex !important; opacity: 0.6; }
@@ -89,16 +96,7 @@ const gcalUrl = (task, projects) => {
   if (task.scheduledDate) parts.push(`마감일: ${fd(task.scheduledDate)}`);
   const details = encodeURIComponent(parts.join('\n'));
   const date = task.planDate.replace(/-/g, '');
-  const time = task.planTime?.replace(/:/g, '') || '';
-  let dates;
-  if (time) {
-    const start = `${date}T${time}00`;
-    const h = parseInt(time.slice(0,2),10); const m = time.slice(2);
-    const endH = String(Math.min(h + 1, 23)).padStart(2, '0');
-    dates = `${start}/${date}T${endH}${m}00`;
-  } else {
-    dates = `${date}/${date}`;
-  }
+  const dates = `${date}/${date}`;
   return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${dates}&details=${details}`;
 };
 
@@ -124,12 +122,16 @@ const migrateData = (data) => {
   };
   data.tasks = data.tasks.map(t => {
     if (TASK_MIGRATION[t.text]) t = { ...t, status: TASK_MIGRATION[t.text] };
-    if (t.status === "scheduled") t = { ...t, status: "action" };
+    /* scheduled 상태 → action 전환, 과거 마감일은 제거 */
+    if (t.status === "scheduled") {
+      const isPast = t.scheduledDate && new Date(t.scheduledDate + "T00:00:00") < new Date(TODAY + "T00:00:00");
+      t = { ...t, status: "action", scheduledDate: isPast ? "" : (t.scheduledDate || ""), scheduledLabel: isPast ? "" : (t.scheduledLabel || "") };
+    }
     /* planDate 필드 없으면 추가 (기존 데이터 호환) */
-    if (!t.planDate) t = { ...t, planDate: t.scheduledDate || TODAY, planTime: "" };
+    if (!t.planDate) t = { ...t, planDate: t.scheduledDate || TODAY };
     if (t.subtasks?.length) t = { ...t, subtasks: t.subtasks.map(s => {
       let ns = s.status === "scheduled" ? { ...s, status: "action" } : { ...s };
-      if (!ns.planDate) ns = { ...ns, planDate: ns.scheduledDate || TODAY, planTime: "" };
+      if (!ns.planDate) ns = { ...ns, planDate: ns.scheduledDate || TODAY };
       return ns;
     })};
     return t;
@@ -159,31 +161,31 @@ const INIT_PROJECTS = [
 ];
 
 const INIT_TASKS = [
-  { id: gid(), text: "가속라 킥오프 회의 어레인지", status: "action", project: "accel", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: true, subtasks: [] },
-  { id: gid(), text: "서울대 연구책임자 변경 처리", status: "waiting", project: "accel", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "가속라 킥오프 회의 어레인지", status: "action", project: "accel", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: true, subtasks: [] },
+  { id: gid(), text: "서울대 연구책임자 변경 처리", status: "waiting", project: "accel", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
   { id: gid(), text: "모두연 연사/관객 섭외 현황 f/u", status: "waiting", project: "accel", scheduledDate: "", scheduledLabel: "", createdAt: TODAY, notes: "4월 랩장-보고서개요 확인 | 5월 - 랩원모집 및 컨텐츠 논의 f/u | 8월 - 중간 보고서 내용 확인 | 참석자 현황 확인, 내부 홍보방법 고민", focus: false, subtasks: [] },
   { id: gid(), text: "홍석님 - 성효진/안정호 교수님 논의 진행 전달 및 f/u", status: "waiting", project: "accel", scheduledDate: "", scheduledLabel: "", createdAt: TODAY, notes: "ㄴ 이후 박주성학생 구매건 재진행 필요\nㄴ 공개 sw 산출물 타 기관 산출물 정해야함 → 서울대, 스퀴즈비츠 포함 논의", focus: true, subtasks: [] },
-  { id: gid(), text: "etri 카드 회수 일정 확정 필요할지?", status: "someday", project: "rag", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "RAG 관련 서울대와 양자화 논의 필요할지 확인 + 자료 만들어야 할지 고민", status: "waiting", project: "rag", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "rag 지표는 fde 통해서 해결해야 함", status: "someday", project: "rag", scheduledDate: "2026-09-01", scheduledLabel: "9월 이후", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "킥오프 자료 작성", status: "action", project: "rag", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: true, subtasks: [] },
-  { id: gid(), text: "참여인력 변경 필요", status: "action", project: "dokpamo", scheduledDate: "2026-04-24", scheduledLabel: "4월 1주", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "독파모 쇼룸 카드 회수?", status: "action", project: "dokpamo", scheduledDate: "2026-07-01", scheduledLabel: "상반기 이후", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "독파모 3~4차 300% 전성비 달성 가능할지?", status: "waiting", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "crafton 워룸 회수", status: "action", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "독파모 시험검증", status: "action", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "독파모 2차수 미팅 날짜, 명단 확인", status: "someday", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "독파모 모델 우선순위 (atom-max 인프라 고도화사업건 제외) → 성진님 통해 확인", status: "waiting", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "논의사항 취합중", status: "waiting", project: "optcode", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "gpu vpn 대역 추가 (봉기님)", status: "waiting", project: "gpu", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "컴파일러 보고서 확인 > 질문 > 내선 6748", status: "waiting", project: "compiler", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: true, subtasks: [] },
-  { id: gid(), text: "여준기 실장 문의 진행", status: "action", project: "proj_general", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: true, subtasks: [] },
-  { id: gid(), text: "장비 심의 - 수정한 대로 보내보기 (가격 협의대로 + 기존 장비 없다는 것 강조)", status: "action", project: "proj_general", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: true, subtasks: [] },
-  { id: gid(), text: "smart nipa 종료과제 기관변경", status: "someday", project: "proj_general", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "홍석님 - 국가 RFP 만들어지는 프로세스 제안 > 무엇을 더 함이 좋을지?", status: "action", project: "proj_general", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "클로드 파일정리 (바탕화면 정리)", status: "action", project: "proj_etc", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "AI 툴 과제관련된 내용 북마크해서 분류", status: "someday", project: "proj_etc", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
-  { id: gid(), text: "이슈관리, 정리 메모해두기", status: "someday", project: "proj_etc", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "etri 카드 회수 일정 확정 필요할지?", status: "someday", project: "rag", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "RAG 관련 서울대와 양자화 논의 필요할지 확인 + 자료 만들어야 할지 고민", status: "waiting", project: "rag", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "rag 지표는 fde 통해서 해결해야 함", status: "someday", project: "rag", scheduledDate: "2026-09-01", scheduledLabel: "9월 이후", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "킥오프 자료 작성", status: "action", project: "rag", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: true, subtasks: [] },
+  { id: gid(), text: "참여인력 변경 필요", status: "action", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "원래 4월 1주 예정이었음", focus: false, subtasks: [] },
+  { id: gid(), text: "독파모 쇼룸 카드 회수?", status: "action", project: "dokpamo", scheduledDate: "2026-07-01", scheduledLabel: "상반기 이후", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "독파모 3~4차 300% 전성비 달성 가능할지?", status: "waiting", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "crafton 워룸 회수", status: "action", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "독파모 시험검증", status: "action", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "독파모 2차수 미팅 날짜, 명단 확인", status: "someday", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "독파모 모델 우선순위 (atom-max 인프라 고도화사업건 제외) → 성진님 통해 확인", status: "waiting", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "논의사항 취합중", status: "waiting", project: "optcode", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "gpu vpn 대역 추가 (봉기님)", status: "waiting", project: "gpu", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "컴파일러 보고서 확인 > 질문 > 내선 6748", status: "waiting", project: "compiler", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: true, subtasks: [] },
+  { id: gid(), text: "여준기 실장 문의 진행", status: "action", project: "proj_general", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: true, subtasks: [] },
+  { id: gid(), text: "장비 심의 - 수정한 대로 보내보기 (가격 협의대로 + 기존 장비 없다는 것 강조)", status: "action", project: "proj_general", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: true, subtasks: [] },
+  { id: gid(), text: "smart nipa 종료과제 기관변경", status: "someday", project: "proj_general", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "홍석님 - 국가 RFP 만들어지는 프로세스 제안 > 무엇을 더 함이 좋을지?", status: "action", project: "proj_general", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "클로드 파일정리 (바탕화면 정리)", status: "action", project: "proj_etc", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "AI 툴 과제관련된 내용 북마크해서 분류", status: "someday", project: "proj_etc", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "이슈관리, 정리 메모해두기", status: "someday", project: "proj_etc", scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
 ];
 
 const INIT_ISSUES = [
@@ -296,7 +298,7 @@ const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
           <Badge st={sub.status} />
-          {sub.planDate && <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "0px 4px", borderRadius: 4 }}>📆 {fd(sub.planDate)}{sub.planTime ? ` ${sub.planTime}` : ""}</span>}
+          {sub.planDate && <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "0px 4px", borderRadius: 4 }}>📆 {fd(sub.planDate)}</span>}
           {dl && <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>}
           {sub.scheduledDate && <span style={{ fontSize: 9, color: "#6B7280" }}>마감 {fd(sub.scheduledDate)}</span>}
           {sub.scheduledLabel && <span style={{ fontSize: 9, color: "#9ca3af" }}>({sub.scheduledLabel})</span>}
@@ -314,15 +316,14 @@ const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
 
 /* ─── SubAddForm (서브태스크 추가) ─── */
 const SubAddForm = ({ onAdd, onCancel }) => {
-  const [t, setT] = useState(""); const [s, setS] = useState("action"); const [sd, setSd] = useState(""); const [pd, setPd] = useState(TODAY); const [pt, setPt] = useState(""); const r = useRef();
+  const [t, setT] = useState(""); const [s, setS] = useState("action"); const [sd, setSd] = useState(""); const [pd, setPd] = useState(TODAY); const r = useRef();
   useEffect(() => { r.current?.focus(); }, []);
-  const go = () => { if (!t.trim() || !pd) return; onAdd({ text: t.trim(), status: s, focus: false, scheduledDate: sd, scheduledLabel: "", planDate: pd, planTime: pt }); };
+  const go = () => { if (!t.trim() || !pd) return; onAdd({ text: t.trim(), status: s, focus: false, scheduledDate: sd, scheduledLabel: "", planDate: pd }); };
   return (
     <div className="form-row" style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap", padding: "4px 0" }}>
       <input ref={r} style={{ ...S.inp, fontSize: 12 }} placeholder="하위 할일..." value={t} onChange={e => setT(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} />
       <StSel value={s} onChange={setS} compact />
       <input type="date" style={{ ...S.fld, width: 120, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} title="📆 언제할지 (필수)" required />
-      <input type="time" style={{ ...S.fld, width: 90, flex: "none", fontSize: 11 }} value={pt} onChange={e => setPt(e.target.value)} title="시작 시간" />
       <button style={S.btn()} onClick={go}>추가</button>
       <button style={S.gh} onClick={onCancel}>취소</button>
     </div>
@@ -338,9 +339,9 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
   const doneSubCnt = subs.filter(s => s.status === "done").length;
   const p = projects?.find(x => x.id === task.project);
 
-  const handleAddSub = ({ text, status, focus, scheduledDate, scheduledLabel, planDate, planTime }) => {
+  const handleAddSub = ({ text, status, focus, scheduledDate, scheduledLabel, planDate }) => {
     if (!onUpdate) return;
-    onUpdate({ ...task, subtasks: [...subs, { id: gid(), text, status, focus: focus || false, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: planDate || TODAY, planTime: planTime || "", notes: "", createdAt: TODAY }] });
+    onUpdate({ ...task, subtasks: [...subs, { id: gid(), text, status, focus: focus || false, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: planDate || TODAY, notes: "", createdAt: TODAY }] });
     setAddSub(false); setShowSubs(true);
   };
 
@@ -367,7 +368,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <Badge st={task.status} />
-            {task.planDate && <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "1px 5px", borderRadius: 6 }}>📆 {fd(task.planDate)}{task.planTime ? ` ${task.planTime}` : ""}</span>}
+            {task.planDate && <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "1px 5px", borderRadius: 6 }}>📆 {fd(task.planDate)}</span>}
             {task.scheduledDate && (() => { const dl = deadlineInfo(task.scheduledDate); return dl ? <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span> : null; })()}
             {task.scheduledDate && <span style={{ fontSize: 10, color: "#6B7280" }}>마감 {fd(task.scheduledDate)}</span>}
             {task.scheduledLabel && <span style={{ fontSize: 10, color: "#9ca3af" }}>({task.scheduledLabel})</span>}
@@ -419,8 +420,8 @@ const useDragReorder = (onReorder) => {
 
 /* ─── AddForm ─── */
 const AddForm = ({ projects, onAdd, defProj }) => {
-  const [t, setT] = useState(""); const [s, setS] = useState("action"); const [p, setP] = useState(defProj || projects[0]?.id); const [f, setF] = useState(false); const [sd, setSd] = useState(""); const [sl, setSl] = useState(""); const [pd, setPd] = useState(TODAY); const [pt, setPt] = useState(""); const r = useRef();
-  const go = () => { if (!t.trim() || !pd) return; onAdd({ text: t.trim(), status: s, project: p, focus: f, scheduledDate: sd, scheduledLabel: sl, planDate: pd, planTime: pt }); setT(""); setS("action"); setF(false); setSd(""); setSl(""); setPd(TODAY); setPt(""); r.current?.focus(); };
+  const [t, setT] = useState(""); const [s, setS] = useState("action"); const [p, setP] = useState(defProj || projects[0]?.id); const [f, setF] = useState(false); const [sd, setSd] = useState(""); const [sl, setSl] = useState(""); const [pd, setPd] = useState(TODAY); const r = useRef();
+  const go = () => { if (!t.trim() || !pd) return; onAdd({ text: t.trim(), status: s, project: p, focus: f, scheduledDate: sd, scheduledLabel: sl, planDate: pd }); setT(""); setS("action"); setF(false); setSd(""); setSl(""); setPd(TODAY); r.current?.focus(); };
   return (
     <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
       <input ref={r} style={S.inp} placeholder="새 할일 입력..." value={t} onChange={e => setT(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} />
@@ -429,7 +430,6 @@ const AddForm = ({ projects, onAdd, defProj }) => {
       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
         <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600 }}>📆</span>
         <input type="date" style={{ ...S.fld, width: 130, flex: "none", fontSize: 11, borderColor: !pd ? "#EF4444" : "#d1d5db" }} value={pd} onChange={e => setPd(e.target.value)} title="📆 언제할지 (필수)" required />
-        <input type="time" style={{ ...S.fld, width: 85, flex: "none", fontSize: 11 }} value={pt} onChange={e => setPt(e.target.value)} title="시작 시간 (선택)" />
       </div>
       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
         <span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span>
@@ -450,11 +450,11 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask }) => {
   const calLink = gcalUrl(f, projects);
   return (
     <div style={S.mod} onClick={onClose}>
-      <div style={S.modC} onClick={e => e.stopPropagation()}>
+      <div className="modal-content" style={S.modC} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>{isSubtask ? "하위 할일 수정" : "할 일 수정"}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <input style={{ ...S.inp, flex: "none" }} value={f.text} onChange={e => u("text", e.target.value)} />
-          <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div className="modal-row" style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 100 }}><div style={S.lbl}>상태</div><StSel value={f.status} onChange={v => u("status", v)} /></div>
             {!isSubtask && <div style={{ flex: 1, minWidth: 100 }}><div style={S.lbl}>과제</div><PrSel value={f.project} onChange={v => u("project", v)} projects={projects} /></div>}
             <button style={{ ...S.star(f.focus), border: "1px solid #e5e7eb", borderRadius: 5, width: 32, height: 32 }} onClick={() => u("focus", !f.focus)} title="오늘 집중">
@@ -465,7 +465,6 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask }) => {
             <div style={{ ...S.lbl, color: "#6366F1", fontWeight: 600 }}>📆 언제할지 (필수)</div>
             <div className="plan-fields" style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <input type="date" style={{ ...S.fld, width: 160, flex: "none", borderColor: !f.planDate ? "#EF4444" : "#d1d5db" }} value={f.planDate || ""} onChange={e => u("planDate", e.target.value)} required />
-              <input type="time" style={{ ...S.fld, width: 100, flex: "none" }} value={f.planTime || ""} onChange={e => u("planTime", e.target.value)} placeholder="시작 시간" />
               {calLink && <a href={calLink} target="_blank" rel="noreferrer" style={{ ...S.btn("#6366F1"), textDecoration: "none", fontSize: 11, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: 4 }}>📅 Google Calendar</a>}
             </div>
           </div>
@@ -880,7 +879,6 @@ const InboxCard = ({ item, projects, onRegister, onDismiss }) => {
   const [focus, setFocus] = useState(false);
   const [date, setDate] = useState("");
   const [pd, setPd] = useState(TODAY);
-  const [pt, setPt] = useState("");
   return (
     <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px", marginBottom: 6, display: "flex", gap: 8, alignItems: "flex-start" }}>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -891,7 +889,6 @@ const InboxCard = ({ item, projects, onRegister, onDismiss }) => {
           <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
             <span style={{ fontSize: 10, color: "#6366F1" }}>📆</span>
             <input type="date" value={pd} onChange={e => setPd(e.target.value)} style={{ ...S.sel, fontSize: 11, padding: "4px 6px", borderColor: !pd ? "#EF4444" : undefined }} title="📆 언제할지 (필수)" required />
-            <input type="time" value={pt} onChange={e => setPt(e.target.value)} style={{ ...S.sel, fontSize: 11, padding: "4px 6px", width: 80 }} title="시작 시간" />
           </div>
           <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
             <span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span>
@@ -901,7 +898,7 @@ const InboxCard = ({ item, projects, onRegister, onDismiss }) => {
         </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
-        <button onClick={() => { if (!pd) { alert("📆 언제할지를 입력하세요"); return; } onRegister({ text: item.text, project: proj, status, focus, scheduledDate: date, scheduledLabel: "", planDate: pd, planTime: pt }); }} style={{ ...S.btn("#10B981"), fontSize: 12, padding: "5px 10px" }}>✓ 등록</button>
+        <button onClick={() => { if (!pd) { alert("📆 언제할지를 입력하세요"); return; } onRegister({ text: item.text, project: proj, status, focus, scheduledDate: date, scheduledLabel: "", planDate: pd }); }} style={{ ...S.btn("#10B981"), fontSize: 12, padding: "5px 10px" }}>✓ 등록</button>
         <button onClick={() => onDismiss(item.id)} style={{ ...S.btn("#9CA3AF"), fontSize: 12, padding: "5px 10px" }}>✕ 무시</button>
       </div>
     </div>
@@ -1065,9 +1062,9 @@ function App() {
     setHistory(prev => prev.map(h => h.date === TODAY ? { ...h, items: h.items.filter(it => !matchFn(it)) } : h).filter(h => h.items.length > 0));
   };
 
-  const addTask = ({ text, status, project, focus, scheduledDate, scheduledLabel, planDate, planTime }) => {
+  const addTask = ({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => {
     const proj = projects.find(p => p.id === project);
-    setTasks(p => [...p, { id: gid(), text, status, project, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: planDate || TODAY, planTime: planTime || "", createdAt: TODAY, notes: "", focus: focus || false, subtasks: [] }]);
+    setTasks(p => [...p, { id: gid(), text, status, project, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: planDate || TODAY, createdAt: TODAY, notes: "", focus: focus || false, subtasks: [] }]);
     addHistItem({ type: "added", text, projectName: proj?.name || "", project, time: nowTime() });
   };
 
@@ -1116,7 +1113,7 @@ function App() {
     setHistory(prev => {
       const day = prev.find(h => h.date === date); if (!day?.items[idx]) return prev;
       const item = day.items[idx];
-      const restored = item.orig || { id: gid(), text: item.text, status: "action", project: projects.find(p => p.name === item.projectName)?.id || projects[0]?.id, scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] };
+      const restored = item.orig || { id: gid(), text: item.text, status: "action", project: projects.find(p => p.name === item.projectName)?.id || projects[0]?.id, scheduledDate: "", scheduledLabel: "", planDate: TODAY,  createdAt: TODAY, notes: "", focus: false, subtasks: [] };
               if (!restored.planDate) restored.planDate = TODAY;
       setTasks(p => [...p, restored]);
       const ni = day.items.filter((_, i) => i !== idx);
@@ -1181,7 +1178,7 @@ function App() {
       </div>
       <div style={{ marginTop: 8 }}>
         {tab === "today" && <TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} />}
-        {tab === "inbox" && <InboxView projects={projects} onAddTask={({ text, status, project, focus, scheduledDate, scheduledLabel, planDate, planTime }) => { addTask({ text, status, project, focus, scheduledDate, scheduledLabel, planDate, planTime }); showT("✓ 등록됨: " + text.slice(0, 20), null); }} />}
+        {tab === "inbox" && <InboxView projects={projects} onAddTask={({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => { addTask({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }); showT("✓ 등록됨: " + text.slice(0, 20), null); }} />}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} issues={issues} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onUpdate={updateTask} onReorder={reorderTask} />}
         {tab === "info" && <InfoView projects={projects} projectInfo={projectInfo} setProjectInfo={setProjectInfo} issues={issues}
           onUpdateIssue={u => setIssues(p => p.map(i => i.id === u.id ? u : i))} onAddIssue={i => setIssues(p => [...p, i])} />}
