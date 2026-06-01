@@ -95,10 +95,12 @@ const addToCalendar = (task, projects, onResult) => {
   const proj = projects?.find(p => p.id === task.project);
   const desc = [proj ? `#${proj.name}` : '', task.notes || ''].filter(Boolean).join('\n');
   const params = new URLSearchParams({ title: task.text, date, desc });
-  const img = new Image();
-  img.onload = () => onResult(true, "캘린더에 추가됨");
-  img.onerror = () => onResult(true, "캘린더에 추가됨"); /* Apps Script는 JSON 반환이라 onerror 나지만 요청은 성공 */
-  img.src = `${GCAL_URL}?${params}`;
+  const iframe = document.createElement("iframe");
+  iframe.style.display = "none";
+  iframe.src = `${GCAL_URL}?${params}`;
+  document.body.appendChild(iframe);
+  onResult(true, "캘린더에 추가 요청됨");
+  setTimeout(() => iframe.remove(), 5000);
 };
 
 /* ─── 반복 태스크 ─── */
