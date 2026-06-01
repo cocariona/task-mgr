@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Task Manager - GTD 과제관리</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #f9fafb; -webkit-text-size-adjust: 100%; }
+    /* 모바일 터치 최적화 */
+    button, select, input { touch-action: manipulation; }
+    input[type="date"] { min-height: 36px; }
+    /* 드래그 삽입선 애니메이션 */
+    @keyframes dropPulse { 0%,100% { opacity: 0.7; } 50% { opacity: 1; } }
+    .drop-indicator-before { border-top: 3px solid #3B82F6 !important; }
+    .drop-indicator-after { border-bottom: 3px solid #3B82F6 !important; }
+    /* 모바일 반응형 */
+    @media (max-width: 640px) {
+      body { font-size: 14px; }
+      .app-wrap { padding: 0 8px 80px !important; }
+      .tab-bar { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; gap: 2px !important; }
+      .tab-bar::-webkit-scrollbar { display: none; }
+      .tab-bar button { white-space: nowrap; padding: 8px 10px !important; font-size: 12px !important; min-height: 40px; }
+      .form-row { flex-direction: column !important; gap: 8px !important; }
+      .form-row input, .form-row select, .form-row button { width: 100% !important; min-height: 40px; flex: none !important; }
+      .form-row .star-btn { width: 40px !important; }
+      .task-row { padding: 10px 8px !important; }
+      .task-row .grip { display: none; }
+      .hdr-wrap { flex-direction: column; gap: 8px; align-items: flex-start !important; }
+      .plan-fields { flex-direction: column !important; }
+      .plan-fields > * { width: 100% !important; flex: none !important; }
+    }
+    @media (hover: none) and (pointer: coarse) {
+      .task-actions { display: flex !important; opacity: 0.6; }
+      .task-actions:active { opacity: 1; }
+      button, select { min-height: 36px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useMemo, useRef, useEffect } = React;
+
+/* ─── 상수 ─── */
+const STATUSES = {
+  action: { label: "다음행동", color: "#3B82F6", bg: "#EFF6FF", icon: "🔵" },
+  waiting: { label: "대기중", color: "#F59E0B", bg: "#FFFBEB", icon: "⏳" },
+  someday: { label: "나중에", color: "#9CA3AF", bg: "#F9FAFB", icon: "💤" },
+  done: { label: "완료", color: "#10B981", bg: "#ECFDF5", icon: "✅" },
+};
+const SK = Object.keys(STATUSES).filter(k => k !== "done");
+
+const TABS = [
+  { id: "today", label: "오늘", icon: "⭐" },
+  { id: "inbox", label: "인박스", icon: "📥" },
+  { id: "projects", label: "과제별", icon: "📁" },
+  { id: "info", label: "과제정보", icon: "📋" },
+  { id: "history", label: "히스토리", icon: "📜" },
+];
+
+const TODAY = new Date().toISOString().slice(0, 10);
+const gid = () => Math.random().toString(36).slice(2, 9);
+const fd = (d) => { const t = new Date(d); return `${t.getFullYear()}.${String(t.getMonth()+1).padStart(2,"0")}.${String(t.getDate()).padStart(2,"0")}`; };
+const diffDays = (dateStr) => {
+  if (!dateStr) return null;
+  const target = new Date(dateStr + "T00:00:00");
+  const today = new Date(TODAY + "T00:00:00");
+  return Math.round((target - today) / 86400000);
+};
+const deadlineInfo = (dateStr) => {
+  const d = diffDays(dateStr);
+  if (d === null) return null;
+  if (d < 0) return { label: `${-d}일 초과`, color: "#DC2626", bg: "#FEF2F2", icon: "🔴" };
+  if (d === 0) return { label: "오늘 마감", color: "#EA580C", bg: "#FFF7ED", icon: "🟠" };
+  if (d <= 7) return { label: `D-${d}`, color: "#D97706", bg: "#FFFBEB", icon: "🟡" };
+  return { label: `D-${d}`, color: "#6B7280", bg: "#F3F4F6", icon: "" };
+};
+
+/* ─── Google Calendar URL 생성 ─── */
+const gcalUrl = (task, projects) => {
+  if (!task.planDate) return null;
+  const title = encodeURIComponent(task.text);
+  const proj = projects?.find(p => p.id === task.project);
+  const parts = [proj ? `#${proj.name}` : '', task.notes || ''].filter(Boolean);
+  if (task.scheduledDate) parts.push(`마감일: ${fd(task.scheduledDate)}`);
+  const details = encodeURIComponent(parts.join('\n'));
+  const date = task.planDate.replace(/-/g, '');
+  const time = task.planTime?.replace(/:/g, '') || '';
+  let dates;
+  if (time) {
+    const start = `${date}T${time}00`;
+    const h = parseInt(time.slice(0,2),10); const m = time.slice(2);
+    const endH = String(Math.min(h + 1, 23)).padStart(2, '0');
+    dates = `${start}/${date}T${endH}${m}00`;
+  } else {
+    dates = `${date}/${date}`;
+  }
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${dates}&details=${details}`;
+};
+
+/* ─── localStorage (이중 백업) ─── */
+const STORAGE_KEY = "task-manager-v1";
+const BACKUP_KEY = "task-manager-v1-backup";
+const loadSaved = () => {
+  try {
+    const s = localStorage.getItem(STORAGE_KEY);
+    if (s) { const d = JSON.parse(s); if (d && d.tasks) return migrateData(d); }
+    /* 메인 키 실패 시 백업에서 복구 */
+    const b = localStorage.getItem(BACKUP_KEY);
+    if (b) { const d = JSON.parse(b); if (d && d.tasks) { console.warn("[TaskMgr] 백업에서 복구됨"); return migrateData(d); } }
+    return null;
+  } catch { return null; }
+};
+/* 마이그레이션: scheduled 상태 제거 + planDate 필드 추가 */
+const migrateData = (data) => {
+  if (!data || !data.tasks) return data;
+  const TASK_MIGRATION = {
+    "rag 지표는 fde 통해서 해결해야 함": "someday",
+    "독파모 3~4차 300% 전성비 달성 가능할지?": "waiting",
+  };
+  data.tasks = data.tasks.map(t => {
+    if (TASK_MIGRATION[t.text]) t = { ...t, status: TASK_MIGRATION[t.text] };
+    if (t.status === "scheduled") t = { ...t, status: "action" };
+    /* planDate 필드 없으면 추가 (기존 데이터 호환) */
+    if (!t.planDate) t = { ...t, planDate: t.scheduledDate || TODAY, planTime: "" };
+    if (t.subtasks?.length) t = { ...t, subtasks: t.subtasks.map(s => {
+      let ns = s.status === "scheduled" ? { ...s, status: "action" } : { ...s };
+      if (!ns.planDate) ns = { ...ns, planDate: ns.scheduledDate || TODAY, planTime: "" };
+      return ns;
+    })};
+    return t;
+  });
+  return data;
+};
+const saveToStorage = (data) => {
+  try {
+    const prev = localStorage.getItem(STORAGE_KEY);
+    if (prev) localStorage.setItem(BACKUP_KEY, prev); /* 직전 상태를 백업 */
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch {}
+};
+
+/* ─── 초기 데이터 ─── */
+const INIT_PROJECTS = [
+  { id: "rag", name: "RAG", order: 0 },
+  { id: "accel", name: "가속라이브러리", order: 1 },
+  { id: "dokpamo", name: "독파모", order: 2 },
+  { id: "hakchuin", name: "학습추론인프라", order: 3 },
+  { id: "optcode", name: "최적화코드변환", order: 4 },
+  { id: "compiler", name: "컴파일러", order: 5 },
+  { id: "gpu", name: "GPU", order: 6 },
+  { id: "itrc", name: "ITRC", order: 7 },
+  { id: "proj_general", name: "과제 일반 업무", order: 8 },
+  { id: "proj_etc", name: "기타 업무", order: 9 },
+];
+
+const INIT_TASKS = [
+  { id: gid(), text: "가속라 킥오프 회의 어레인지", status: "action", project: "accel", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: true, subtasks: [] },
+  { id: gid(), text: "서울대 연구책임자 변경 처리", status: "waiting", project: "accel", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "모두연 연사/관객 섭외 현황 f/u", status: "waiting", project: "accel", scheduledDate: "", scheduledLabel: "", createdAt: TODAY, notes: "4월 랩장-보고서개요 확인 | 5월 - 랩원모집 및 컨텐츠 논의 f/u | 8월 - 중간 보고서 내용 확인 | 참석자 현황 확인, 내부 홍보방법 고민", focus: false, subtasks: [] },
+  { id: gid(), text: "홍석님 - 성효진/안정호 교수님 논의 진행 전달 및 f/u", status: "waiting", project: "accel", scheduledDate: "", scheduledLabel: "", createdAt: TODAY, notes: "ㄴ 이후 박주성학생 구매건 재진행 필요\nㄴ 공개 sw 산출물 타 기관 산출물 정해야함 → 서울대, 스퀴즈비츠 포함 논의", focus: true, subtasks: [] },
+  { id: gid(), text: "etri 카드 회수 일정 확정 필요할지?", status: "someday", project: "rag", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "RAG 관련 서울대와 양자화 논의 필요할지 확인 + 자료 만들어야 할지 고민", status: "waiting", project: "rag", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "rag 지표는 fde 통해서 해결해야 함", status: "someday", project: "rag", scheduledDate: "2026-09-01", scheduledLabel: "9월 이후", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "킥오프 자료 작성", status: "action", project: "rag", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: true, subtasks: [] },
+  { id: gid(), text: "참여인력 변경 필요", status: "action", project: "dokpamo", scheduledDate: "2026-04-24", scheduledLabel: "4월 1주", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "독파모 쇼룸 카드 회수?", status: "action", project: "dokpamo", scheduledDate: "2026-07-01", scheduledLabel: "상반기 이후", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "독파모 3~4차 300% 전성비 달성 가능할지?", status: "waiting", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "crafton 워룸 회수", status: "action", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "독파모 시험검증", status: "action", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "독파모 2차수 미팅 날짜, 명단 확인", status: "someday", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "독파모 모델 우선순위 (atom-max 인프라 고도화사업건 제외) → 성진님 통해 확인", status: "waiting", project: "dokpamo", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "논의사항 취합중", status: "waiting", project: "optcode", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "gpu vpn 대역 추가 (봉기님)", status: "waiting", project: "gpu", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "컴파일러 보고서 확인 > 질문 > 내선 6748", status: "waiting", project: "compiler", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: true, subtasks: [] },
+  { id: gid(), text: "여준기 실장 문의 진행", status: "action", project: "proj_general", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: true, subtasks: [] },
+  { id: gid(), text: "장비 심의 - 수정한 대로 보내보기 (가격 협의대로 + 기존 장비 없다는 것 강조)", status: "action", project: "proj_general", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: true, subtasks: [] },
+  { id: gid(), text: "smart nipa 종료과제 기관변경", status: "someday", project: "proj_general", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "홍석님 - 국가 RFP 만들어지는 프로세스 제안 > 무엇을 더 함이 좋을지?", status: "action", project: "proj_general", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "클로드 파일정리 (바탕화면 정리)", status: "action", project: "proj_etc", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "AI 툴 과제관련된 내용 북마크해서 분류", status: "someday", project: "proj_etc", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+  { id: gid(), text: "이슈관리, 정리 메모해두기", status: "someday", project: "proj_etc", scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] },
+];
+
+const INIT_ISSUES = [
+  {
+    id: gid(), project: "rag", title: "RAG 과제 모델 변경 및 지표 정리", status: "open",
+    direction: "모델 llama3.1 70b → gpt-oss-120b 변경. RFP 규정(사용량 top10 모델)에 맞춰 변경 근거 리서치 후 다른 지표도 함께 변경 검토.",
+    entries: [
+      { id: gid(), date: TODAY, content: "정주님 요청: 2048/2048 or 2048/128 산식 변경 필요 (256→128/tps). H200 레퍼런스 찾아야 함.", type: "action" },
+      { id: gid(), date: TODAY, content: "nvidia h200 지표 확인중 (gemini 답변 및 Signal65 리포트 참고)", type: "note" },
+      { id: gid(), date: TODAY, content: "성진님 협의: 모델 변경 시 RFP 다른 항목도 변경해야 하는지 검토 필요. 우리만 변경하는 논리가 맞는지 + fde팀 atom-max 두장 llama 테스트 필요 여부 논의", type: "decision" },
+      { id: gid(), date: TODAY, content: "사전 미팅 f/u: 기술적 답변 f/u (재상님)", type: "action" },
+      { id: gid(), date: TODAY, content: "fde팀 공유 필요: 모델 변경 배경 설명 + llama 3.1 70b 기준 atom-max 두장 달성 가능 여부 재체크.", type: "note" },
+    ],
+  },
+];
+
+const INFO_FIELDS = [
+  { key: "number", label: "과제번호" },
+  { key: "program", label: "사업명" },
+  { key: "title", label: "과제명" },
+  { key: "ministryAgency", label: "부처/전문기관" },
+  { key: "period", label: "연구개발기간" },
+  { key: "subInfo", label: "총괄여부/세부", type: "sub" },
+  { key: "leadOrg", label: "주관기관" },
+  { key: "partners", label: "참여기관" },
+  { key: "agencyContact", label: "담당간사" },
+  { key: "researcher", label: "리벨리온 연구책임자" },
+];
+
+const EMPTY_INFO = () => ({ number: "", program: "", title: "", ministryAgency: "", period: "", isSubProject: false, subNumber: "", parentTitle: "", leadOrg: "", partners: "", agencyContact: "", researcher: "", docs: [] });
+const INFO_PROJECT_IDS = new Set(["rag", "accel", "dokpamo", "hakchuin", "optcode", "compiler", "gpu", "itrc"]);
+const INIT_PROJECT_INFO = {
+  rag: { ...EMPTY_INFO() }, accel: { ...EMPTY_INFO() }, dokpamo: { ...EMPTY_INFO() }, hakchuin: { ...EMPTY_INFO() },
+  optcode: { ...EMPTY_INFO() }, compiler: { ...EMPTY_INFO() }, gpu: { ...EMPTY_INFO() }, itrc: { ...EMPTY_INFO() },
+};
+
+/* ─── 스타일 ─── */
+const S = {
+  app: { fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif', maxWidth: 900, margin: "0 auto", padding: "0 16px 60px", color: "#1a1a1a", fontSize: 14, lineHeight: 1.6, WebkitTapHighlightColor: "transparent" },
+  hdr: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 0", borderBottom: "1px solid #e5e7eb" },
+  ttl: { fontSize: 18, fontWeight: 700, color: "#111" },
+  tabs: { display: "flex", gap: 4, background: "#f3f4f6", borderRadius: 8, padding: 3 },
+  tab: (a) => ({ padding: "7px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, fontWeight: a ? 600 : 400, background: a ? "#fff" : "transparent", color: a ? "#111" : "#6b7280", boxShadow: a ? "0 1px 3px rgba(0,0,0,0.1)" : "none" }),
+  sec: { marginTop: 20 },
+  secT: { fontSize: 13, fontWeight: 600, color: "#6b7280", letterSpacing: 0.5, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 },
+  bdg: (st) => ({ display: "inline-block", padding: "1px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, color: STATUSES[st]?.color || "#666", background: STATUSES[st]?.bg || "#f3f4f6", whiteSpace: "nowrap" }),
+  row: { display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 6, marginBottom: 2 },
+  txt: { flex: 1, fontSize: 13.5, lineHeight: 1.5 },
+  note: { fontSize: 12, color: "#6b7280", marginTop: 3, whiteSpace: "pre-wrap", lineHeight: 1.5, paddingLeft: 4, borderLeft: "2px solid #e5e7eb" },
+  btn: (c = "#3B82F6") => ({ padding: "4px 10px", borderRadius: 5, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 500, color: "#fff", background: c }),
+  gh: { padding: "4px 8px", borderRadius: 5, border: "1px solid #e5e7eb", cursor: "pointer", fontSize: 11, background: "#fff", color: "#6b7280" },
+  inp: { flex: 1, padding: "7px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13, outline: "none" },
+  sel: { padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12, outline: "none", background: "#fff" },
+  card: { background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: 16, marginBottom: 12 },
+  ph: (o) => ({ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderRadius: 8, cursor: "pointer", background: o ? "#f8fafc" : "#fff", border: "1px solid #e5e7eb", marginBottom: o ? 8 : 4, userSelect: "none" }),
+  cnt: (c) => ({ fontSize: 11, fontWeight: 600, color: c > 0 ? "#3B82F6" : "#ccc", background: c > 0 ? "#EFF6FF" : "#f9fafb", padding: "1px 7px", borderRadius: 10 }),
+  mod: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 },
+  modC: { background: "#fff", borderRadius: 12, padding: 24, width: "90%", maxWidth: 480, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.15)" },
+  ta: { width: "100%", padding: 10, borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13, outline: "none", resize: "vertical", minHeight: 60, fontFamily: "inherit", boxSizing: "border-box" },
+  emp: { padding: 32, textAlign: "center", color: "#9ca3af", fontSize: 13 },
+  div: { borderTop: "1px solid #f3f4f6", margin: "6px 0" },
+  tst: { position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: "#1f2937", color: "#fff", padding: "10px 20px", borderRadius: 8, fontSize: 13, display: "flex", alignItems: "center", gap: 12, boxShadow: "0 8px 30px rgba(0,0,0,0.2)", zIndex: 200 },
+  tstB: { padding: "3px 10px", borderRadius: 4, border: "1px solid rgba(255,255,255,0.3)", cursor: "pointer", fontSize: 12, fontWeight: 600, background: "transparent", color: "#60A5FA" },
+  lbl: { fontSize: 11, color: "#6b7280", marginBottom: 3 },
+  fld: { padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13, outline: "none", width: "100%", boxSizing: "border-box" },
+  star: (on) => ({ width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 14, flexShrink: 0, marginTop: 1, borderRadius: 4, border: "none", background: "transparent", color: on ? "#F59E0B" : "#d1d5db", transition: "color 0.15s" }),
+  focusBanner: { background: "linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%)", border: "1px solid #FDE68A", borderRadius: 8, padding: "12px 16px", marginBottom: 16 },
+  alertOverdue: { background: "linear-gradient(135deg, #FEF2F2 0%, #FECACA 100%)", border: "1px solid #FCA5A5", borderRadius: 8, padding: "12px 16px", marginBottom: 8 },
+  alertSoon: { background: "linear-gradient(135deg, #FFF7ED 0%, #FED7AA 100%)", border: "1px solid #FDBA74", borderRadius: 8, padding: "12px 16px", marginBottom: 8 },
+  dlBdg: (info) => ({ display: "inline-block", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 600, color: info.color, background: info.bg, whiteSpace: "nowrap", marginLeft: 4 }),
+  progBdg: { display: "inline-block", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 600, color: "#6B7280", background: "#F3F4F6" },
+};
+
+/* ─── 공통 컴포넌트 ─── */
+const Toast = ({ msg, onUndo, onX }) => {
+  useEffect(() => { const t = setTimeout(onX, 5000); return () => clearTimeout(t); }, [onX]);
+  return <div style={S.tst}><span>{msg}</span>
+    {onUndo && <button style={S.tstB} onClick={onUndo}>되돌리기</button>}
+    <button style={{ ...S.tstB, color: "#9ca3af", border: "none" }} onClick={onX}>✕</button>
+  </div>;
+};
+
+const Badge = ({ st }) => <span style={S.bdg(st)}>{STATUSES[st]?.label}</span>;
+const StSel = ({ value, onChange, compact }) => (
+  <select style={{ ...S.sel, ...(compact ? { padding: "3px 6px", fontSize: 11 } : {}) }} value={value} onChange={e => onChange(e.target.value)}>
+    {SK.map(k => <option key={k} value={k}>{STATUSES[k].label}</option>)}
+  </select>
+);
+const PrSel = ({ value, onChange, projects }) => (
+  <select style={S.sel} value={value} onChange={e => onChange(e.target.value)}>
+    {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+  </select>
+);
+const StarBtn = ({ on, onClick }) => (
+  <button style={S.star(on)} onClick={e => { e.stopPropagation(); onClick(); }} title={on ? "오늘 집중 해제" : "오늘 집중 표시"}>
+    {on ? "★" : "☆"}
+  </button>
+);
+
+/* ─── SubRow (서브태스크 행) ─── */
+const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
+  const [h, setH] = useState(false);
+  const isDone = sub.status === "done";
+  const dl = sub.scheduledDate ? deadlineInfo(sub.scheduledDate) : null;
+  return (
+    <div style={{ ...S.row, padding: "4px 8px", opacity: isDone ? 0.45 : 1 }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}>
+      <StarBtn on={sub.focus} onClick={onToggleFocus} />
+      <button onClick={onToggleDone} title={isDone ? "되돌리기" : "완료"}
+        style={{ width: 16, height: 16, borderRadius: "50%", border: `2px solid ${STATUSES[sub.status]?.color || "#ccc"}`, background: isDone ? STATUSES.done.color : "transparent", cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+          <Badge st={sub.status} />
+          {sub.planDate && <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "0px 4px", borderRadius: 4 }}>📆 {fd(sub.planDate)}{sub.planTime ? ` ${sub.planTime}` : ""}</span>}
+          {dl && <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>}
+          {sub.scheduledDate && <span style={{ fontSize: 9, color: "#6B7280" }}>마감 {fd(sub.scheduledDate)}</span>}
+          {sub.scheduledLabel && <span style={{ fontSize: 9, color: "#9ca3af" }}>({sub.scheduledLabel})</span>}
+        </div>
+        <div style={{ ...S.txt, fontSize: 12.5, textDecoration: isDone ? "line-through" : "none", color: isDone ? "#9ca3af" : "#1a1a1a" }}>{sub.text}</div>
+        {sub.notes && <div style={{ ...S.note, fontSize: 11 }}>{sub.notes}</div>}
+      </div>
+      {h && <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
+        <button style={{ ...S.gh, fontSize: 10 }} onClick={onEdit}>✏️</button>
+        <button style={{ ...S.gh, color: "#EF4444", fontSize: 10 }} onClick={onDel}>✕</button>
+      </div>}
+    </div>
+  );
+};
+
+/* ─── SubAddForm (서브태스크 추가) ─── */
+const SubAddForm = ({ onAdd, onCancel }) => {
+  const [t, setT] = useState(""); const [s, setS] = useState("action"); const [sd, setSd] = useState(""); const [pd, setPd] = useState(TODAY); const [pt, setPt] = useState(""); const r = useRef();
+  useEffect(() => { r.current?.focus(); }, []);
+  const go = () => { if (!t.trim() || !pd) return; onAdd({ text: t.trim(), status: s, focus: false, scheduledDate: sd, scheduledLabel: "", planDate: pd, planTime: pt }); };
+  return (
+    <div className="form-row" style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap", padding: "4px 0" }}>
+      <input ref={r} style={{ ...S.inp, fontSize: 12 }} placeholder="하위 할일..." value={t} onChange={e => setT(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} />
+      <StSel value={s} onChange={setS} compact />
+      <input type="date" style={{ ...S.fld, width: 120, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} title="📆 언제할지 (필수)" required />
+      <input type="time" style={{ ...S.fld, width: 90, flex: "none", fontSize: 11 }} value={pt} onChange={e => setPt(e.target.value)} title="시작 시간" />
+      <button style={S.btn()} onClick={go}>추가</button>
+      <button style={S.gh} onClick={onCancel}>취소</button>
+    </div>
+  );
+};
+
+/* ─── TaskRow (서브태스크 확장 + 드래그 정렬) ─── */
+const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onUpdate, dragHandlers }) => {
+  const [h, setH] = useState(false);
+  const [showSubs, setShowSubs] = useState(false);
+  const [addSub, setAddSub] = useState(false);
+  const subs = task.subtasks || [];
+  const doneSubCnt = subs.filter(s => s.status === "done").length;
+  const p = projects?.find(x => x.id === task.project);
+
+  const handleAddSub = ({ text, status, focus, scheduledDate, scheduledLabel, planDate, planTime }) => {
+    if (!onUpdate) return;
+    onUpdate({ ...task, subtasks: [...subs, { id: gid(), text, status, focus: focus || false, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: planDate || TODAY, planTime: planTime || "", notes: "", createdAt: TODAY }] });
+    setAddSub(false); setShowSubs(true);
+  };
+
+  /* 드래그 props (상/하 삽입 위치 표시) */
+  const dh = dragHandlers || {};
+  const clearIndicator = (el) => { el.classList.remove("drop-indicator-before", "drop-indicator-after"); };
+  const dragProps = dh.onDragStart ? {
+    draggable: true,
+    onDragStart: (e) => { dh.onDragStart(task.id); e.dataTransfer.effectAllowed = "move"; e.currentTarget.style.opacity = "0.35"; e.currentTarget.style.transform = "scale(0.98)"; },
+    onDragEnd: (e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = ""; dh.onDragEnd?.(); },
+    onDragOver: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; const rect = e.currentTarget.getBoundingClientRect(); const midY = rect.top + rect.height / 2; clearIndicator(e.currentTarget); e.currentTarget.classList.add(e.clientY < midY ? "drop-indicator-before" : "drop-indicator-after"); e.currentTarget.dataset.dropPos = e.clientY < midY ? "before" : "after"; },
+    onDragEnter: (e) => { e.preventDefault(); },
+    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) clearIndicator(e.currentTarget); },
+    onDrop: (e) => { e.preventDefault(); const pos = e.currentTarget.dataset.dropPos || "before"; clearIndicator(e.currentTarget); dh.onDrop?.(task.id, pos); },
+  } : {};
+
+  return (
+    <div {...dragProps}>
+      <div className="task-row" style={{ ...S.row, background: h ? "#f8fafc" : task.focus ? "#FFFDF5" : "transparent", cursor: dh.onDragStart ? "grab" : "default", transition: "border 0.15s, transform 0.15s" }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)} onTouchStart={() => setH(true)}>
+        {dh.onDragStart && <span className="grip" style={{ color: "#d1d5db", fontSize: 11, cursor: "grab", flexShrink: 0, marginTop: 3, userSelect: "none" }} title="드래그하여 순서 변경">⠿</span>}
+        <StarBtn on={task.focus} onClick={() => onFocus(task.id)} />
+        <button onClick={() => onDone(task.id)} title="완료"
+          style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${STATUSES[task.status]?.color || "#ccc"}`, background: "transparent", cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            <Badge st={task.status} />
+            {task.planDate && <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "1px 5px", borderRadius: 6 }}>📆 {fd(task.planDate)}{task.planTime ? ` ${task.planTime}` : ""}</span>}
+            {task.scheduledDate && (() => { const dl = deadlineInfo(task.scheduledDate); return dl ? <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span> : null; })()}
+            {task.scheduledDate && <span style={{ fontSize: 10, color: "#6B7280" }}>마감 {fd(task.scheduledDate)}</span>}
+            {task.scheduledLabel && <span style={{ fontSize: 10, color: "#9ca3af" }}>({task.scheduledLabel})</span>}
+            {subs.length > 0 && <span style={S.progBdg}>{doneSubCnt}/{subs.length}</span>}
+            {showProj && p && <span style={{ fontSize: 11, color: "#9ca3af" }}>#{p.name}</span>}
+          </div>
+          <div style={S.txt}>{task.text}</div>
+          {task.notes && <div style={S.note}>{task.notes}</div>}
+        </div>
+        <div className="task-actions" style={{ display: h ? "flex" : "none", gap: 3, flexShrink: 0, alignItems: "center" }}>
+          {task.planDate && <button style={{ ...S.gh, fontSize: 10, padding: "2px 5px" }} onClick={() => { const url = gcalUrl(task, projects); if (url) window.open(url, "_blank"); }} title="Google Calendar에 추가">📅+</button>}
+          {subs.length > 0 && <button style={S.gh} onClick={() => setShowSubs(!showSubs)} title="하위 할일">{showSubs ? "▲" : "▼"}</button>}
+          <button style={{ ...S.gh, fontSize: 10 }} onClick={() => { setAddSub(!addSub); if (!addSub) setShowSubs(true); }} title="하위 할일 추가">+sub</button>
+          <button style={S.gh} onClick={() => onEdit(task)}>✏️</button>
+          <button style={{ ...S.gh, color: "#EF4444" }} onClick={() => onDel(task.id)}>✕</button>
+        </div>
+      </div>
+      {showSubs && subs.length > 0 && (
+        <div style={{ marginLeft: 20, borderLeft: "2px solid #e5e7eb", paddingLeft: 4, marginBottom: 4 }}>
+          {subs.map(s => (
+            <SubRow key={s.id} sub={s}
+              onToggleFocus={() => onUpdate && onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, focus: !x.focus } : x) })}
+              onToggleDone={() => onUpdate && onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, status: x.status === "done" ? "action" : "done" } : x) })}
+              onDel={() => onUpdate && onUpdate({ ...task, subtasks: subs.filter(x => x.id !== s.id) })}
+              onEdit={() => onEdit(s, task.id)}
+            />
+          ))}
+        </div>
+      )}
+      {addSub && (
+        <div style={{ marginLeft: 28, marginBottom: 6 }}>
+          <SubAddForm onAdd={handleAddSub} onCancel={() => setAddSub(false)} />
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ─── 드래그 정렬 훅 ─── */
+const useDragReorder = (onReorder) => {
+  const dragRef = useRef(null);
+  return {
+    onDragStart: (id) => { dragRef.current = id; },
+    onDragEnter: () => {},
+    onDragEnd: () => { dragRef.current = null; },
+    onDrop: (targetId, pos) => { if (dragRef.current && dragRef.current !== targetId) { onReorder(dragRef.current, targetId, pos); dragRef.current = null; } },
+  };
+};
+
+/* ─── AddForm ─── */
+const AddForm = ({ projects, onAdd, defProj }) => {
+  const [t, setT] = useState(""); const [s, setS] = useState("action"); const [p, setP] = useState(defProj || projects[0]?.id); const [f, setF] = useState(false); const [sd, setSd] = useState(""); const [sl, setSl] = useState(""); const [pd, setPd] = useState(TODAY); const [pt, setPt] = useState(""); const r = useRef();
+  const go = () => { if (!t.trim() || !pd) return; onAdd({ text: t.trim(), status: s, project: p, focus: f, scheduledDate: sd, scheduledLabel: sl, planDate: pd, planTime: pt }); setT(""); setS("action"); setF(false); setSd(""); setSl(""); setPd(TODAY); setPt(""); r.current?.focus(); };
+  return (
+    <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+      <input ref={r} style={S.inp} placeholder="새 할일 입력..." value={t} onChange={e => setT(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} />
+      <StSel value={s} onChange={setS} compact />
+      {!defProj && <PrSel value={p} onChange={setP} projects={projects} />}
+      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+        <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600 }}>📆</span>
+        <input type="date" style={{ ...S.fld, width: 130, flex: "none", fontSize: 11, borderColor: !pd ? "#EF4444" : "#d1d5db" }} value={pd} onChange={e => setPd(e.target.value)} title="📆 언제할지 (필수)" required />
+        <input type="time" style={{ ...S.fld, width: 85, flex: "none", fontSize: 11 }} value={pt} onChange={e => setPt(e.target.value)} title="시작 시간 (선택)" />
+      </div>
+      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+        <span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span>
+        <input type="date" style={{ ...S.fld, width: 130, flex: "none", fontSize: 11 }} value={sd} onChange={e => setSd(e.target.value)} title="마감일 (선택)" />
+      </div>
+      <button className="star-btn" style={{ ...S.star(f), border: "1px solid #e5e7eb", borderRadius: 5, width: 28, height: 28 }} onClick={() => setF(!f)} title="오늘 집중">
+        {f ? "★" : "☆"}
+      </button>
+      <button style={S.btn()} onClick={go}>추가</button>
+    </div>
+  );
+};
+
+/* ─── EditModal (task + subtask 공용) ─── */
+const EditModal = ({ task, projects, onSave, onClose, isSubtask }) => {
+  const [f, setF] = useState({ ...task });
+  const u = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const calLink = gcalUrl(f, projects);
+  return (
+    <div style={S.mod} onClick={onClose}>
+      <div style={S.modC} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>{isSubtask ? "하위 할일 수정" : "할 일 수정"}</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <input style={{ ...S.inp, flex: "none" }} value={f.text} onChange={e => u("text", e.target.value)} />
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 100 }}><div style={S.lbl}>상태</div><StSel value={f.status} onChange={v => u("status", v)} /></div>
+            {!isSubtask && <div style={{ flex: 1, minWidth: 100 }}><div style={S.lbl}>과제</div><PrSel value={f.project} onChange={v => u("project", v)} projects={projects} /></div>}
+            <button style={{ ...S.star(f.focus), border: "1px solid #e5e7eb", borderRadius: 5, width: 32, height: 32 }} onClick={() => u("focus", !f.focus)} title="오늘 집중">
+              {f.focus ? "★" : "☆"}
+            </button>
+          </div>
+          <div>
+            <div style={{ ...S.lbl, color: "#6366F1", fontWeight: 600 }}>📆 언제할지 (필수)</div>
+            <div className="plan-fields" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input type="date" style={{ ...S.fld, width: 160, flex: "none", borderColor: !f.planDate ? "#EF4444" : "#d1d5db" }} value={f.planDate || ""} onChange={e => u("planDate", e.target.value)} required />
+              <input type="time" style={{ ...S.fld, width: 100, flex: "none" }} value={f.planTime || ""} onChange={e => u("planTime", e.target.value)} placeholder="시작 시간" />
+              {calLink && <a href={calLink} target="_blank" rel="noreferrer" style={{ ...S.btn("#6366F1"), textDecoration: "none", fontSize: 11, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: 4 }}>📅 Google Calendar</a>}
+            </div>
+          </div>
+          <div>
+            <div style={S.lbl}>마감일 (선택)</div>
+            <div className="plan-fields" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input type="date" style={{ ...S.fld, width: 160, flex: "none" }} value={f.scheduledDate || ""} onChange={e => u("scheduledDate", e.target.value)} />
+              <input style={{ ...S.fld, flex: 1 }} placeholder="메모 (예: 5월 2주, 하반기...)" value={f.scheduledLabel || ""} onChange={e => u("scheduledLabel", e.target.value)} />
+              {f.scheduledDate && (() => { const dl = deadlineInfo(f.scheduledDate); return dl ? <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span> : null; })()}
+              {f.scheduledDate && <button style={{ ...S.gh, fontSize: 10, color: "#EF4444" }} onClick={() => { u("scheduledDate", ""); u("scheduledLabel", ""); }}>✕</button>}
+            </div>
+          </div>
+          <div><div style={S.lbl}>메모 / 맥락</div><textarea style={S.ta} rows={3} value={f.notes || ""} onChange={e => u("notes", e.target.value)} /></div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <button style={S.gh} onClick={onClose}>취소</button>
+            <button style={S.btn()} onClick={() => { if (!f.planDate) { alert("📆 '언제할지' 날짜를 입력하세요"); return; } onSave(f); onClose(); }}>저장</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ═══ 마감 알림 (서브태스크 포함) ═══ */
+const ScheduleAlerts = ({ tasks, projects, onEdit }) => {
+  const allScheduled = useMemo(() => {
+    const items = [];
+    tasks.forEach(t => {
+      if (t.status !== "done" && t.scheduledDate) items.push({ type: "task", data: t, parent: null });
+      (t.subtasks || []).forEach(s => {
+        if (s.status !== "done" && s.scheduledDate) items.push({ type: "sub", data: s, parent: t });
+      });
+    });
+    return items;
+  }, [tasks]);
+  const overdue = allScheduled.filter(i => diffDays(i.data.scheduledDate) < 0).sort((a, b) => a.data.scheduledDate.localeCompare(b.data.scheduledDate));
+  const soon = allScheduled.filter(i => { const d = diffDays(i.data.scheduledDate); return d >= 0 && d <= 7; }).sort((a, b) => a.data.scheduledDate.localeCompare(b.data.scheduledDate));
+  if (!overdue.length && !soon.length) return null;
+  const AlertItem = ({ item }) => {
+    const p = projects.find(x => x.id === (item.type === "task" ? item.data.project : item.parent.project));
+    const dl = deadlineInfo(item.data.scheduledDate);
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0", fontSize: 12 }}>
+        <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>
+        {item.type === "sub" && <span style={{ fontSize: 10, color: "#9ca3af" }}>↳</span>}
+        <span style={{ color: "#374151", flex: 1 }}>{item.data.text}</span>
+        {p && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{p.name}</span>}
+        <button style={{ ...S.gh, fontSize: 10, padding: "1px 5px" }} onClick={() => item.type === "task" ? onEdit(item.data) : onEdit(item.data, item.parent.id)}>✏️</button>
+      </div>
+    );
+  };
+  return (
+    <div style={{ marginBottom: 12 }}>
+      {overdue.length > 0 && <div style={S.alertOverdue}><div style={{ fontSize: 13, fontWeight: 600, color: "#991B1B", marginBottom: 6 }}>🔴 마감 초과 ({overdue.length}건)</div>{overdue.map((item, i) => <AlertItem key={i} item={item} />)}</div>}
+      {soon.length > 0 && <div style={S.alertSoon}><div style={{ fontSize: 13, fontWeight: 600, color: "#9A3412", marginBottom: 6 }}>🟡 7일 이내 마감 ({soon.length}건)</div>{soon.map((item, i) => <AlertItem key={i} item={item} />)}</div>}
+    </div>
+  );
+};
+
+/* ═══ 오늘 뷰 (서브태스크 집중 포함) ═══ */
+const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onReorder }) => {
+  const dragHandlers = useDragReorder(onReorder);
+  const { focusedTasks, focusedSubs } = useMemo(() => {
+    const ft = tasks.filter(t => t.status !== "done" && t.focus);
+    const fs = [];
+    tasks.forEach(t => { (t.subtasks || []).forEach(s => { if (s.status !== "done" && s.focus) fs.push({ sub: s, parent: t }); }); });
+    return { focusedTasks: ft, focusedSubs: fs };
+  }, [tasks]);
+  const totalFocused = focusedTasks.length + focusedSubs.length;
+  const unfocusedActions = tasks.filter(t => t.status === "action" && !t.focus);
+  const waitingAll = tasks.filter(t => t.status === "waiting" && !t.focus);
+  const later = tasks.filter(t => t.status === "someday");
+  const [showRest, setShowRest] = useState(false);
+
+  /* 집중 그룹: 일반 task + 서브태스크 통합 */
+  const focusGroups = useMemo(() => {
+    const groups = {};
+    SK.forEach(k => { groups[k] = []; });
+    focusedTasks.forEach(t => groups[t.status]?.push({ type: "task", data: t }));
+    focusedSubs.forEach(({ sub, parent }) => groups[sub.status]?.push({ type: "sub", data: sub, parent }));
+    return SK.map(k => ({ k, label: STATUSES[k].label, items: groups[k] })).filter(g => g.items.length > 0);
+  }, [focusedTasks, focusedSubs]);
+
+  const toggleSubInParent = (parentId, subId, field) => {
+    const parent = tasks.find(t => t.id === parentId);
+    if (!parent || !onUpdate) return;
+    if (field === "focus") onUpdate({ ...parent, subtasks: (parent.subtasks || []).map(s => s.id === subId ? { ...s, focus: !s.focus } : s) });
+    if (field === "done") onUpdate({ ...parent, subtasks: (parent.subtasks || []).map(s => s.id === subId ? { ...s, status: s.status === "done" ? "action" : "done" } : s) });
+  };
+
+  const renderItem = (item) => {
+    if (item.type === "task") return <TaskRow key={item.data.id} task={item.data} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={dragHandlers} />;
+    return (
+      <div key={item.data.id} style={{ paddingLeft: 8 }}>
+        <div style={{ fontSize: 10, color: "#9ca3af", paddingLeft: 30 }}>↳ {item.parent.text}</div>
+        <SubRow sub={item.data}
+          onToggleFocus={() => toggleSubInParent(item.parent.id, item.data.id, "focus")}
+          onToggleDone={() => toggleSubInParent(item.parent.id, item.data.id, "done")}
+          onDel={() => onUpdate && onUpdate({ ...item.parent, subtasks: (item.parent.subtasks || []).filter(s => s.id !== item.data.id) })}
+          onEdit={() => onEdit(item.data, item.parent.id)} />
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0" }}>
+        <div style={{ fontSize: 13, color: "#6b7280" }}>
+          {fd(TODAY)} — 오늘 집중 <strong style={{ color: "#F59E0B" }}>{totalFocused}</strong>개
+          {unfocusedActions.length > 0 && <span> · 다음행동 {unfocusedActions.length}</span>}
+          {waitingAll.length > 0 && <span> · 대기중 {waitingAll.length}</span>}
+        </div>
+      </div>
+      <ScheduleAlerts tasks={tasks} projects={projects} onEdit={onEdit} />
+      <AddForm projects={projects} onAdd={onAdd} />
+      {totalFocused > 0 ? (
+        <div style={{ marginTop: 16 }}>
+          <div style={S.focusBanner}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#92400E", marginBottom: 4 }}>⭐ 오늘 집중 ({totalFocused})</div>
+            <div style={{ fontSize: 11, color: "#A16207" }}>상태와 무관하게, 오늘 반드시 확인하거나 처리할 항목들</div>
+          </div>
+          {focusGroups.map(g => (
+            <div key={g.k} style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 11, color: "#9ca3af", fontWeight: 500, padding: "2px 10px", marginBottom: 2 }}>{STATUSES[g.k]?.icon} {g.label}</div>
+              {g.items.map(renderItem)}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ ...S.emp, marginTop: 16 }}>⭐ 표시를 눌러 오늘 집중할 항목을 선택하세요</div>
+      )}
+      <div style={{ marginTop: 20 }}>
+        <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setShowRest(!showRest)}>
+          {showRest ? "▼" : "▶"} 전체 현황
+          <span style={S.cnt(unfocusedActions.length + waitingAll.length)}>{unfocusedActions.length + waitingAll.length}</span>
+        </div>
+        {showRest && (
+          <div>
+            {unfocusedActions.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#3B82F6", marginBottom: 6 }}>🔵 다음행동 ({unfocusedActions.length})</div>{unfocusedActions.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={dragHandlers} />)}</div>}
+            {waitingAll.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#F59E0B", marginBottom: 6 }}>⏳ 대기중 ({waitingAll.length})</div>{waitingAll.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={dragHandlers} />)}</div>}
+            {later.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#9CA3AF", marginBottom: 6 }}>💤 나중에 ({later.length})</div>{later.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={dragHandlers} />)}</div>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ═══ 과제별 뷰 ═══ */
+const ProjectsView = ({ tasks, projects, issues, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onUpdate, onReorder }) => {
+  const [open, setOpen] = useState(new Set(projects.filter(p => tasks.some(t => t.project === p.id && t.status !== "done")).map(p => p.id)));
+  const [np, setNp] = useState("");
+  const tog = id => setOpen(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const dragHandlers = useDragReorder(onReorder);
+  return (
+    <div style={{ marginTop: 12 }}>
+      {projects.map(p => {
+        const pt = tasks.filter(t => t.project === p.id && t.status !== "done");
+        const pi = issues.filter(i => i.project === p.id && i.status === "open");
+        const fc = pt.filter(t => t.focus).length;
+        const o = open.has(p.id);
+        return (
+          <div key={p.id} style={{ marginBottom: 6 }}>
+            <div style={S.ph(o)} onClick={() => tog(p.id)}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 11, color: "#9ca3af" }}>{o ? "▼" : "▶"}</span>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</span>
+                <span style={S.cnt(pt.length)}>{pt.length}</span>
+                {fc > 0 && <span style={{ fontSize: 11, color: "#F59E0B" }}>⭐{fc}</span>}
+                {pi.length > 0 && <span style={{ fontSize: 11, color: "#EF4444" }}>💬 {pi.length}</span>}
+              </div>
+            </div>
+            {o && <div style={{ paddingLeft: 8, marginBottom: 12 }}>
+              {SK.map(s => { const items = pt.filter(t => t.status === s); if (!items.length) return null;
+                return <div key={s} style={{ marginBottom: 4 }}>{items.map(t => <TaskRow key={t.id} task={t} projects={projects} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={dragHandlers} />)}</div>; })}
+              {pt.length === 0 && <div style={{ ...S.emp, padding: 16 }}>할 일 없음</div>}
+              <div style={S.div} /><AddForm projects={projects} onAdd={onAdd} defProj={p.id} />
+            </div>}
+          </div>
+        );
+      })}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 16, padding: "8px 0" }}>
+        <input style={{ ...S.inp, maxWidth: 200 }} placeholder="새 과제 추가..." value={np} onChange={e => setNp(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && np.trim()) { onAddProj(np.trim()); setNp(""); }}} />
+        <button style={S.gh} onClick={() => { if (np.trim()) { onAddProj(np.trim()); setNp(""); }}}>+ 과제 추가</button>
+      </div>
+    </div>
+  );
+};
+
+/* ═══ 과제정보 뷰 (변경 없음) ═══ */
+const InfoField = ({ label, value, onChange }) => (
+  <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6, fontSize: 13 }}>
+    <div style={{ width: 120, flexShrink: 0, color: "#6b7280", fontSize: 12, paddingTop: 6 }}>{label}</div>
+    <input style={{ ...S.fld, flex: 1 }} value={value || ""} onChange={e => onChange(e.target.value)} />
+  </div>
+);
+const SubField = ({ info, onChange }) => {
+  const isSub = info.isSubProject || false;
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6, fontSize: 13 }}>
+      <div style={{ width: 120, flexShrink: 0, color: "#6b7280", fontSize: 12, paddingTop: 6 }}>총괄여부/세부</div>
+      <div style={{ flex: 1, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <select style={{ ...S.sel, fontSize: 12 }} value={isSub ? "sub" : "lead"} onChange={e => onChange("isSubProject", e.target.value === "sub")}>
+          <option value="lead">총괄</option><option value="sub">세부</option>
+        </select>
+        {isSub && <>
+          <input style={{ ...S.fld, width: 50, flex: "none" }} placeholder="번호" value={info.subNumber || ""} onChange={e => onChange("subNumber", e.target.value)} />
+          <input style={{ ...S.fld, flex: 1 }} placeholder="총괄과제명" value={info.parentTitle || ""} onChange={e => onChange("parentTitle", e.target.value)} />
+        </>}
+      </div>
+    </div>
+  );
+};
+const DocList = ({ docs, onAdd, onRemove }) => {
+  const [show, setShow] = useState(false);
+  const [title, setTitle] = useState(""); const [url, setUrl] = useState("");
+  return (
+    <div>
+      <div style={{ ...S.lbl, marginBottom: 6 }}>연결 문서</div>
+      {docs.map((d, i) => (
+        <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 13 }}>
+          <span>📎</span>
+          {d.url ? <a href={d.url} target="_blank" rel="noreferrer" style={{ color: "#3B82F6" }}>{d.title || d.url}</a> : <span>{d.title}</span>}
+          <button style={{ ...S.gh, fontSize: 10, padding: "1px 5px", color: "#EF4444" }} onClick={() => onRemove(i)}>✕</button>
+        </div>
+      ))}
+      {!show ? <button style={{ ...S.gh, fontSize: 11 }} onClick={() => setShow(true)}>+ 문서 추가</button>
+        : <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            <input style={{ ...S.inp, maxWidth: 160 }} placeholder="문서 이름" value={title} onChange={e => setTitle(e.target.value)} />
+            <input style={{ ...S.inp, maxWidth: 240 }} placeholder="URL (선택)" value={url} onChange={e => setUrl(e.target.value)} />
+            <button style={S.btn()} onClick={() => { if (title.trim() || url.trim()) { onAdd({ title: title.trim(), url: url.trim() }); setTitle(""); setUrl(""); setShow(false); } }}>추가</button>
+            <button style={S.gh} onClick={() => setShow(false)}>취소</button>
+          </div>}
+    </div>
+  );
+};
+const IssueCard = ({ issue, onUpdate }) => {
+  const [open, setOpen] = useState(false);
+  const [ne, setNe] = useState(""); const [et, setEt] = useState("note");
+  const [editDir, setEditDir] = useState(false); const [dir, setDir] = useState(issue.direction || "");
+  const te = { note: "📝", action: "⚡", decision: "✅" }; const tl = { note: "메모", action: "액션", decision: "결정" };
+  const add = () => { if (!ne.trim()) return; onUpdate({ ...issue, entries: [...issue.entries, { id: gid(), date: TODAY, content: ne.trim(), type: et }] }); setNe(""); };
+  return (
+    <div style={{ ...S.card, padding: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", cursor: "pointer" }} onClick={() => setOpen(!open)}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+            <span style={{ ...S.bdg(issue.status === "open" ? "action" : "done"), fontSize: 10 }}>{issue.status === "open" ? "진행중" : "해결됨"}</span>
+          </div>
+          <div style={{ fontWeight: 600, fontSize: 13 }}>{issue.title}</div>
+          {issue.direction && !editDir && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>💡 {issue.direction}</div>}
+        </div>
+        <span style={{ fontSize: 11, color: "#9ca3af" }}>{open ? "▲" : "▼"} {issue.entries.length}</span>
+      </div>
+      {open && <div style={{ marginTop: 10 }}>
+        {editDir ? <div style={{ marginBottom: 8 }}>
+          <textarea style={S.ta} rows={2} value={dir} onChange={e => setDir(e.target.value)} />
+          <div style={{ display: "flex", gap: 4, justifyContent: "flex-end", marginTop: 4 }}>
+            <button style={S.gh} onClick={() => setEditDir(false)}>취소</button>
+            <button style={S.btn()} onClick={() => { onUpdate({ ...issue, direction: dir }); setEditDir(false); }}>저장</button>
+          </div>
+        </div> : <button style={{ ...S.gh, marginBottom: 8, fontSize: 10 }} onClick={() => { setEditDir(true); setDir(issue.direction || ""); }}>✏️ 대응방향 {issue.direction ? "수정" : "작성"}</button>}
+        <div style={{ borderLeft: "2px solid #e5e7eb", paddingLeft: 10, marginLeft: 4 }}>
+          {issue.entries.map(e => <div key={e.id} style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 11, color: "#9ca3af" }}>{te[e.type]} {tl[e.type]} · {fd(e.date)}</div>
+            <div style={{ fontSize: 13 }}>{e.content}</div>
+          </div>)}
+        </div>
+        <div style={S.div} />
+        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+          <select style={{ ...S.sel, fontSize: 11 }} value={et} onChange={e => setEt(e.target.value)}>
+            <option value="note">📝 메모</option><option value="action">⚡ 액션</option><option value="decision">✅ 결정</option>
+          </select>
+          <input style={S.inp} placeholder="기록 추가..." value={ne} onChange={e => setNe(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} />
+          <button style={S.btn()} onClick={add}>추가</button>
+        </div>
+        <div style={{ display: "flex", gap: 4, marginTop: 6, justifyContent: "flex-end" }}>
+          <button style={S.gh} onClick={() => onUpdate({ ...issue, status: issue.status === "open" ? "resolved" : "open" })}>
+            {issue.status === "open" ? "해결됨" : "다시 열기"}</button>
+        </div>
+      </div>}
+    </div>
+  );
+};
+const InfoView = ({ projects, projectInfo, setProjectInfo, issues, onUpdateIssue, onAddIssue }) => {
+  const [openP, setOpenP] = useState(new Set([projects[0]?.id]));
+  const [addIssueFor, setAddIssueFor] = useState(null);
+  const [ni, setNi] = useState({ title: "", direction: "" });
+  const tog = id => setOpenP(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const upInfo = (pid, field, val) => setProjectInfo(prev => ({ ...prev, [pid]: { ...prev[pid], [field]: val } }));
+  const addDoc = (pid, doc) => setProjectInfo(prev => ({ ...prev, [pid]: { ...prev[pid], docs: [...(prev[pid]?.docs || []), doc] } }));
+  const rmDoc = (pid, idx) => setProjectInfo(prev => ({ ...prev, [pid]: { ...prev[pid], docs: (prev[pid]?.docs || []).filter((_, i) => i !== idx) } }));
+  const infoProjects = projects.filter(p => INFO_PROJECT_IDS.has(p.id));
+  return (
+    <div style={{ marginTop: 12 }}>
+      {infoProjects.map(p => {
+        const o = openP.has(p.id);
+        const info = projectInfo[p.id] || EMPTY_INFO();
+        const pi = issues.filter(i => i.project === p.id);
+        const openI = pi.filter(i => i.status === "open");
+        const closedI = pi.filter(i => i.status === "resolved");
+        return (
+          <div key={p.id} style={{ marginBottom: 6 }}>
+            <div style={S.ph(o)} onClick={() => tog(p.id)}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 11, color: "#9ca3af" }}>{o ? "▼" : "▶"}</span>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</span>
+                {openI.length > 0 && <span style={{ fontSize: 11, color: "#EF4444" }}>💬 이슈 {openI.length}</span>}
+              </div>
+            </div>
+            {o && <div style={{ paddingLeft: 8, marginBottom: 12 }}>
+              <div style={{ ...S.card, background: "#fafbfc" }}>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>📋 과제 정보</div>
+                {INFO_FIELDS.map(f => f.type === "sub" ? (
+                  <SubField key={f.key} info={info} onChange={(k, v) => upInfo(p.id, k, v)} />
+                ) : (
+                  <InfoField key={f.key} label={f.label} value={info[f.key]} onChange={v => upInfo(p.id, f.key, v)} />
+                ))}
+                <div style={{ marginTop: 8 }}><DocList docs={info.docs || []} onAdd={d => addDoc(p.id, d)} onRemove={i => rmDoc(p.id, i)} /></div>
+              </div>
+              <div style={{ marginTop: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>💬 이슈 ({openI.length}건 진행 · {closedI.length}건 해결)</div>
+                  <button style={{ ...S.gh, fontSize: 10 }} onClick={() => setAddIssueFor(addIssueFor === p.id ? null : p.id)}>+ 이슈</button>
+                </div>
+                {addIssueFor === p.id && <div style={{ ...S.card, background: "#f8fafc", padding: 12, marginBottom: 8 }}>
+                  <input style={{ ...S.fld, marginBottom: 6 }} placeholder="이슈 제목" value={ni.title} onChange={e => setNi(x => ({ ...x, title: e.target.value }))} />
+                  <textarea style={{ ...S.ta, marginBottom: 6, minHeight: 36 }} rows={1} placeholder="대응방향 (선택)" value={ni.direction} onChange={e => setNi(x => ({ ...x, direction: e.target.value }))} />
+                  <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                    <button style={S.gh} onClick={() => setAddIssueFor(null)}>취소</button>
+                    <button style={S.btn()} onClick={() => { if (ni.title.trim()) { onAddIssue({ id: gid(), project: p.id, title: ni.title.trim(), direction: ni.direction.trim(), status: "open", entries: [] }); setNi({ title: "", direction: "" }); setAddIssueFor(null); } }}>등록</button>
+                  </div>
+                </div>}
+                {openI.map(i => <IssueCard key={i.id} issue={i} onUpdate={onUpdateIssue} />)}
+                {closedI.length > 0 && <details style={{ marginTop: 8 }}><summary style={{ fontSize: 11, color: "#9ca3af", cursor: "pointer" }}>해결됨 ({closedI.length})</summary>
+                  {closedI.map(i => <IssueCard key={i.id} issue={i} onUpdate={onUpdateIssue} />)}
+                </details>}
+              </div>
+            </div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+/* ═══ 히스토리 뷰 (일일 활동 로그) ═══ */
+const HTYPE = {
+  done: { icon: "✅", color: "#10B981", label: "완료" },
+  added: { icon: "➕", color: "#3B82F6", label: "추가" },
+  status: { icon: "🔄", color: "#F59E0B", label: "상태변경" },
+  deleted: { icon: "🗑", color: "#EF4444", label: "삭제" },
+};
+const HistoryView = ({ history, onRestore }) => {
+  const sorted = useMemo(() => [...history].sort((a, b) => b.date.localeCompare(a.date)), [history]);
+  const [filter, setFilter] = useState("all");
+  return (
+    <div style={{ marginTop: 12 }}>
+      {sorted.length > 0 && (
+        <div style={{ display: "flex", gap: 4, marginBottom: 10, flexWrap: "wrap" }}>
+          {[{ id: "all", label: "전체" }, { id: "done", label: "✅ 완료" }, { id: "added", label: "➕ 추가" }, { id: "status", label: "🔄 변경" }].map(f => (
+            <button key={f.id} onClick={() => setFilter(f.id)} style={{ ...S.gh, fontWeight: filter === f.id ? 600 : 400, background: filter === f.id ? "#EFF6FF" : "#fff", color: filter === f.id ? "#3B82F6" : "#6b7280", borderColor: filter === f.id ? "#93C5FD" : "#e5e7eb" }}>{f.label}</button>
+          ))}
+        </div>
+      )}
+      {sorted.length === 0 && <div style={S.emp}>활동 기록이 여기에 쌓입니다.<br/>완료, 추가, 상태변경 등 모든 활동이 날짜별로 기록됩니다.</div>}
+      {sorted.map(day => {
+        const filtered = filter === "all" ? day.items : day.items.filter(i => i.type === filter);
+        if (!filtered.length) return null;
+        const doneCnt = day.items.filter(i => i.type === "done").length;
+        const addCnt = day.items.filter(i => i.type === "added").length;
+        const stsCnt = day.items.filter(i => i.type === "status").length;
+        return (
+          <div key={day.date} style={S.card}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}>
+              📅 {fd(day.date)}
+            </div>
+            <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 8, display: "flex", gap: 10 }}>
+              {doneCnt > 0 && <span>✅ {doneCnt}건 완료</span>}
+              {addCnt > 0 && <span>➕ {addCnt}건 추가</span>}
+              {stsCnt > 0 && <span>🔄 {stsCnt}건 변경</span>}
+            </div>
+            {filtered.map((item, i) => <HistRow key={i} item={item} date={day.date} idx={day.items.indexOf(item)} onRestore={onRestore} />)}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+const HistRow = ({ item, date, idx, onRestore }) => {
+  const [h, setH] = useState(false);
+  const t = HTYPE[item.type] || HTYPE.done;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 4px", fontSize: 13, borderRadius: 4, background: h ? "#f8fafc" : "transparent" }}
+      onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}>
+      <span style={{ fontSize: 12, flexShrink: 0 }}>{t.icon}</span>
+      <span style={{ color: "#9ca3af", fontSize: 11, flexShrink: 0 }}>#{item.projectName}</span>
+      <span style={{ flex: 1 }}>{item.text}</span>
+      {item.type === "status" && item.from && <span style={{ fontSize: 10, color: "#9ca3af" }}>{STATUSES[item.from]?.label || item.from}→{STATUSES[item.to]?.label || item.to}</span>}
+      {item.subCount > 0 && <span style={{ fontSize: 10, color: "#9ca3af" }}>+{item.subCount} sub</span>}
+      {item.time && <span style={{ fontSize: 10, color: "#c0c0c0", flexShrink: 0 }}>{item.time}</span>}
+      {h && item.type === "done" && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
+    </div>
+  );
+};
+
+/* ═══ 인박스 뷰 ═══ */
+const InboxCard = ({ item, projects, onRegister, onDismiss }) => {
+  const [proj, setProj] = useState(item.defaultProj || projects[0]?.id);
+  const [status, setStatus] = useState(item.defaultStatus || "action");
+  const [focus, setFocus] = useState(false);
+  const [date, setDate] = useState("");
+  const [pd, setPd] = useState(TODAY);
+  const [pt, setPt] = useState("");
+  return (
+    <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px", marginBottom: 6, display: "flex", gap: 8, alignItems: "flex-start" }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 6, wordBreak: "break-word" }}>{item.text}</div>
+        <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <PrSel value={proj} onChange={setProj} projects={projects} />
+          <StSel value={status} onChange={setStatus} compact />
+          <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+            <span style={{ fontSize: 10, color: "#6366F1" }}>📆</span>
+            <input type="date" value={pd} onChange={e => setPd(e.target.value)} style={{ ...S.sel, fontSize: 11, padding: "4px 6px", borderColor: !pd ? "#EF4444" : undefined }} title="📆 언제할지 (필수)" required />
+            <input type="time" value={pt} onChange={e => setPt(e.target.value)} style={{ ...S.sel, fontSize: 11, padding: "4px 6px", width: 80 }} title="시작 시간" />
+          </div>
+          <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+            <span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span>
+            <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ ...S.sel, fontSize: 11, padding: "4px 6px" }} title="마감일 (선택)" />
+          </div>
+          <button onClick={() => setFocus(!focus)} style={{ ...S.star(focus), width: 24, height: 24 }} title="오늘 집중">★</button>
+        </div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+        <button onClick={() => { if (!pd) { alert("📆 언제할지를 입력하세요"); return; } onRegister({ text: item.text, project: proj, status, focus, scheduledDate: date, scheduledLabel: "", planDate: pd, planTime: pt }); }} style={{ ...S.btn("#10B981"), fontSize: 12, padding: "5px 10px" }}>✓ 등록</button>
+        <button onClick={() => onDismiss(item.id)} style={{ ...S.btn("#9CA3AF"), fontSize: 12, padding: "5px 10px" }}>✕ 무시</button>
+      </div>
+    </div>
+  );
+};
+
+const InboxView = ({ projects, onAddTask }) => {
+  const [text, setText] = useState("");
+  const [items, setItems] = useState([]);
+  const [doneCount, setDoneCount] = useState(0);
+  const [dismissCount, setDismissCount] = useState(0);
+
+  /* 텍스트 → 카드 파싱. [과제명] prefix 자동 인식 */
+  const projMap = useMemo(() => {
+    const m = {};
+    projects.forEach(p => { m[p.name.toLowerCase()] = p.id; m[p.id] = p.id; });
+    /* 추가 별명 매핑 */
+    m["최적화"] = "optcode"; m["독파모"] = "dokpamo"; m["rag"] = "rag";
+    m["컴파일러"] = "compiler"; m["gpu"] = "gpu"; m["itrc"] = "itrc";
+    m["가속라이브러리"] = "accel"; m["학습추론인프라"] = "hakchuin";
+    m["기타"] = "proj_etc"; m["일반"] = "proj_general";
+    return m;
+  }, [projects]);
+
+  const parseLines = () => {
+    const lines = text.split("\n").filter(l => l.trim());
+    if (!lines.length) return;
+    const parsed = lines.map(l => {
+      const raw = l.trim();
+      /* [과제명] prefix 파싱 */
+      const m = raw.match(/^\[([^\]]+)\]\s*(.*)/);
+      let proj = projects[0]?.id;
+      let txt = raw;
+      if (m) {
+        const key = m[1].trim().toLowerCase();
+        if (projMap[key]) proj = projMap[key];
+        txt = m[2] || raw;
+      }
+      return { id: gid(), text: txt, defaultProj: proj, defaultStatus: "action" };
+    });
+    setItems(prev => [...prev, ...parsed]);
+    setText("");
+  };
+
+  const handleRegister = (data) => {
+    onAddTask(data);
+    setDoneCount(c => c + 1);
+  };
+  const handleDismiss = (id) => {
+    setItems(prev => prev.filter(i => i.id !== id));
+    setDismissCount(c => c + 1);
+  };
+
+  const total = items.length + doneCount + dismissCount;
+  const remaining = items.length;
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      {/* 입력 영역 */}
+      <div style={S.card}>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>📥 인박스 — 스캔 결과 트리아지</div>
+        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>스캔 결과를 붙여넣고 "분류 시작"을 누르세요. 각 항목을 하나씩 등록하거나 무시할 수 있습니다.</div>
+        <textarea style={{ ...S.ta, minHeight: 100 }} value={text} onChange={e => setText(e.target.value)} placeholder={"한 줄에 하나씩 붙여넣기\n[과제명] prefix 자동 인식 예:\n[독파모] 임정수님 질문 답변\n[RAG] follow-up 확인"} />
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+          <div style={{ flex: 1 }} />
+          {text.split("\n").filter(l => l.trim()).length > 0 && <span style={{ fontSize: 12, color: "#3B82F6", fontWeight: 600 }}>{text.split("\n").filter(l => l.trim()).length}줄 감지</span>}
+          <button style={{ ...S.btn(), opacity: text.trim() ? 1 : 0.4 }} onClick={parseLines}>분류 시작 →</button>
+        </div>
+      </div>
+
+      {/* 진행 상태 바 */}
+      {total > 0 && (
+        <div style={{ ...S.card, padding: "10px 16px", display: "flex", alignItems: "center", gap: 12, marginTop: 4 }}>
+          <div style={{ flex: 1, height: 6, background: "#f3f4f6", borderRadius: 3, overflow: "hidden" }}>
+            <div style={{ height: "100%", borderRadius: 3, background: remaining === 0 ? "#10B981" : "linear-gradient(90deg, #10B981 0%, #3B82F6 100%)", width: `${((doneCount + dismissCount) / total * 100)}%`, transition: "width 0.3s" }} />
+          </div>
+          <span style={{ fontSize: 11, color: "#6b7280", whiteSpace: "nowrap" }}>
+            ✓{doneCount} ✕{dismissCount} / 남은 {remaining}건
+          </span>
+          {remaining === 0 && total > 0 && <span style={{ fontSize: 12, fontWeight: 600, color: "#10B981" }}>완료!</span>}
+        </div>
+      )}
+
+      {/* 트리아지 카드 목록 */}
+      {items.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          {items.map(item => (
+            <InboxCard key={item.id} item={item} projects={projects} onRegister={(data) => { handleRegister(data); handleDismiss(item.id); }} onDismiss={handleDismiss} />
+          ))}
+          {items.length > 1 && (
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}>
+              <button onClick={() => { setItems([]); setDismissCount(c => c + items.length); }} style={{ ...S.gh, color: "#EF4444" }}>전체 무시</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 비어있을 때 안내 */}
+      {items.length === 0 && total === 0 && (
+        <div style={{ ...S.card, background: "#f8fafc", marginTop: 8 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>💡 사용법</div>
+          <div style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.8 }}>
+            1. Cowork 스캔 결과를 복사하여 위에 붙여넣기<br/>
+            2. "분류 시작" 클릭 → 각 항목이 카드로 표시됨<br/>
+            3. 카드마다 과제/상태 선택 후 ✓등록 또는 ✕무시<br/>
+            4. <b>[과제명]</b> prefix 자동 인식 (예: [독파모] 할일내용)<br/>
+            <span style={{ color: "#3B82F6" }}>→ 등록 즉시 과제별 탭에 반영됩니다</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ═══════ 메인 앱 ═══════ */
+function App() {
+  const saved = useMemo(() => loadSaved(), []);
+  const [tab, setTab] = useState("today");
+  const [tasks, setTasks] = useState(saved?.tasks || INIT_TASKS);
+  const [projects, setProjects] = useState(saved?.projects || INIT_PROJECTS);
+  const [issues, setIssues] = useState(saved?.issues || INIT_ISSUES);
+  const [projectInfo, setProjectInfo] = useState(saved?.projectInfo || INIT_PROJECT_INFO);
+  const [history, setHistory] = useState(saved?.history || []);
+  const [editTarget, setEditTarget] = useState(null);
+  const [toast, setToast] = useState(null);
+  const fileRef = useRef();
+
+  /* 자동 저장 */
+  useEffect(() => {
+    saveToStorage({ tasks, projects, issues, projectInfo, history, savedAt: new Date().toISOString() });
+  }, [tasks, projects, issues, projectInfo, history]);
+
+  const showT = (msg, undo) => setToast({ msg, undo });
+  const hideT = () => setToast(null);
+  const nowTime = () => { const d = new Date(); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
+
+  /* 드래그 정렬: fromId를 toId 바로 앞으로 이동 */
+  const reorderTask = (fromId, toId, pos) => {
+    setTasks(prev => {
+      const arr = [...prev];
+      const fromIdx = arr.findIndex(t => t.id === fromId);
+      if (fromIdx < 0) return prev;
+      const [item] = arr.splice(fromIdx, 1);
+      let toIdx = arr.findIndex(t => t.id === toId);
+      if (toIdx < 0) return prev;
+      if (pos === "after") toIdx++;
+      arr.splice(toIdx, 0, item);
+      return arr;
+    });
+  };
+
+  /* 히스토리에 항목 추가하는 유틸 */
+  const addHistItem = (item) => {
+    setHistory(prev => {
+      const ex = prev.find(h => h.date === TODAY);
+      if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, item] } : h);
+      return [...prev, { date: TODAY, items: [item] }];
+    });
+  };
+  const removeHistItem = (matchFn) => {
+    setHistory(prev => prev.map(h => h.date === TODAY ? { ...h, items: h.items.filter(it => !matchFn(it)) } : h).filter(h => h.items.length > 0));
+  };
+
+  const addTask = ({ text, status, project, focus, scheduledDate, scheduledLabel, planDate, planTime }) => {
+    const proj = projects.find(p => p.id === project);
+    setTasks(p => [...p, { id: gid(), text, status, project, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: planDate || TODAY, planTime: planTime || "", createdAt: TODAY, notes: "", focus: focus || false, subtasks: [] }]);
+    addHistItem({ type: "added", text, projectName: proj?.name || "", project, time: nowTime() });
+  };
+
+  const toggleFocus = (id) => setTasks(p => p.map(t => t.id === id ? { ...t, focus: !t.focus } : t));
+  const updateTask = (updated) => setTasks(p => p.map(t => t.id === updated.id ? updated : t));
+
+  const handleEdit = (taskOrSub, parentId) => setEditTarget({ task: taskOrSub, parentId: parentId || null });
+  const handleEditSave = (updated) => {
+    if (!editTarget) return;
+    if (editTarget.parentId) {
+      setTasks(p => p.map(t => t.id === editTarget.parentId ? { ...t, subtasks: (t.subtasks || []).map(s => s.id === updated.id ? updated : s) } : t));
+    } else {
+      const prev = tasks.find(t => t.id === updated.id);
+      setTasks(p => p.map(t => t.id === updated.id ? updated : t));
+      if (prev && prev.status !== updated.status) {
+        const proj = projects.find(p => p.id === updated.project);
+        addHistItem({ type: "status", text: updated.text, projectName: proj?.name || "", from: prev.status, to: updated.status, time: nowTime() });
+        showT(`${STATUSES[prev.status]?.label} → ${STATUSES[updated.status]?.label}`, () => { setTasks(p => p.map(t => t.id === updated.id ? prev : t)); hideT(); });
+      }
+    }
+  };
+
+  const doneTask = (id) => {
+    const task = tasks.find(t => t.id === id); if (!task) return;
+    const proj = projects.find(p => p.id === task.project);
+    const snap = { ...task };
+    setTasks(p => p.filter(t => t.id !== id));
+    const subCount = (task.subtasks || []).length;
+    addHistItem({ type: "done", text: task.text, projectName: proj?.name || "", project: task.project, orig: snap, subCount, time: nowTime() });
+    showT(`"${task.text}" 완료`, () => {
+      setTasks(p => [...p, snap]);
+      removeHistItem(it => it.type === "done" && it.orig?.id === id);
+      hideT();
+    });
+  };
+
+  const delTask = (id) => {
+    const task = tasks.find(t => t.id === id); if (!task) return;
+    const proj = projects.find(p => p.id === task.project);
+    setTasks(p => p.filter(t => t.id !== id));
+    addHistItem({ type: "deleted", text: task.text, projectName: proj?.name || "", time: nowTime() });
+    showT(`"${task.text}" 삭제됨`, () => { setTasks(p => [...p, task]); removeHistItem(it => it.type === "deleted" && it.text === task.text); hideT(); });
+  };
+
+  const restoreHist = (date, idx) => {
+    setHistory(prev => {
+      const day = prev.find(h => h.date === date); if (!day?.items[idx]) return prev;
+      const item = day.items[idx];
+      const restored = item.orig || { id: gid(), text: item.text, status: "action", project: projects.find(p => p.name === item.projectName)?.id || projects[0]?.id, scheduledDate: "", scheduledLabel: "", planDate: TODAY, planTime: "", createdAt: TODAY, notes: "", focus: false, subtasks: [] };
+              if (!restored.planDate) restored.planDate = TODAY;
+      setTasks(p => [...p, restored]);
+      const ni = day.items.filter((_, i) => i !== idx);
+      if (!ni.length) return prev.filter(h => h.date !== date);
+      return prev.map(h => h.date === date ? { ...h, items: ni } : h);
+    });
+    showT("할일로 복원됨", null);
+  };
+
+  const addProj = (name) => {
+    const id = "p_" + gid();
+    setProjects(p => [...p, { id, name, order: p.length }]);
+    setProjectInfo(prev => ({ ...prev, [id]: EMPTY_INFO() }));
+  };
+
+  const exportData = () => {
+    const data = JSON.stringify({ tasks, projects, issues, projectInfo, history, exportedAt: new Date().toISOString() }, null, 2);
+    const blob = new Blob([data], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `task-manager-${TODAY}.json`; a.click(); URL.revokeObjectURL(url);
+  };
+  const importData = (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const r = new FileReader();
+    r.onload = (ev) => { try {
+      const d = JSON.parse(ev.target.result);
+      if (d.tasks) setTasks(d.tasks); if (d.projects) setProjects(d.projects);
+      if (d.issues) setIssues(d.issues); if (d.history) setHistory(d.history);
+      if (d.projectInfo) setProjectInfo(d.projectInfo);
+      showT("데이터를 불러왔습니다", null);
+    } catch { showT("파일 형식 오류", null); } };
+    r.readAsText(file); e.target.value = "";
+  };
+
+  const allFocused = useMemo(() => {
+    let c = 0;
+    tasks.forEach(t => {
+      if (t.status !== "done" && t.focus) c++;
+      (t.subtasks || []).forEach(s => { if (s.status !== "done" && s.focus) c++; });
+    });
+    return c;
+  }, [tasks]);
+  const activeCnt = tasks.filter(t => t.status === "action").length;
+
+  return (
+    <div className="app-wrap" style={S.app}>
+      <div className="hdr-wrap" style={S.hdr}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={S.ttl}>Task Manager</span>
+          <span style={{ fontSize: 12, color: "#F59E0B", fontWeight: 600 }}>⭐{allFocused}</span>
+          <span style={{ fontSize: 12, color: "#9ca3af" }}>다음행동 {activeCnt}건</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 10, color: "#10B981" }}>● 자동 저장</span>
+          <button style={S.gh} onClick={exportData}>📤 백업</button>
+          <button style={S.gh} onClick={() => fileRef.current?.click()}>📂 불러오기</button>
+          <input ref={fileRef} type="file" accept=".json" style={{ display: "none" }} onChange={importData} />
+        </div>
+      </div>
+      <div className="tab-bar" style={{ ...S.tabs, marginTop: 12 }}>
+        {TABS.map(t => <button key={t.id} style={S.tab(tab === t.id)} onClick={() => setTab(t.id)}>{t.icon} {t.label}</button>)}
+      </div>
+      <div style={{ marginTop: 8 }}>
+        {tab === "today" && <TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} />}
+        {tab === "inbox" && <InboxView projects={projects} onAddTask={({ text, status, project, focus, scheduledDate, scheduledLabel, planDate, planTime }) => { addTask({ text, status, project, focus, scheduledDate, scheduledLabel, planDate, planTime }); showT("✓ 등록됨: " + text.slice(0, 20), null); }} />}
+        {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} issues={issues} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onUpdate={updateTask} onReorder={reorderTask} />}
+        {tab === "info" && <InfoView projects={projects} projectInfo={projectInfo} setProjectInfo={setProjectInfo} issues={issues}
+          onUpdateIssue={u => setIssues(p => p.map(i => i.id === u.id ? u : i))} onAddIssue={i => setIssues(p => [...p, i])} />}
+        {tab === "history" && <HistoryView history={history} onRestore={restoreHist} />}
+      </div>
+      {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} />}
+      {toast && <Toast msg={toast.msg} onUndo={toast.undo} onX={hideT} />}
+    </div>
+  );
+}
+
+ReactDOM.render(<App />, document.getElementById("root"));
+  </script>
+</body>
+</html>
