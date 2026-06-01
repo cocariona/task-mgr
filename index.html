@@ -870,6 +870,7 @@ const HTYPE = {
   done: { icon: "✅", color: "#10B981", label: "완료" },
   added: { icon: "➕", color: "#3B82F6", label: "추가" },
   status: { icon: "🔄", color: "#F59E0B", label: "상태변경" },
+  edited: { icon: "✏️", color: "#8B5CF6", label: "수정" },
   deleted: { icon: "🗑", color: "#EF4444", label: "삭제" },
 };
 const HistoryView = ({ history, onRestore }) => {
@@ -879,7 +880,7 @@ const HistoryView = ({ history, onRestore }) => {
     <div style={{ marginTop: 12 }}>
       {sorted.length > 0 && (
         <div style={{ display: "flex", gap: 4, marginBottom: 10, flexWrap: "wrap" }}>
-          {[{ id: "all", label: "전체" }, { id: "done", label: "✅ 완료" }, { id: "added", label: "➕ 추가" }, { id: "status", label: "🔄 변경" }].map(f => (
+          {[{ id: "all", label: "전체" }, { id: "done", label: "✅ 완료" }, { id: "added", label: "➕ 추가" }, { id: "status", label: "🔄 변경" }, { id: "edited", label: "✏️ 수정" }].map(f => (
             <button key={f.id} onClick={() => setFilter(f.id)} style={{ ...S.gh, fontWeight: filter === f.id ? 600 : 400, background: filter === f.id ? "#EFF6FF" : "#fff", color: filter === f.id ? "#3B82F6" : "#6b7280", borderColor: filter === f.id ? "#93C5FD" : "#e5e7eb" }}>{f.label}</button>
           ))}
         </div>
@@ -891,6 +892,7 @@ const HistoryView = ({ history, onRestore }) => {
         const doneCnt = day.items.filter(i => i.type === "done").length;
         const addCnt = day.items.filter(i => i.type === "added").length;
         const stsCnt = day.items.filter(i => i.type === "status").length;
+        const editCnt = day.items.filter(i => i.type === "edited").length;
         return (
           <div key={day.date} style={S.card}>
             <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}>
@@ -900,6 +902,7 @@ const HistoryView = ({ history, onRestore }) => {
               {doneCnt > 0 && <span>✅ {doneCnt}건 완료</span>}
               {addCnt > 0 && <span>➕ {addCnt}건 추가</span>}
               {stsCnt > 0 && <span>🔄 {stsCnt}건 변경</span>}
+              {editCnt > 0 && <span>✏️ {editCnt}건 수정</span>}
             </div>
             {filtered.map((item, i) => <HistRow key={i} item={item} date={day.date} idx={day.items.indexOf(item)} onRestore={onRestore} />)}
           </div>
@@ -918,6 +921,7 @@ const HistRow = ({ item, date, idx, onRestore }) => {
       <span style={{ color: "#9ca3af", fontSize: 11, flexShrink: 0 }}>#{item.projectName}</span>
       <span style={{ flex: 1 }}>{item.text}</span>
       {item.type === "status" && item.from && <span style={{ fontSize: 10, color: "#9ca3af" }}>{STATUSES[item.from]?.label || item.from}→{STATUSES[item.to]?.label || item.to}</span>}
+      {item.detail && <span style={{ fontSize: 10, color: "#8B5CF6" }}>{item.detail}</span>}
       {item.subCount > 0 && <span style={{ fontSize: 10, color: "#9ca3af" }}>+{item.subCount} sub</span>}
       {item.time && <span style={{ fontSize: 10, color: "#c0c0c0", flexShrink: 0 }}>{item.time}</span>}
       {h && item.type === "done" && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
@@ -1121,7 +1125,14 @@ function App() {
     addHistItem({ type: "added", text, projectName: proj?.name || "", project, time: nowTime() });
   };
 
-  const toggleFocus = (id) => setTasks(p => p.map(t => t.id === id ? { ...t, focus: !t.focus } : t));
+  const toggleFocus = (id) => {
+    const task = tasks.find(t => t.id === id);
+    if (task) {
+      const proj = projects.find(p => p.id === task.project);
+      addHistItem({ type: "edited", text: task.text, projectName: proj?.name || "", detail: !task.focus ? "⭐ 집중 설정" : "⭐ 집중 해제", time: nowTime() });
+    }
+    setTasks(p => p.map(t => t.id === id ? { ...t, focus: !t.focus } : t));
+  };
   const updateTask = (updated) => setTasks(p => p.map(t => t.id === updated.id ? updated : t));
 
   const handleEdit = (taskOrSub, parentId) => setEditTarget({ task: taskOrSub, parentId: parentId || null });
@@ -1132,10 +1143,23 @@ function App() {
     } else {
       const prev = tasks.find(t => t.id === updated.id);
       setTasks(p => p.map(t => t.id === updated.id ? updated : t));
-      if (prev && prev.status !== updated.status) {
-        const proj = projects.find(p => p.id === updated.project);
-        addHistItem({ type: "status", text: updated.text, projectName: proj?.name || "", from: prev.status, to: updated.status, time: nowTime() });
-        showT(`${STATUSES[prev.status]?.label} → ${STATUSES[updated.status]?.label}`, () => { setTasks(p => p.map(t => t.id === updated.id ? prev : t)); hideT(); });
+      if (!prev) return;
+      const proj = projects.find(p => p.id === updated.project);
+      const changes = [];
+      if (prev.status !== updated.status) changes.push(`상태: ${STATUSES[prev.status]?.label || prev.status}→${STATUSES[updated.status]?.label || updated.status}`);
+      if (prev.text !== updated.text) changes.push(`내용 수정`);
+      if (prev.project !== updated.project) { const pp = projects.find(p => p.id === prev.project); changes.push(`과제: ${pp?.name || prev.project}→${proj?.name || updated.project}`); }
+      if (prev.planDate !== updated.planDate) changes.push(`계획일: ${prev.planDate || "없음"}→${updated.planDate || "없음"}`);
+      if (prev.scheduledDate !== updated.scheduledDate) changes.push(`마감일: ${prev.scheduledDate || "없음"}→${updated.scheduledDate || "없음"}`);
+      if (prev.focus !== updated.focus) changes.push(updated.focus ? "⭐ 집중 설정" : "⭐ 집중 해제");
+      if (prev.notes !== updated.notes) changes.push("메모 수정");
+      if (changes.length > 0) {
+        if (prev.status !== updated.status) {
+          addHistItem({ type: "status", text: updated.text, projectName: proj?.name || "", from: prev.status, to: updated.status, detail: changes.join(" · "), time: nowTime() });
+          showT(`${STATUSES[prev.status]?.label} → ${STATUSES[updated.status]?.label}`, () => { setTasks(p => p.map(t => t.id === updated.id ? prev : t)); hideT(); });
+        } else {
+          addHistItem({ type: "edited", text: updated.text, projectName: proj?.name || "", detail: changes.join(" · "), time: nowTime() });
+        }
       }
     }
   };
