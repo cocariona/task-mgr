@@ -87,23 +87,42 @@ const deadlineInfo = (dateStr) => {
   return { label: `D-${d}`, color: "#6B7280", bg: "#F3F4F6", icon: "" };
 };
 
-/* ─── .ics 파일 생성 (캘린더 앱 바로 추가) ─── */
-const downloadIcs = (task, projects) => {
-  if (!task.planDate) return;
+/* ─── Google Calendar 연동 (Apps Script) ─── */
+const GCAL_URL = "https://script.google.com/macros/s/AKfycbzzflZGf-WA029sqXtrtdS-buKcPdUbxZtX6nQX3CGXCw11duX-79_ZLKDguahz7jNaAA/exec";
+const addToCalendar = async (task, projects, onResult) => {
+  const date = task.planDate || task.scheduledDate;
+  if (!date) { onResult(false, "날짜가 없습니다"); return; }
   const proj = projects?.find(p => p.id === task.project);
-  const desc = [proj ? `#${proj.name}` : '', task.notes || '', task.scheduledDate ? `마감일: ${fd(task.scheduledDate)}` : ''].filter(Boolean).join('\\n');
-  const date = task.planDate.replace(/-/g, '');
-  const uid = task.id + '@taskmgr';
-  const ics = [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//TaskMgr//KO', 'BEGIN:VEVENT',
-    `UID:${uid}`, `DTSTART;VALUE=DATE:${date}`, `DTEND;VALUE=DATE:${date}`,
-    `SUMMARY:${task.text}`, desc ? `DESCRIPTION:${desc}` : '',
-    'END:VEVENT', 'END:VCALENDAR'
-  ].filter(Boolean).join('\r\n');
-  const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = `${task.text.slice(0,20).replace(/[^a-zA-Z0-9가-힣]/g,'_')}.ics`; a.click();
-  URL.revokeObjectURL(url);
+  const desc = [proj ? `#${proj.name}` : '', task.notes || ''].filter(Boolean).join('\n');
+  const params = new URLSearchParams({ title: task.text, date, desc });
+  try {
+    const res = await fetch(`${GCAL_URL}?${params}`);
+    const json = await res.json();
+    onResult(json.ok, json.ok ? "캘린더에 추가됨" : json.msg);
+  } catch (err) {
+    onResult(false, "연결 실패");
+  }
+};
+
+/* ─── 반복 태스크 ─── */
+const DAYS_KO = ["일", "월", "화", "수", "목", "금", "토"];
+const getTodayDow = () => new Date().getDay(); /* 0=일 ~ 6=토 */
+const getWeekId = () => { const d = new Date(); const jan1 = new Date(d.getFullYear(),0,1); return `${d.getFullYear()}-W${Math.ceil(((d-jan1)/86400000+jan1.getDay()+1)/7)}`; };
+const generateRecurringTasks = (recurrings, tasks, projects) => {
+  const dow = getTodayDow();
+  const weekId = getWeekId();
+  const newTasks = [];
+  recurrings.forEach(r => {
+    if (r.dow !== dow) return;
+    const tag = `[recurring:${r.id}:${weekId}]`;
+    if (tasks.some(t => t.notes?.includes(tag))) return; /* 이미 생성됨 */
+    newTasks.push({
+      id: gid(), text: r.text, status: "action", project: r.project || "proj_etc",
+      scheduledDate: "", scheduledLabel: "", planDate: TODAY,
+      createdAt: TODAY, notes: tag, focus: false, subtasks: []
+    });
+  });
+  return newTasks;
 };
 
 /* ─── localStorage (이중 백업) ─── */
@@ -385,7 +404,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
           {task.notes && <div style={S.note}>{task.notes}</div>}
         </div>
         <div className="task-actions" style={{ display: h ? "flex" : "none", gap: 3, flexShrink: 0, alignItems: "center" }}>
-          {task.planDate && <button style={{ ...S.gh, fontSize: 10, padding: "2px 5px" }} onClick={() => downloadIcs(task, projects)} title="캘린더에 추가">📅+</button>}
+          {(task.planDate || task.scheduledDate) && <button style={{ ...S.gh, fontSize: 10, padding: "2px 5px" }} onClick={() => addToCalendar(task, projects, (ok, msg) => { /* toast는 App에서 처리 */ const el = document.getElementById("cal-toast"); if(el){el.textContent=ok?"✅ "+msg:"❌ "+msg;el.style.display="block";setTimeout(()=>el.style.display="none",2000);} })} title="캘린더에 추가">📅+</button>}
           {subs.length > 0 && <button style={S.gh} onClick={() => setShowSubs(!showSubs)} title="하위 할일">{showSubs ? "▲" : "▼"}</button>}
           <button style={{ ...S.gh, fontSize: 10 }} onClick={() => { setAddSub(!addSub); if (!addSub) setShowSubs(true); }} title="하위 할일 추가">+sub</button>
           <button style={S.gh} onClick={() => onEdit(task)}>✏️</button>
@@ -453,7 +472,6 @@ const AddForm = ({ projects, onAdd, defProj }) => {
 const EditModal = ({ task, projects, onSave, onClose, isSubtask }) => {
   const [f, setF] = useState({ ...task });
   const u = (k, v) => setF(p => ({ ...p, [k]: v }));
-  const hasCalPlan = !!f.planDate;
   return (
     <div style={S.mod} onClick={onClose}>
       <div className="modal-content" style={S.modC} onClick={e => e.stopPropagation()}>
@@ -471,7 +489,6 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask }) => {
             <div style={{ ...S.lbl, color: "#6366F1", fontWeight: 600 }}>📆 언제할지 (선택)</div>
             <div className="plan-fields" style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <input type="date" style={{ ...S.fld, width: 160, flex: "none" }} value={f.planDate || ""} onChange={e => u("planDate", e.target.value)} />
-              {hasCalPlan && <button style={{ ...S.btn("#6366F1"), fontSize: 11, whiteSpace: "nowrap" }} onClick={() => downloadIcs(f, projects)}>📅 캘린더 추가</button>}
             </div>
           </div>
           <div>
@@ -1070,6 +1087,48 @@ const InboxView = ({ projects, onAddTask }) => {
   );
 };
 
+/* ═══ 반복 태스크 설정 ═══ */
+const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
+  const [show, setShow] = useState(false);
+  const [nt, setNt] = useState(""); const [nd, setNd] = useState(1); const [np, setNp] = useState("proj_etc");
+  const addR = () => {
+    if (!nt.trim()) return;
+    setRecurrings(p => [...p, { id: gid(), dow: parseInt(nd), text: nt.trim(), project: np }]);
+    setNt(""); setNd(1);
+  };
+  const delR = (id) => setRecurrings(p => p.filter(r => r.id !== id));
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setShow(!show)}>
+        {show ? "▼" : "▶"} 🔁 반복 태스크 설정
+        <span style={S.cnt(recurrings.length)}>{recurrings.length}</span>
+      </div>
+      {show && <div style={{ ...S.card, marginTop: 4 }}>
+        {recurrings.length === 0 && <div style={{ ...S.emp, padding: 12 }}>설정된 반복 태스크가 없습니다</div>}
+        {recurrings.map(r => (
+          <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", fontSize: 13, borderBottom: "1px solid #f3f4f6" }}>
+            <span style={{ background: "#EEF2FF", color: "#4338CA", fontWeight: 700, fontSize: 12, padding: "2px 8px", borderRadius: 6, flexShrink: 0 }}>
+              매주 {DAYS_KO[r.dow]}
+            </span>
+            <span style={{ flex: 1 }}>{r.text}</span>
+            <span style={{ fontSize: 10, color: "#9ca3af" }}>#{projects.find(p => p.id === r.project)?.name}</span>
+            <button style={{ ...S.gh, color: "#EF4444", fontSize: 10 }} onClick={() => delR(r.id)}>✕</button>
+          </div>
+        ))}
+        <div style={S.div} />
+        <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+          <select style={{ ...S.sel, fontSize: 12 }} value={nd} onChange={e => setNd(e.target.value)}>
+            {DAYS_KO.map((d, i) => <option key={i} value={i}>{d}요일</option>)}
+          </select>
+          <input style={{ ...S.inp, fontSize: 12 }} placeholder="반복할 할일..." value={nt} onChange={e => setNt(e.target.value)} onKeyDown={e => e.key === "Enter" && addR()} />
+          <PrSel value={np} onChange={setNp} projects={projects} />
+          <button style={S.btn()} onClick={addR}>추가</button>
+        </div>
+      </div>}
+    </div>
+  );
+};
+
 /* ═══════ 메인 앱 ═══════ */
 function App() {
   const saved = useMemo(() => loadSaved(), []);
@@ -1079,14 +1138,37 @@ function App() {
   const [issues, setIssues] = useState(saved?.issues || INIT_ISSUES);
   const [projectInfo, setProjectInfo] = useState(saved?.projectInfo || INIT_PROJECT_INFO);
   const [history, setHistory] = useState(saved?.history || []);
+  const [recurrings, setRecurrings] = useState(saved?.recurrings || [
+    { id: gid(), dow: 5, text: "다운로드 폴더 정리", project: "proj_etc" },
+    { id: gid(), dow: 3, text: "위클리 작성", project: "proj_etc" },
+    { id: gid(), dow: 2, text: "영어공부 기사 확인", project: "proj_etc" },
+  ]);
   const [editTarget, setEditTarget] = useState(null);
   const [toast, setToast] = useState(null);
   const fileRef = useRef();
 
+  /* 반복 태스크 자동 생성 (페이지 로드 시 1회) */
+  useEffect(() => {
+    const newTasks = generateRecurringTasks(recurrings, tasks, projects);
+    if (newTasks.length > 0) {
+      setTasks(p => [...p, ...newTasks]);
+      const now = new Date(); const hm = `${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
+      setHistory(prev => {
+        const items = newTasks.map(t => {
+          const proj = projects.find(p => p.id === t.project);
+          return { type: "added", text: t.text + " (반복)", projectName: proj?.name || "", project: t.project, time: hm };
+        });
+        const ex = prev.find(h => h.date === TODAY);
+        if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, ...items] } : h);
+        return [...prev, { date: TODAY, items }];
+      });
+    }
+  }, []); /* eslint-disable-line */
+
   /* 자동 저장 */
   useEffect(() => {
-    saveToStorage({ tasks, projects, issues, projectInfo, history, savedAt: new Date().toISOString() });
-  }, [tasks, projects, issues, projectInfo, history]);
+    saveToStorage({ tasks, projects, issues, projectInfo, history, recurrings, savedAt: new Date().toISOString() });
+  }, [tasks, projects, issues, projectInfo, history, recurrings]);
 
   const showT = (msg, undo) => setToast({ msg, undo });
   const hideT = () => setToast(null);
@@ -1254,7 +1336,7 @@ function App() {
         {TABS.map(t => <button key={t.id} style={S.tab(tab === t.id)} onClick={() => setTab(t.id)}>{t.icon} {t.label}</button>)}
       </div>
       <div style={{ marginTop: 8 }}>
-        {tab === "today" && <TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} />}
+        {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
         {tab === "inbox" && <InboxView projects={projects} onAddTask={({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => { addTask({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }); showT("✓ 등록됨: " + text.slice(0, 20), null); }} />}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} issues={issues} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onUpdate={updateTask} onReorder={reorderTask} />}
         {tab === "info" && <InfoView projects={projects} projectInfo={projectInfo} setProjectInfo={setProjectInfo} issues={issues}
@@ -1263,6 +1345,7 @@ function App() {
       </div>
       {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} />}
       {toast && <Toast msg={toast.msg} onUndo={toast.undo} onX={hideT} />}
+      <div id="cal-toast" style={{ display: "none", position: "fixed", top: 24, left: "50%", transform: "translateX(-50%)", background: "#1f2937", color: "#fff", padding: "8px 16px", borderRadius: 8, fontSize: 13, zIndex: 300, boxShadow: "0 4px 12px rgba(0,0,0,0.2)" }} />
     </div>
   );
 }
