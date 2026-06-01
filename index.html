@@ -94,7 +94,7 @@ const addToCalendar = (task, projects, onResult) => {
   if (!date) { onResult(false, "날짜가 없습니다"); return; }
   const proj = projects?.find(p => p.id === task.project);
   const desc = [proj ? `#${proj.name}` : '', task.notes || ''].filter(Boolean).join('\n');
-  const params = new URLSearchParams({ title: task.text, date, desc });
+  const params = new URLSearchParams({ title: "0. 업무 / " + task.text, date, desc });
   const iframe = document.createElement("iframe");
   iframe.style.display = "none";
   iframe.src = `${GCAL_URL}?${params}`;
