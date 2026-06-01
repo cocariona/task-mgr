@@ -90,36 +90,35 @@ const deadlineInfo = (dateStr) => {
 /* ─── Google Apps Script 연동 (캘린더 + 동기화) ─── */
 const GAS_URL = "https://script.google.com/macros/s/AKfycbzzflZGf-WA029sqXtrtdS-buKcPdUbxZtX6nQX3CGXCw11duX-79_ZLKDguahz7jNaAA/exec";
 
-/* 클라우드 저장: iframe GET chunk 방식 */
+/* 클라우드 저장: form POST → hidden iframe */
 let _saveTimer = null;
-const CHUNK_SIZE = 1800; /* URL 안전 길이 */
 const cloudSave = (data) => {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
     const json = JSON.stringify(data);
-    const encoded = encodeURIComponent(json);
-    const chunks = [];
-    for (let i = 0; i < encoded.length; i += CHUNK_SIZE) {
-      chunks.push(encoded.slice(i, i + CHUNK_SIZE));
-    }
     const el = document.getElementById("sync-status");
     if (el) { el.textContent = "☁️ 저장중..."; el.style.color = "#F59E0B"; }
-    let sent = 0;
-    chunks.forEach((chunk, idx) => {
-      const iframe = document.createElement("iframe");
-      iframe.style.display = "none";
-      iframe.src = `${GAS_URL}?action=save-chunk&d=${chunk}&i=${idx}&t=${chunks.length}`;
-      iframe.onload = () => {
-        sent++;
-        if (sent >= chunks.length && el) {
-          el.textContent = "☁️ 동기화됨"; el.style.color = "#10B981";
-          setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 2000);
-        }
-        setTimeout(() => iframe.remove(), 1000);
-      };
-      /* 청크 순서 보장: 약간의 딜레이 */
-      setTimeout(() => document.body.appendChild(iframe), idx * 500);
-    });
+    const iframe = document.createElement("iframe");
+    iframe.name = "csave" + Date.now();
+    iframe.style.display = "none";
+    document.body.appendChild(iframe);
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = GAS_URL;
+    form.target = iframe.name;
+    form.style.display = "none";
+    const inp = document.createElement("textarea");
+    inp.name = "data";
+    inp.value = json;
+    form.appendChild(inp);
+    document.body.appendChild(form);
+    form.submit();
+    form.remove();
+    iframe.onload = () => {
+      if (el) { el.textContent = "☁️ 동기화됨"; el.style.color = "#10B981"; setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 2000); }
+      setTimeout(() => iframe.remove(), 2000);
+    };
+    setTimeout(() => iframe.remove(), 15000);
   }, 3000);
 };
 
