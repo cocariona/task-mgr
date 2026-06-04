@@ -1255,18 +1255,14 @@ function App() {
   const [cloudLoaded, setCloudLoaded] = useState(false);
   useEffect(() => {
     cloudLoad().then(cloudData => {
-      if (cloudData && cloudData.tasks && cloudData.savedAt) {
+      if (cloudData && cloudData.tasks && cloudData.tasks.length > 0 && cloudData.savedAt) {
         const localSaved = saved?.savedAt || "";
-        /* 클라우드가 더 최신이면 덮어쓰기 */
+        /* 클라우드가 더 최신이면 localStorage에 저장 후 리로드 */
         if (cloudData.savedAt > localSaved) {
-          if (cloudData.tasks) setTasks(cloudData.tasks);
-          if (cloudData.projects) setProjects(cloudData.projects);
-          if (cloudData.issues) setIssues(cloudData.issues);
-          if (cloudData.projectInfo) setProjectInfo(cloudData.projectInfo);
-          if (cloudData.history) setHistory(cloudData.history);
-          if (cloudData.recurrings) setRecurrings(cloudData.recurrings);
-          saveToStorage(cloudData); /* 로컬도 업데이트 */
-          console.log("[Sync] 클라우드에서 복원됨:", cloudData.savedAt);
+          saveToStorage(cloudData);
+          console.log("[Sync] 클라우드에서 복원, 리로드:", cloudData.savedAt);
+          window.location.reload();
+          return;
         }
       }
       setCloudLoaded(true);
