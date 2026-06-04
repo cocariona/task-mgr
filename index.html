@@ -90,32 +90,90 @@ const deadlineInfo = (dateStr) => {
 /* ─── Google Apps Script 연동 (캘린더 + 동기화) ─── */
 const GAS_URL = "https://script.google.com/macros/s/AKfycbzzflZGf-WA029sqXtrtdS-buKcPdUbxZtX6nQX3CGXCw11duX-79_ZLKDguahz7jNaAA/exec";
 
-/* 클라우드 저장: 순차 JSONP script 태그 */
+/* 데이터 압축: 빈 필드 제거 */
+const compactData = (data) => {
+  const d = JSON.parse(JSON.stringify(data));
+  if (d.tasks) d.tasks = d.tasks.map(t => {
+    const r = { i: t.id, x: t.text, s: t.status, p: t.project };
+    if (t.scheduledDate) r.sd = t.scheduledDate;
+    if (t.scheduledLabel) r.sl = t.scheduledLabel;
+    if (t.planDate) r.pd = t.planDate;
+    if (t.createdAt) r.ca = t.createdAt;
+    if (t.notes) r.n = t.notes;
+    if (t.focus) r.f = 1;
+    if (t.subtasks?.length) r.st = t.subtasks;
+    return r;
+  });
+  /* projectInfo: 빈 것 제거 */
+  if (d.projectInfo) {
+    const pi = {};
+    Object.entries(d.projectInfo).forEach(([k, v]) => {
+      const filled = Object.entries(v).filter(([, val]) => val && val !== false && !(Array.isArray(val) && !val.length));
+      if (filled.length) pi[k] = Object.fromEntries(filled);
+    });
+    d.projectInfo = pi;
+  }
+  return d;
+};
+const expandData = (d) => {
+  if (!d || !d.tasks) return d;
+  d.tasks = d.tasks.map(t => {
+    if (t.x !== undefined) return {
+      id: t.i, text: t.x, status: t.s, project: t.p,
+      scheduledDate: t.sd || "", scheduledLabel: t.sl || "", planDate: t.pd || "",
+      createdAt: t.ca || "", notes: t.n || "", focus: !!t.f, subtasks: t.st || []
+    };
+    return { ...t, planDate: t.planDate || "", scheduledDate: t.scheduledDate || "", scheduledLabel: t.scheduledLabel || "", notes: t.notes || "", focus: !!t.focus, subtasks: t.subtasks || [] };
+  });
+  /* projectInfo 복원 */
+  const INFO_IDS = ["rag","accel","dokpamo","hakchuin","optcode","compiler","gpu","itrc"];
+  const pi = d.projectInfo || {};
+  INFO_IDS.forEach(id => { if (!pi[id]) pi[id] = {}; });
+  d.projectInfo = pi;
+  return d;
+};
+
+/* 클라우드 저장: 압축 + JSONP 순차 청크 + 재시도 */
 let _saveTimer = null;
 const cloudSave = (data) => {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
-    const json = JSON.stringify(data);
+    const compact = compactData(data);
+    const json = JSON.stringify(compact);
     const encoded = encodeURIComponent(json);
-    const CHUNK = 1500;
+    /* base64 인코딩 */
+    const b64 = btoa(unescape(encodeURIComponent(json)));
+    const CHUNK = 2000;
     const chunks = [];
-    for (let i = 0; i < encoded.length; i += CHUNK) chunks.push(encoded.slice(i, i + CHUNK));
+    for (let i = 0; i < b64.length; i += CHUNK) chunks.push(b64.slice(i, i + CHUNK));
     const el = document.getElementById("sync-status");
-    if (el) { el.textContent = "☁️ 저장중..."; el.style.color = "#F59E0B"; }
-    let idx = 0;
-    const sendNext = () => {
-      if (idx >= chunks.length) {
-        if (el) { el.textContent = "☁️ 동기화됨"; el.style.color = "#10B981"; setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 2000); }
-        return;
-      }
-      const cbName = "_sc" + Date.now();
-      window[cbName] = () => { delete window[cbName]; sc.remove(); idx++; sendNext(); };
-      const sc = document.createElement("script");
-      sc.src = `${GAS_URL}?action=save-chunk&d=${chunks[idx]}&i=${idx}&t=${chunks.length}&callback=${cbName}`;
-      sc.onerror = () => { delete window[cbName]; sc.remove(); idx++; sendNext(); };
-      document.body.appendChild(sc);
+    if (el) { el.textContent = `☁️ 저장중...`; el.style.color = "#F59E0B"; }
+    /* 워밍업 후 순차 전송 */
+    const warmCb = "_warm" + Date.now();
+    window[warmCb] = () => {
+      delete window[warmCb];
+      let idx = 0;
+      const sendChunk = (retry) => {
+        if (idx >= chunks.length) {
+          if (el) { el.textContent = "☁️ 동기화됨"; el.style.color = "#10B981"; setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 2000); }
+          return;
+        }
+        const cbName = "_sc" + idx + "_" + Date.now();
+        window[cbName] = () => { delete window[cbName]; idx++; setTimeout(() => sendChunk(0), 800); };
+        const sc = document.createElement("script");
+        sc.src = `${GAS_URL}?action=save-chunk&d=${encodeURIComponent(chunks[idx])}&i=${idx}&t=${chunks.length}&callback=${cbName}`;
+        sc.onerror = () => {
+          delete window[cbName]; sc.remove();
+          if (retry < 5) { setTimeout(() => sendChunk(retry + 1), 2000); }
+          else { idx++; setTimeout(() => sendChunk(0), 800); }
+        };
+        document.body.appendChild(sc);
+      };
+      sendChunk(0);
     };
-    sendNext();
+    const ws = document.createElement("script");
+    ws.src = `${GAS_URL}?action=load&callback=${warmCb}`;
+    document.body.appendChild(ws);
   }, 3000);
 };
 
@@ -126,7 +184,7 @@ const cloudLoad = () => new Promise((resolve) => {
     delete window[cbName];
     sc.remove();
     clearTimeout(timeout);
-    resolve(data);
+    resolve(expandData(data));
   };
   const sc = document.createElement("script");
   sc.src = `${GAS_URL}?action=load&callback=${cbName}`;
