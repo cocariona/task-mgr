@@ -87,108 +87,34 @@ const deadlineInfo = (dateStr) => {
   return { label: `D-${d}`, color: "#6B7280", bg: "#F3F4F6", icon: "" };
 };
 
-/* ─── Google Apps Script 연동 (캘린더 + 동기화) ─── */
+/* ─── Google Apps Script (캘린더 전용) ─── */
 const GAS_URL = "https://script.google.com/macros/s/AKfycbzzflZGf-WA029sqXtrtdS-buKcPdUbxZtX6nQX3CGXCw11duX-79_ZLKDguahz7jNaAA/exec";
 
-/* 클라우드 저장용: 필수 데이터만 추출 (빈 필드 제거) */
-const slimForCloud = (data) => {
-  const d = {};
-  /* tasks: 빈 필드 제거 */
-  d.tasks = (data.tasks || []).map(t => {
-    const r = { id: t.id, text: t.text, status: t.status, project: t.project };
-    if (t.scheduledDate) r.scheduledDate = t.scheduledDate;
-    if (t.scheduledLabel) r.scheduledLabel = t.scheduledLabel;
-    if (t.planDate) r.planDate = t.planDate;
-    if (t.createdAt) r.createdAt = t.createdAt;
-    if (t.notes) r.notes = t.notes;
-    if (t.focus) r.focus = true;
-    if (t.subtasks?.length) r.subtasks = t.subtasks;
-    return r;
-  });
-  d.projects = data.projects;
-  d.issues = data.issues;
-  d.recurrings = data.recurrings;
-  d.savedAt = data.savedAt;
-  /* history: 최근 7일만 */
-  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
-  d.history = (data.history || []).filter(h => h.date >= weekAgo);
-  return d;
-};
-/* 클라우드에서 로드 후 빈 필드 복원 */
-const restoreDefaults = (d) => {
-  if (!d || !d.tasks) return d;
-  d.tasks = d.tasks.map(t => ({
-    scheduledDate: "", scheduledLabel: "", planDate: "",
-    createdAt: "", notes: "", focus: false, subtasks: [],
-    ...t
-  }));
-  return d;
-};
+/* ─── Firebase Realtime Database (동기화) ─── */
+const FB_URL = "https://taskmgr-sync-default-rtdb.firebaseio.com/data.json";
 
-/* 클라우드 저장: slim JSON → base64 → JSONP 순차 청크 */
+/* 클라우드 저장용: 필수 데이터만 추출 (빈 필드 제거) */
+/* 클라우드 저장: Firebase PUT (1회 요청) */
 let _saveTimer = null;
 const cloudSave = (data) => {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
-    const slim = slimForCloud(data);
-    const json = JSON.stringify(slim);
-    const b64 = btoa(unescape(encodeURIComponent(json)));
-    const CHUNK = 2000;
-    const chunks = [];
-    for (let i = 0; i < b64.length; i += CHUNK) chunks.push(b64.slice(i, i + CHUNK));
     const el = document.getElementById("sync-status");
-    if (el) { el.textContent = `☁️ 저장중...`; el.style.color = "#F59E0B"; }
-    /* 워밍업 후 순차 전송 */
-    const warmCb = "_warm" + Date.now();
-    window[warmCb] = () => {
-      delete window[warmCb];
-      let idx = 0; let failed = false;
-      const sendChunk = (retry) => {
-        if (idx >= chunks.length) {
-          if (failed) { if (el) { el.textContent = "☁️ 실패"; el.style.color = "#EF4444"; setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 3000); } return; }
-          /* 모든 청크 성공 → 커밋 */
-          const commitCb = "_cm" + Date.now();
-          window[commitCb] = () => { delete window[commitCb]; if (el) { el.textContent = "☁️ 동기화됨"; el.style.color = "#10B981"; setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 2000); } };
-          const cs = document.createElement("script");
-          cs.src = `${GAS_URL}?action=save-commit&callback=${commitCb}`;
-          cs.onerror = () => { delete window[commitCb]; cs.remove(); if (el) { el.textContent = "☁️ 커밋실패"; el.style.color = "#EF4444"; } };
-          document.body.appendChild(cs);
-          return;
-        }
-        const cbName = "_sc" + idx + "_" + Date.now();
-        window[cbName] = () => { delete window[cbName]; idx++; setTimeout(() => sendChunk(0), 500); };
-        const sc = document.createElement("script");
-        sc.src = `${GAS_URL}?action=save-chunk&d=${encodeURIComponent(chunks[idx])}&i=${idx}&t=${chunks.length}&callback=${cbName}`;
-        sc.onerror = () => {
-          delete window[cbName]; sc.remove();
-          if (retry < 5) { setTimeout(() => sendChunk(retry + 1), 1000); }
-          else { failed = true; idx++; setTimeout(() => sendChunk(0), 500); }
-        };
-        document.body.appendChild(sc);
-      };
-      sendChunk(0);
-    };
-    const ws = document.createElement("script");
-    ws.src = `${GAS_URL}?action=load&callback=${warmCb}`;
-    document.body.appendChild(ws);
-  }, 3000);
+    if (el) { el.textContent = "☁️ 저장중..."; el.style.color = "#F59E0B"; }
+    fetch(FB_URL, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }).then(r => r.json()).then(() => {
+      if (el) { el.textContent = "☁️ 동기화됨"; el.style.color = "#10B981"; setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 2000); }
+    }).catch(() => {
+      if (el) { el.textContent = "☁️ 실패"; el.style.color = "#EF4444"; setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 3000); }
+    });
+  }, 2000);
 };
 
-/* 클라우드 로드: JSONP via script tag */
-const cloudLoad = () => new Promise((resolve) => {
-  const cbName = "_taskmgrLoad" + Date.now();
-  window[cbName] = (data) => {
-    delete window[cbName];
-    sc.remove();
-    clearTimeout(timeout);
-    resolve(restoreDefaults(data));
-  };
-  const sc = document.createElement("script");
-  sc.src = `${GAS_URL}?action=load&callback=${cbName}`;
-  sc.onerror = () => { delete window[cbName]; sc.remove(); clearTimeout(timeout); resolve(null); };
-  document.body.appendChild(sc);
-  const timeout = setTimeout(() => { delete window[cbName]; sc.remove(); resolve(null); }, 10000);
-});
+/* 클라우드 로드: Firebase GET (1회 요청) */
+const cloudLoad = () => fetch(FB_URL).then(r => r.json()).catch(() => null);
 
 const GCAL_URL = GAS_URL;
 const addToCalendar = (task, projects, onResult) => {
