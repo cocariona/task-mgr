@@ -65,7 +65,7 @@ const TABS = [
   { id: "today", label: "오늘", icon: "⭐" },
   { id: "inbox", label: "인박스", icon: "📥" },
   { id: "projects", label: "과제별", icon: "📁" },
-  { id: "info", label: "과제정보", icon: "📋" },
+  { id: "memos", label: "메모", icon: "📝" },
   { id: "history", label: "히스토리", icon: "📜" },
 ];
 
@@ -254,18 +254,7 @@ const INIT_ISSUES = [
   },
 ];
 
-const INFO_FIELDS = [
-  { key: "number", label: "과제번호" },
-  { key: "program", label: "사업명" },
-  { key: "title", label: "과제명" },
-  { key: "ministryAgency", label: "부처/전문기관" },
-  { key: "period", label: "연구개발기간" },
-  { key: "subInfo", label: "총괄여부/세부", type: "sub" },
-  { key: "leadOrg", label: "주관기관" },
-  { key: "partners", label: "참여기관" },
-  { key: "agencyContact", label: "담당간사" },
-  { key: "researcher", label: "리벨리온 연구책임자" },
-];
+/* (과제정보 관련 상수 — 호환용 유지) */
 
 const EMPTY_INFO = () => ({ number: "", program: "", title: "", ministryAgency: "", period: "", isSubProject: false, subNumber: "", parentTitle: "", leadOrg: "", partners: "", agencyContact: "", researcher: "", docs: [] });
 const INFO_PROJECT_IDS = new Set(["rag", "accel", "dokpamo", "hakchuin", "optcode", "compiler", "gpu", "itrc"]);
@@ -752,7 +741,93 @@ const ProjectsView = ({ tasks, projects, issues, onDone, onDel, onFocus, onAdd, 
   );
 };
 
-/* ═══ 과제정보 뷰 (변경 없음) ═══ */
+/* ═══ 메모 뷰 (과제별 메모 CRUD) ═══ */
+const MemosView = ({ projects, memos, setMemos }) => {
+  const [openP, setOpenP] = useState(new Set(projects.filter(p => (memos[p.id] || []).length > 0).map(p => p.id)));
+  const [editId, setEditId] = useState(null);
+  const [editText, setEditText] = useState("");
+  const [addFor, setAddFor] = useState(null);
+  const [newText, setNewText] = useState("");
+  const tog = id => setOpenP(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const addMemo = (projId) => {
+    if (!newText.trim()) return;
+    const now = new Date().toISOString();
+    setMemos(prev => ({ ...prev, [projId]: [...(prev[projId] || []), { id: gid(), text: newText.trim(), createdAt: now, updatedAt: now }] }));
+    setNewText(""); setAddFor(null);
+  };
+  const updateMemo = (projId, memoId) => {
+    if (!editText.trim()) return;
+    const now = new Date().toISOString();
+    setMemos(prev => ({ ...prev, [projId]: (prev[projId] || []).map(m => m.id === memoId ? { ...m, text: editText.trim(), updatedAt: now } : m) }));
+    setEditId(null); setEditText("");
+  };
+  const deleteMemo = (projId, memoId) => {
+    setMemos(prev => ({ ...prev, [projId]: (prev[projId] || []).filter(m => m.id !== memoId) }));
+  };
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      {projects.map(p => {
+        const pm = memos[p.id] || [];
+        const o = openP.has(p.id);
+        return (
+          <div key={p.id} style={{ marginBottom: 6 }}>
+            <div style={S.ph(o)} onClick={() => tog(p.id)}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 11, color: "#9ca3af" }}>{o ? "▼" : "▶"}</span>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</span>
+                <span style={S.cnt(pm.length)}>{pm.length}</span>
+              </div>
+            </div>
+            {o && <div style={{ paddingLeft: 8, marginBottom: 12 }}>
+              {pm.length === 0 && <div style={{ ...S.emp, padding: 12 }}>메모 없음</div>}
+              {pm.map(m => (
+                <div key={m.id} style={{ ...S.card, padding: "10px 14px", marginBottom: 6 }}>
+                  {editId === m.id ? (
+                    <div>
+                      <textarea style={S.ta} rows={3} value={editText} onChange={e => setEditText(e.target.value)} autoFocus />
+                      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 6 }}>
+                        <button style={S.gh} onClick={() => setEditId(null)}>취소</button>
+                        <button style={S.btn()} onClick={() => updateMemo(p.id, m.id)}>저장</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <div style={{ fontSize: 13, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{m.text}</div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
+                        <div style={{ fontSize: 10, color: "#9ca3af" }}>
+                          작성 {fd(m.createdAt.slice(0,10))}{m.updatedAt !== m.createdAt ? ` · 수정 ${fd(m.updatedAt.slice(0,10))}` : ""}
+                        </div>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <button style={{ ...S.gh, fontSize: 10 }} onClick={() => { setEditId(m.id); setEditText(m.text); }}>✏️</button>
+                          <button style={{ ...S.gh, fontSize: 10, color: "#EF4444" }} onClick={() => deleteMemo(p.id, m.id)}>🗑</button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {addFor === p.id ? (
+                <div style={{ ...S.card, padding: "10px 14px", background: "#f8fafc" }}>
+                  <textarea style={S.ta} rows={3} placeholder="메모 내용..." value={newText} onChange={e => setNewText(e.target.value)} autoFocus />
+                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 6 }}>
+                    <button style={S.gh} onClick={() => { setAddFor(null); setNewText(""); }}>취소</button>
+                    <button style={S.btn()} onClick={() => addMemo(p.id)}>추가</button>
+                  </div>
+                </div>
+              ) : (
+                <button style={{ ...S.gh, fontSize: 12, marginTop: 4 }} onClick={() => setAddFor(p.id)}>+ 메모 추가</button>
+              )}
+            </div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+/* (과제정보 뷰 — 제거됨, 호환용 더미) */
 const InfoField = ({ label, value, onChange }) => (
   <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6, fontSize: 13 }}>
     <div style={{ width: 120, flexShrink: 0, color: "#6b7280", fontSize: 12, paddingTop: 6 }}>{label}</div>
@@ -1164,6 +1239,7 @@ function App() {
   const [projects, setProjects] = useState(saved?.projects || INIT_PROJECTS);
   const [issues, setIssues] = useState(saved?.issues || INIT_ISSUES);
   const [projectInfo, setProjectInfo] = useState(saved?.projectInfo || INIT_PROJECT_INFO);
+  const [memos, setMemos] = useState(saved?.memos || {});
   const [history, setHistory] = useState(saved?.history || []);
   const [recurrings, setRecurrings] = useState(saved?.recurrings || [
     { id: gid(), dow: 5, text: "다운로드 폴더 정리", project: "proj_etc" },
@@ -1212,10 +1288,10 @@ function App() {
 
   /* 자동 저장 */
   useEffect(() => {
-    const data = { tasks, projects, issues, projectInfo, history, recurrings, savedAt: new Date().toISOString() };
+    const data = { tasks, projects, issues, projectInfo, history, recurrings, memos, savedAt: new Date().toISOString() };
     saveToStorage(data);
     cloudSave(data);
-  }, [tasks, projects, issues, projectInfo, history, recurrings]);
+  }, [tasks, projects, issues, projectInfo, history, recurrings, memos]);
 
   const showT = (msg, undo) => setToast({ msg, undo });
   const hideT = () => setToast(null);
@@ -1387,8 +1463,7 @@ function App() {
         {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
         {tab === "inbox" && <InboxView projects={projects} onAddTask={({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => { addTask({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }); showT("✓ 등록됨: " + text.slice(0, 20), null); }} />}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} issues={issues} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onUpdate={updateTask} onReorder={reorderTask} />}
-        {tab === "info" && <InfoView projects={projects} projectInfo={projectInfo} setProjectInfo={setProjectInfo} issues={issues}
-          onUpdateIssue={u => setIssues(p => p.map(i => i.id === u.id ? u : i))} onAddIssue={i => setIssues(p => [...p, i])} />}
+        {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} />}
       </div>
       {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} />}
