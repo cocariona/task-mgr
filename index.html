@@ -90,12 +90,48 @@ const deadlineInfo = (dateStr) => {
 /* ─── Google Apps Script 연동 (캘린더 + 동기화) ─── */
 const GAS_URL = "https://script.google.com/macros/s/AKfycbzzflZGf-WA029sqXtrtdS-buKcPdUbxZtX6nQX3CGXCw11duX-79_ZLKDguahz7jNaAA/exec";
 
-/* 클라우드 저장: 원본 JSON → base64 → JSONP 순차 청크 */
+/* 클라우드 저장용: 필수 데이터만 추출 (빈 필드 제거) */
+const slimForCloud = (data) => {
+  const d = {};
+  /* tasks: 빈 필드 제거 */
+  d.tasks = (data.tasks || []).map(t => {
+    const r = { id: t.id, text: t.text, status: t.status, project: t.project };
+    if (t.scheduledDate) r.scheduledDate = t.scheduledDate;
+    if (t.scheduledLabel) r.scheduledLabel = t.scheduledLabel;
+    if (t.planDate) r.planDate = t.planDate;
+    if (t.createdAt) r.createdAt = t.createdAt;
+    if (t.notes) r.notes = t.notes;
+    if (t.focus) r.focus = true;
+    if (t.subtasks?.length) r.subtasks = t.subtasks;
+    return r;
+  });
+  d.projects = data.projects;
+  d.issues = data.issues;
+  d.recurrings = data.recurrings;
+  d.savedAt = data.savedAt;
+  /* history: 최근 7일만 */
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  d.history = (data.history || []).filter(h => h.date >= weekAgo);
+  return d;
+};
+/* 클라우드에서 로드 후 빈 필드 복원 */
+const restoreDefaults = (d) => {
+  if (!d || !d.tasks) return d;
+  d.tasks = d.tasks.map(t => ({
+    scheduledDate: "", scheduledLabel: "", planDate: "",
+    createdAt: "", notes: "", focus: false, subtasks: [],
+    ...t
+  }));
+  return d;
+};
+
+/* 클라우드 저장: slim JSON → base64 → JSONP 순차 청크 */
 let _saveTimer = null;
 const cloudSave = (data) => {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
-    const json = JSON.stringify(data);
+    const slim = slimForCloud(data);
+    const json = JSON.stringify(slim);
     const b64 = btoa(unescape(encodeURIComponent(json)));
     const CHUNK = 2000;
     const chunks = [];
@@ -138,7 +174,7 @@ const cloudLoad = () => new Promise((resolve) => {
     delete window[cbName];
     sc.remove();
     clearTimeout(timeout);
-    resolve(data);
+    resolve(restoreDefaults(data));
   };
   const sc = document.createElement("script");
   sc.src = `${GAS_URL}?action=load&callback=${cbName}`;
