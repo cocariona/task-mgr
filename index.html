@@ -90,35 +90,32 @@ const deadlineInfo = (dateStr) => {
 /* ─── Google Apps Script 연동 (캘린더 + 동기화) ─── */
 const GAS_URL = "https://script.google.com/macros/s/AKfycbzzflZGf-WA029sqXtrtdS-buKcPdUbxZtX6nQX3CGXCw11duX-79_ZLKDguahz7jNaAA/exec";
 
-/* 클라우드 저장: form POST → hidden iframe */
+/* 클라우드 저장: 순차 JSONP script 태그 */
 let _saveTimer = null;
 const cloudSave = (data) => {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
     const json = JSON.stringify(data);
+    const encoded = encodeURIComponent(json);
+    const CHUNK = 1500;
+    const chunks = [];
+    for (let i = 0; i < encoded.length; i += CHUNK) chunks.push(encoded.slice(i, i + CHUNK));
     const el = document.getElementById("sync-status");
     if (el) { el.textContent = "☁️ 저장중..."; el.style.color = "#F59E0B"; }
-    const iframe = document.createElement("iframe");
-    iframe.name = "csave" + Date.now();
-    iframe.style.display = "none";
-    document.body.appendChild(iframe);
-    const form = document.createElement("form");
-    form.method = "POST";
-    form.action = GAS_URL;
-    form.target = iframe.name;
-    form.style.display = "none";
-    const inp = document.createElement("textarea");
-    inp.name = "data";
-    inp.value = json;
-    form.appendChild(inp);
-    document.body.appendChild(form);
-    form.submit();
-    form.remove();
-    iframe.onload = () => {
-      if (el) { el.textContent = "☁️ 동기화됨"; el.style.color = "#10B981"; setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 2000); }
-      setTimeout(() => iframe.remove(), 2000);
+    let idx = 0;
+    const sendNext = () => {
+      if (idx >= chunks.length) {
+        if (el) { el.textContent = "☁️ 동기화됨"; el.style.color = "#10B981"; setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 2000); }
+        return;
+      }
+      const cbName = "_sc" + Date.now();
+      window[cbName] = () => { delete window[cbName]; sc.remove(); idx++; sendNext(); };
+      const sc = document.createElement("script");
+      sc.src = `${GAS_URL}?action=save-chunk&d=${chunks[idx]}&i=${idx}&t=${chunks.length}&callback=${cbName}`;
+      sc.onerror = () => { delete window[cbName]; sc.remove(); idx++; sendNext(); };
+      document.body.appendChild(sc);
     };
-    setTimeout(() => iframe.remove(), 15000);
+    sendNext();
   }, 3000);
 };
 
