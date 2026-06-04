@@ -149,13 +149,13 @@ const cloudSave = (data) => {
           return;
         }
         const cbName = "_sc" + idx + "_" + Date.now();
-        window[cbName] = () => { delete window[cbName]; idx++; setTimeout(() => sendChunk(0), 800); };
+        window[cbName] = () => { delete window[cbName]; idx++; setTimeout(() => sendChunk(0), 200); };
         const sc = document.createElement("script");
         sc.src = `${GAS_URL}?action=save-chunk&d=${encodeURIComponent(chunks[idx])}&i=${idx}&t=${chunks.length}&callback=${cbName}`;
         sc.onerror = () => {
           delete window[cbName]; sc.remove();
-          if (retry < 5) { setTimeout(() => sendChunk(retry + 1), 2000); }
-          else { idx++; setTimeout(() => sendChunk(0), 800); }
+          if (retry < 5) { setTimeout(() => sendChunk(retry + 1), 1000); }
+          else { idx++; setTimeout(() => sendChunk(0), 200); }
         };
         document.body.appendChild(sc);
       };
