@@ -90,58 +90,12 @@ const deadlineInfo = (dateStr) => {
 /* ─── Google Apps Script 연동 (캘린더 + 동기화) ─── */
 const GAS_URL = "https://script.google.com/macros/s/AKfycbzzflZGf-WA029sqXtrtdS-buKcPdUbxZtX6nQX3CGXCw11duX-79_ZLKDguahz7jNaAA/exec";
 
-/* 데이터 압축: 빈 필드 제거 */
-const compactData = (data) => {
-  const d = JSON.parse(JSON.stringify(data));
-  if (d.tasks) d.tasks = d.tasks.map(t => {
-    const r = { i: t.id, x: t.text, s: t.status, p: t.project };
-    if (t.scheduledDate) r.sd = t.scheduledDate;
-    if (t.scheduledLabel) r.sl = t.scheduledLabel;
-    if (t.planDate) r.pd = t.planDate;
-    if (t.createdAt) r.ca = t.createdAt;
-    if (t.notes) r.n = t.notes;
-    if (t.focus) r.f = 1;
-    if (t.subtasks?.length) r.st = t.subtasks;
-    return r;
-  });
-  /* projectInfo: 빈 것 제거 */
-  if (d.projectInfo) {
-    const pi = {};
-    Object.entries(d.projectInfo).forEach(([k, v]) => {
-      const filled = Object.entries(v).filter(([, val]) => val && val !== false && !(Array.isArray(val) && !val.length));
-      if (filled.length) pi[k] = Object.fromEntries(filled);
-    });
-    d.projectInfo = pi;
-  }
-  return d;
-};
-const expandData = (d) => {
-  if (!d || !d.tasks) return d;
-  d.tasks = d.tasks.map(t => {
-    if (t.x !== undefined) return {
-      id: t.i, text: t.x, status: t.s, project: t.p,
-      scheduledDate: t.sd || "", scheduledLabel: t.sl || "", planDate: t.pd || "",
-      createdAt: t.ca || "", notes: t.n || "", focus: !!t.f, subtasks: t.st || []
-    };
-    return { ...t, planDate: t.planDate || "", scheduledDate: t.scheduledDate || "", scheduledLabel: t.scheduledLabel || "", notes: t.notes || "", focus: !!t.focus, subtasks: t.subtasks || [] };
-  });
-  /* projectInfo 복원 */
-  const INFO_IDS = ["rag","accel","dokpamo","hakchuin","optcode","compiler","gpu","itrc"];
-  const pi = d.projectInfo || {};
-  INFO_IDS.forEach(id => { if (!pi[id]) pi[id] = {}; });
-  d.projectInfo = pi;
-  return d;
-};
-
-/* 클라우드 저장: 압축 + JSONP 순차 청크 + 재시도 */
+/* 클라우드 저장: 원본 JSON → base64 → JSONP 순차 청크 */
 let _saveTimer = null;
 const cloudSave = (data) => {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
-    const compact = compactData(data);
-    const json = JSON.stringify(compact);
-    const encoded = encodeURIComponent(json);
-    /* base64 인코딩 */
+    const json = JSON.stringify(data);
     const b64 = btoa(unescape(encodeURIComponent(json)));
     const CHUNK = 2000;
     const chunks = [];
@@ -184,7 +138,7 @@ const cloudLoad = () => new Promise((resolve) => {
     delete window[cbName];
     sc.remove();
     clearTimeout(timeout);
-    resolve(expandData(data));
+    resolve(data);
   };
   const sc = document.createElement("script");
   sc.src = `${GAS_URL}?action=load&callback=${cbName}`;
