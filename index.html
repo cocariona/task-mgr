@@ -329,6 +329,7 @@ const StarBtn = ({ on, onClick }) => (
 /* ─── SubRow (서브태스크 행) ─── */
 const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
   const [h, setH] = useState(false);
+  const [showNotes, setShowNotes] = useState(false);
   const isDone = sub.status === "done";
   const dl = sub.scheduledDate ? deadlineInfo(sub.scheduledDate) : null;
   return (
@@ -343,9 +344,10 @@ const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
           {dl && <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>}
           {sub.scheduledDate && <span style={{ fontSize: 9, color: "#6B7280" }}>마감 {fd(sub.scheduledDate)}</span>}
           {sub.scheduledLabel && <span style={{ fontSize: 9, color: "#9ca3af" }}>({sub.scheduledLabel})</span>}
+          {sub.notes && <span onClick={(e) => { e.stopPropagation(); setShowNotes(!showNotes); }} style={{ cursor: "pointer", fontSize: 9, color: showNotes ? "#8B5CF6" : "#c4b5fd", background: showNotes ? "#F3E8FF" : "transparent", padding: "1px 3px", borderRadius: 4, userSelect: "none" }}>📝</span>}
         </div>
         <div style={{ ...S.txt, fontSize: 12.5, textDecoration: isDone ? "line-through" : "none", color: isDone ? "#9ca3af" : "#1a1a1a" }}>{sub.text}</div>
-        {sub.notes && <div style={{ ...S.note, fontSize: 11 }}>{sub.notes}</div>}
+        {sub.notes && showNotes && <div style={{ ...S.note, fontSize: 11 }}>{sub.notes}</div>}
       </div>
       {h && <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
         <button style={{ ...S.gh, fontSize: 10 }} onClick={onEdit}>✏️</button>
@@ -376,6 +378,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
   const [h, setH] = useState(false);
   const [showSubs, setShowSubs] = useState(false);
   const [addSub, setAddSub] = useState(false);
+  const [showNotes, setShowNotes] = useState(false);
   const subs = task.subtasks || [];
   const doneSubCnt = subs.filter(s => s.status === "done").length;
   const p = projects?.find(x => x.id === task.project);
@@ -415,9 +418,10 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
             {task.scheduledLabel && <span style={{ fontSize: 10, color: "#9ca3af" }}>({task.scheduledLabel})</span>}
             {subs.length > 0 && <span style={S.progBdg}>{doneSubCnt}/{subs.length}</span>}
             {showProj && p && <span style={{ fontSize: 11, color: "#9ca3af" }}>#{p.name}</span>}
+            {task.notes && <span onClick={(e) => { e.stopPropagation(); setShowNotes(!showNotes); }} style={{ cursor: "pointer", fontSize: 10, color: showNotes ? "#8B5CF6" : "#c4b5fd", background: showNotes ? "#F3E8FF" : "transparent", padding: "1px 4px", borderRadius: 4, userSelect: "none" }}>📝</span>}
           </div>
           <div style={S.txt}>{task.text}</div>
-          {task.notes && <div style={S.note}>{task.notes}</div>}
+          {task.notes && showNotes && <div style={S.note}>{task.notes}</div>}
         </div>
         <div className="task-actions" style={{ display: h ? "flex" : "none", gap: 3, flexShrink: 0, alignItems: "center" }}>
           {(task.planDate || task.scheduledDate) && <button style={{ ...S.gh, fontSize: 10, padding: "2px 5px" }} onClick={() => addToCalendar(task, projects, (ok, msg) => { /* toast는 App에서 처리 */ const el = document.getElementById("cal-toast"); if(el){el.textContent=ok?"✅ "+msg:"❌ "+msg;el.style.display="block";setTimeout(()=>el.style.display="none",2000);} })} title="캘린더에 추가">📅+</button>}
@@ -536,10 +540,10 @@ const PlanDateSummary = ({ tasks, projects, onEdit }) => {
     });
     return items;
   }, [tasks]);
-  const todayPlan = planned.filter(t => t.planDate === TODAY);
   const weekPlan = planned.filter(t => { const d = diffDays(t.planDate); return d !== null && d > 0 && d <= 7; }).sort((a, b) => a.planDate.localeCompare(b.planDate));
   const overduePlan = planned.filter(t => { const d = diffDays(t.planDate); return d !== null && d < 0; }).sort((a, b) => a.planDate.localeCompare(b.planDate));
-  if (!todayPlan.length && !weekPlan.length && !overduePlan.length) return null;
+  const [weekOpen, setWeekOpen] = useState(false);
+  if (!weekPlan.length && !overduePlan.length) return null;
   const PlanItem = ({ t }) => {
     const p = projects.find(x => x.id === t.project);
     return (
@@ -559,13 +563,9 @@ const PlanDateSummary = ({ tasks, projects, onEdit }) => {
           <span style={{ fontSize: 10, color: "#DC2626", fontWeight: 600 }}>{fd(t.planDate)}</span><PlanItem t={t} />
         </div>)}
       </div>}
-      {todayPlan.length > 0 && <div style={{ background: "linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 100%)", border: "1px solid #A5B4FC", borderRadius: 8, padding: "10px 14px", marginBottom: 8 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "#4338CA", marginBottom: 4 }}>📆 오늘 계획 ({todayPlan.length}건)</div>
-        {todayPlan.map(t => <PlanItem key={t.id} t={t} />)}
-      </div>}
       {weekPlan.length > 0 && <div style={{ background: "linear-gradient(135deg, #F5F3FF 0%, #EDE9FE 100%)", border: "1px solid #C4B5FD", borderRadius: 8, padding: "10px 14px", marginBottom: 8 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "#6D28D9", marginBottom: 4 }}>📆 이번주 계획 ({weekPlan.length}건)</div>
-        {weekPlan.map(t => <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0", fontSize: 12 }}>
+        <div onClick={() => setWeekOpen(!weekOpen)} style={{ fontSize: 13, fontWeight: 600, color: "#6D28D9", marginBottom: weekOpen ? 4 : 0, cursor: "pointer", userSelect: "none", display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 11 }}>{weekOpen ? "▼" : "▶"}</span> 📆 이번주 계획 ({weekPlan.length}건)</div>
+        {weekOpen && weekPlan.map(t => <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0", fontSize: 12 }}>
           <span style={{ fontSize: 10, color: "#6D28D9", fontWeight: 600 }}>{fd(t.planDate)}</span><PlanItem t={t} />
         </div>)}
       </div>}
@@ -613,15 +613,15 @@ const ScheduleAlerts = ({ tasks, projects, onEdit }) => {
 const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onReorder }) => {
   const dragHandlers = useDragReorder(onReorder);
   const { focusedTasks, focusedSubs } = useMemo(() => {
-    const ft = tasks.filter(t => t.status !== "done" && t.focus);
+    const ft = tasks.filter(t => t.status !== "done" && (t.focus || t.planDate === TODAY));
     const fs = [];
-    tasks.forEach(t => { (t.subtasks || []).forEach(s => { if (s.status !== "done" && s.focus) fs.push({ sub: s, parent: t }); }); });
+    tasks.forEach(t => { (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.focus || s.planDate === TODAY)) fs.push({ sub: s, parent: t }); }); });
     return { focusedTasks: ft, focusedSubs: fs };
   }, [tasks]);
   const totalFocused = focusedTasks.length + focusedSubs.length;
-  const unfocusedActions = tasks.filter(t => t.status === "action" && !t.focus);
-  const waitingAll = tasks.filter(t => t.status === "waiting" && !t.focus);
-  const later = tasks.filter(t => t.status === "someday");
+  const unfocusedActions = tasks.filter(t => t.status === "action" && !t.focus && t.planDate !== TODAY);
+  const waitingAll = tasks.filter(t => t.status === "waiting" && !t.focus && t.planDate !== TODAY);
+  const later = tasks.filter(t => t.status === "someday" && !t.focus && t.planDate !== TODAY);
   const [showRest, setShowRest] = useState(false);
 
   /* 집중 그룹: 일반 task + 서브태스크 통합 */
@@ -658,7 +658,7 @@ const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onU
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0" }}>
         <div style={{ fontSize: 13, color: "#6b7280" }}>
-          {fd(TODAY)} — 오늘 집중 <strong style={{ color: "#F59E0B" }}>{totalFocused}</strong>개
+          {fd(TODAY)} — 오늘 할 일 <strong style={{ color: "#F59E0B" }}>{totalFocused}</strong>개
           {unfocusedActions.length > 0 && <span> · 다음행동 {unfocusedActions.length}</span>}
           {waitingAll.length > 0 && <span> · 대기중 {waitingAll.length}</span>}
         </div>
@@ -669,8 +669,8 @@ const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onU
       {totalFocused > 0 ? (
         <div style={{ marginTop: 16 }}>
           <div style={S.focusBanner}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#92400E", marginBottom: 4 }}>⭐ 오늘 집중 ({totalFocused})</div>
-            <div style={{ fontSize: 11, color: "#A16207" }}>상태와 무관하게, 오늘 반드시 확인하거나 처리할 항목들</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#92400E", marginBottom: 4 }}>⭐ 오늘 할 일 ({totalFocused})</div>
+            <div style={{ fontSize: 11, color: "#A16207" }}>⭐ 집중 표시 또는 📆 오늘 계획된 항목</div>
           </div>
           {focusGroups.map(g => (
             <div key={g.k} style={{ marginBottom: 8 }}>
@@ -680,7 +680,7 @@ const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onU
           ))}
         </div>
       ) : (
-        <div style={{ ...S.emp, marginTop: 16 }}>⭐ 표시를 눌러 오늘 집중할 항목을 선택하세요</div>
+        <div style={{ ...S.emp, marginTop: 16 }}>⭐ 집중 표시를 누르거나 📆 오늘 계획을 설정하세요</div>
       )}
       <div style={{ marginTop: 20 }}>
         <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setShowRest(!showRest)}>
@@ -1433,8 +1433,8 @@ function App() {
   const allFocused = useMemo(() => {
     let c = 0;
     tasks.forEach(t => {
-      if (t.status !== "done" && t.focus) c++;
-      (t.subtasks || []).forEach(s => { if (s.status !== "done" && s.focus) c++; });
+      if (t.status !== "done" && (t.focus || t.planDate === TODAY)) c++;
+      (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.focus || s.planDate === TODAY)) c++; });
     });
     return c;
   }, [tasks]);
