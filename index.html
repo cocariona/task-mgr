@@ -175,7 +175,7 @@ const generateRecurringTasks = (recurrings, tasks, projects) => {
     newTasks.push({
       id: gid(), text: r.text, status: "action", project: r.project || "proj_etc",
       scheduledDate: "", scheduledLabel: "", planDate: TODAY,
-      createdAt: TODAY, notes: tag, focus: false, subtasks: [], calEventId: ""
+      createdAt: TODAY, notes: tag, focus: true, subtasks: [], calEventId: ""
     });
   });
   return newTasks;
@@ -1333,6 +1333,11 @@ function App() {
         if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, ...items] } : h);
         return [...prev, { date: TODAY, items }];
       });
+      /* 반복 태스크 캘린더 자동 등록 */
+      newTasks.forEach(t => {
+        const cp = calMakeParams(t, projects);
+        if (cp) calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === t.id ? { ...x, calEventId: r.eventId } : x)); });
+      });
     }
   }, []); /* eslint-disable-line */
 
@@ -1377,7 +1382,9 @@ function App() {
   const addTask = ({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => {
     const proj = projects.find(p => p.id === project);
     const tid = gid();
-    const newTask = { id: tid, text, status, project, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: planDate || TODAY, createdAt: TODAY, notes: "", focus: focus || false, subtasks: [], calEventId: "" };
+    const pd = planDate || TODAY;
+    const autoFocus = focus || (pd === TODAY);
+    const newTask = { id: tid, text, status, project, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: pd, createdAt: TODAY, notes: "", focus: autoFocus, subtasks: [], calEventId: "" };
     setTasks(p => [...p, newTask]);
     addHistItem({ type: "added", text, projectName: proj?.name || "", project, time: nowTime() });
     /* 캘린더 자동 동기화 */
@@ -1402,6 +1409,8 @@ function App() {
       setTasks(p => p.map(t => t.id === editTarget.parentId ? { ...t, subtasks: (t.subtasks || []).map(s => s.id === updated.id ? updated : s) } : t));
     } else {
       const prev = tasks.find(t => t.id === updated.id);
+      /* planDate가 오늘이면 자동 별표 */
+      if (updated.planDate === TODAY && !updated.focus) updated = { ...updated, focus: true };
       setTasks(p => p.map(t => t.id === updated.id ? updated : t));
       if (!prev) return;
       const proj = projects.find(p => p.id === updated.project);
