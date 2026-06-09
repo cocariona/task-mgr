@@ -374,6 +374,7 @@ const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
           {dl && <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>}
           {sub.scheduledDate && <span style={{ fontSize: 9, color: "#6B7280" }}>마감 {fd(sub.scheduledDate)}</span>}
           {sub.scheduledLabel && <span style={{ fontSize: 9, color: "#9ca3af" }}>({sub.scheduledLabel})</span>}
+          {sub.calEventId && <span style={{ fontSize: 8, color: "#10B981", fontWeight: 600, background: "#ECFDF5", padding: "0px 3px", borderRadius: 4 }}>📅✓</span>}
           {sub.notes && <span onClick={(e) => { e.stopPropagation(); setShowNotes(!showNotes); }} style={{ cursor: "pointer", fontSize: 9, color: showNotes ? "#8B5CF6" : "#c4b5fd", background: showNotes ? "#F3E8FF" : "transparent", padding: "1px 3px", borderRadius: 4, userSelect: "none" }}>📝</span>}
         </div>
         <div style={{ ...S.txt, fontSize: 12.5, textDecoration: isDone ? "line-through" : "none", color: isDone ? "#9ca3af" : "#1a1a1a" }}>{sub.text}</div>
@@ -448,6 +449,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
             {task.scheduledLabel && <span style={{ fontSize: 10, color: "#9ca3af" }}>({task.scheduledLabel})</span>}
             {subs.length > 0 && <span style={S.progBdg}>{doneSubCnt}/{subs.length}</span>}
             {showProj && p && <span style={{ fontSize: 11, color: "#9ca3af" }}>#{p.name}</span>}
+            {task.calEventId && <span style={{ fontSize: 9, color: "#10B981", fontWeight: 600, background: "#ECFDF5", padding: "1px 4px", borderRadius: 4 }} title="캘린더 연동됨">📅✓</span>}
             {task.notes && <span onClick={(e) => { e.stopPropagation(); setShowNotes(!showNotes); }} style={{ cursor: "pointer", fontSize: 10, color: showNotes ? "#8B5CF6" : "#c4b5fd", background: showNotes ? "#F3E8FF" : "transparent", padding: "1px 4px", borderRadius: 4, userSelect: "none" }}>📝</span>}
           </div>
           <div style={S.txt}>{task.text}</div>
@@ -1501,6 +1503,24 @@ function App() {
     r.readAsText(file); e.target.value = "";
   };
 
+  /* 캘린더 일괄 동기화: 날짜 있는 태스크 중 calEventId 없는 것 일괄 등록 */
+  const bulkCalSync = async () => {
+    const unsyncedTasks = tasks.filter(t => t.status !== "done" && (t.planDate || t.scheduledDate) && !t.calEventId);
+    if (!unsyncedTasks.length) { showT("모든 태스크가 이미 동기화됨", null); return; }
+    showT(`📅 ${unsyncedTasks.length}건 캘린더 등록 중...`, null);
+    let ok = 0;
+    for (const t of unsyncedTasks) {
+      const cp = calMakeParams(t, projects);
+      if (!cp) continue;
+      const r = await calSync("add", cp);
+      if (r?.eventId) {
+        setTasks(p => p.map(x => x.id === t.id ? { ...x, calEventId: r.eventId } : x));
+        ok++;
+      }
+    }
+    showT(`📅 ${ok}/${unsyncedTasks.length}건 캘린더 등록 완료`, null);
+  };
+
   const allFocused = useMemo(() => {
     let c = 0;
     tasks.forEach(t => {
@@ -1522,6 +1542,7 @@ function App() {
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span id="sync-status" style={{ fontSize: 10, color: "#9ca3af" }}>☁️</span>
           <span style={{ fontSize: 10, color: "#10B981" }}>● 자동 저장</span>
+          <button style={S.gh} onClick={bulkCalSync} title="캘린더 미연동 태스크 일괄 등록">📅 일괄동기화</button>
           <button style={S.gh} onClick={exportData}>📤 백업</button>
           <button style={S.gh} onClick={() => fileRef.current?.click()}>📂 불러오기</button>
           <input ref={fileRef} type="file" accept=".json" style={{ display: "none" }} onChange={importData} />
