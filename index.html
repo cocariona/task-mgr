@@ -69,7 +69,10 @@ const TABS = [
   { id: "history", label: "히스토리", icon: "📜" },
 ];
 
-const TODAY = new Date().toISOString().slice(0, 10);
+/* 로컬 시간 기준 오늘 날짜 (UTC가 아닌 KST 등 현지 시간) */
+let TODAY = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })();
+/* 자정 경과 시 자동 갱신 (60초마다 체크) */
+setInterval(() => { const d = new Date(); const now = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; if (now !== TODAY) { TODAY = now; window.location.reload(); } }, 60000);
 const gid = () => Math.random().toString(36).slice(2, 9);
 const fd = (d) => { const t = new Date(d); return `${t.getFullYear()}.${String(t.getMonth()+1).padStart(2,"0")}.${String(t.getDate()).padStart(2,"0")}`; };
 const diffDays = (dateStr) => {
@@ -88,7 +91,7 @@ const deadlineInfo = (dateStr) => {
 };
 
 /* ─── Google Apps Script (캘린더 전용) ─── */
-const GAS_URL = "https://script.google.com/macros/s/AKfycbzzflZGf-WA029sqXtrtdS-buKcPdUbxZtX6nQX3CGXCw11duX-79_ZLKDguahz7jNaAA/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycby1EJPrhqE7wOQQXd-vjwSIuyRwiAoq0Jc8gsELPq-5uWa8cIweFmfdKP1GmGTnWDAawg/exec";
 
 /* ─── Firebase Realtime Database (동기화) ─── */
 const FB_URL = "https://taskmgr-sync-default-rtdb.firebaseio.com/data.json";
@@ -117,36 +120,62 @@ const cloudSave = (data) => {
 const cloudLoad = () => fetch(FB_URL).then(r => r.json()).catch(() => null);
 
 const GCAL_URL = GAS_URL;
-const addToCalendar = (task, projects, onResult) => {
+/* ─── 캘린더 JSONP 동기화 (add / update / delete) ─── */
+const calSync = (action, params) => new Promise((resolve) => {
+  const cb = "_gcal_" + gid();
+  const timer = setTimeout(() => { delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); }, 12000);
+  window[cb] = (r) => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve(r || { success: false }); };
+  const qs = new URLSearchParams({ ...params, action, callback: cb });
+  const s = document.createElement("script");
+  s.src = `${GCAL_URL}?${qs}`;
+  s.onerror = () => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); };
+  document.body.appendChild(s);
+});
+const calMakeParams = (task, projects) => {
   const date = task.planDate || task.scheduledDate;
-  if (!date) { onResult(false, "날짜가 없습니다"); return; }
+  if (!date) return null;
   const proj = projects?.find(p => p.id === task.project);
   const desc = [proj ? `#${proj.name}` : '', task.notes || ''].filter(Boolean).join('\n');
-  const params = new URLSearchParams({ title: "0. 업무 / " + task.text, date, desc });
-  const iframe = document.createElement("iframe");
-  iframe.style.display = "none";
-  iframe.src = `${GCAL_URL}?${params}`;
-  document.body.appendChild(iframe);
-  onResult(true, "캘린더에 추가 요청됨");
-  setTimeout(() => iframe.remove(), 5000);
+  return { title: "0. 업무 / " + task.text, date, desc };
+};
+/* 수동 버튼용: 기존 이벤트 있으면 update, 없으면 add */
+const addToCalendar = (task, projects, onResult) => {
+  const p = calMakeParams(task, projects);
+  if (!p) { onResult(false, "날짜가 없습니다"); return; }
+  const act = task.calEventId ? "update" : "add";
+  const params = task.calEventId ? { ...p, eventId: task.calEventId } : p;
+  calSync(act, params).then(r => onResult(r?.success, r?.success ? "캘린더 반영됨 ✅" : "캘린더 연동 실패", r?.eventId));
 };
 
 /* ─── 반복 태스크 ─── */
 const DAYS_KO = ["일", "월", "화", "수", "목", "금", "토"];
 const getTodayDow = () => new Date().getDay(); /* 0=일 ~ 6=토 */
 const getWeekId = () => { const d = new Date(); const jan1 = new Date(d.getFullYear(),0,1); return `${d.getFullYear()}-W${Math.ceil(((d-jan1)/86400000+jan1.getDay()+1)/7)}`; };
+const getMonthId = () => { const d = new Date(); return `${d.getFullYear()}-M${d.getMonth()+1}`; };
 const generateRecurringTasks = (recurrings, tasks, projects) => {
   const dow = getTodayDow();
   const weekId = getWeekId();
+  const today = new Date();
+  const todayDom = today.getDate();
+  const monthId = getMonthId();
+  const lastDom = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
   const newTasks = [];
   recurrings.forEach(r => {
-    if (r.dow !== dow) return;
-    const tag = `[recurring:${r.id}:${weekId}]`;
-    if (tasks.some(t => t.notes?.includes(tag))) return; /* 이미 생성됨 */
+    const type = r.type || "weekly";
+    let tag;
+    if (type === "weekly") {
+      if (r.dow !== dow) return;
+      tag = `[recurring:${r.id}:${weekId}]`;
+    } else if (type === "monthly") {
+      if (r.lastDay) { if (todayDom !== lastDom) return; }
+      else { if (todayDom !== (r.dom || 1)) return; }
+      tag = `[recurring:${r.id}:${monthId}]`;
+    } else return;
+    if (tasks.some(t => t.notes?.includes(tag))) return;
     newTasks.push({
       id: gid(), text: r.text, status: "action", project: r.project || "proj_etc",
       scheduledDate: "", scheduledLabel: "", planDate: TODAY,
-      createdAt: TODAY, notes: tag, focus: false, subtasks: []
+      createdAt: TODAY, notes: tag, focus: false, subtasks: [], calEventId: ""
     });
   });
   return newTasks;
@@ -181,6 +210,7 @@ const migrateData = (data) => {
     }
     /* planDate 필드 없으면 추가 (기존 데이터 호환) */
     if (t.planDate === undefined) t = { ...t, planDate: "" };
+    if (t.calEventId === undefined) t = { ...t, calEventId: "" };
     if (t.subtasks?.length) t = { ...t, subtasks: t.subtasks.map(s => {
       let ns = s.status === "scheduled" ? { ...s, status: "action" } : { ...s };
       if (ns.planDate === undefined) ns = { ...ns, planDate: "" };
@@ -424,7 +454,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
           {task.notes && showNotes && <div style={S.note}>{task.notes}</div>}
         </div>
         <div className="task-actions" style={{ display: h ? "flex" : "none", gap: 3, flexShrink: 0, alignItems: "center" }}>
-          {(task.planDate || task.scheduledDate) && <button style={{ ...S.gh, fontSize: 10, padding: "2px 5px" }} onClick={() => addToCalendar(task, projects, (ok, msg) => { /* toast는 App에서 처리 */ const el = document.getElementById("cal-toast"); if(el){el.textContent=ok?"✅ "+msg:"❌ "+msg;el.style.display="block";setTimeout(()=>el.style.display="none",2000);} })} title="캘린더에 추가">📅+</button>}
+          {(task.planDate || task.scheduledDate) && <button style={{ ...S.gh, fontSize: 10, padding: "2px 5px" }} onClick={() => addToCalendar(task, projects, (ok, msg, eventId) => { if(ok && eventId && onUpdate) onUpdate({...task, calEventId: eventId}); const el = document.getElementById("cal-toast"); if(el){el.textContent=ok?"✅ "+msg:"❌ "+msg;el.style.display="block";setTimeout(()=>el.style.display="none",2000);} })} title={task.calEventId ? "캘린더 동기화" : "캘린더에 추가"}>{task.calEventId ? "📅↻" : "📅+"}</button>}
           {subs.length > 0 && <button style={S.gh} onClick={() => setShowSubs(!showSubs)} title="하위 할일">{showSubs ? "▲" : "▼"}</button>}
           <button style={{ ...S.gh, fontSize: 10 }} onClick={() => { setAddSub(!addSub); if (!addSub) setShowSubs(true); }} title="하위 할일 추가">+sub</button>
           <button style={S.gh} onClick={() => onEdit(task)}>✏️</button>
@@ -1193,10 +1223,15 @@ const InboxView = ({ projects, onAddTask }) => {
 const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
   const [show, setShow] = useState(false);
   const [nt, setNt] = useState(""); const [nd, setNd] = useState(1); const [np, setNp] = useState("proj_etc");
+  const [rType, setRType] = useState("weekly"); const [dom, setDom] = useState(1); const [lastDay, setLastDay] = useState(false);
   const addR = () => {
     if (!nt.trim()) return;
-    setRecurrings(p => [...p, { id: gid(), dow: parseInt(nd), text: nt.trim(), project: np }]);
-    setNt(""); setNd(1);
+    if (rType === "weekly") {
+      setRecurrings(p => [...p, { id: gid(), type: "weekly", dow: parseInt(nd), text: nt.trim(), project: np }]);
+    } else {
+      setRecurrings(p => [...p, { id: gid(), type: "monthly", dom: lastDay ? 0 : parseInt(dom), lastDay, text: nt.trim(), project: np }]);
+    }
+    setNt(""); setNd(1); setDom(1); setLastDay(false);
   };
   const delR = (id) => setRecurrings(p => p.filter(r => r.id !== id));
   return (
@@ -1210,7 +1245,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
         {recurrings.map(r => (
           <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", fontSize: 13, borderBottom: "1px solid #f3f4f6" }}>
             <span style={{ background: "#EEF2FF", color: "#4338CA", fontWeight: 700, fontSize: 12, padding: "2px 8px", borderRadius: 6, flexShrink: 0 }}>
-              매주 {DAYS_KO[r.dow]}
+              {(r.type || "weekly") === "weekly" ? `매주 ${DAYS_KO[r.dow]}` : r.lastDay ? "매월 마지막일" : `매월 ${r.dom}일`}
             </span>
             <span style={{ flex: 1 }}>{r.text}</span>
             <span style={{ fontSize: 10, color: "#9ca3af" }}>#{projects.find(p => p.id === r.project)?.name}</span>
@@ -1219,9 +1254,22 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
         ))}
         <div style={S.div} />
         <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
-          <select style={{ ...S.sel, fontSize: 12 }} value={nd} onChange={e => setNd(e.target.value)}>
-            {DAYS_KO.map((d, i) => <option key={i} value={i}>{d}요일</option>)}
+          <select style={{ ...S.sel, fontSize: 12 }} value={rType} onChange={e => setRType(e.target.value)}>
+            <option value="weekly">매주</option><option value="monthly">매월</option>
           </select>
+          {rType === "weekly" ? (
+            <select style={{ ...S.sel, fontSize: 12 }} value={nd} onChange={e => setNd(e.target.value)}>
+              {DAYS_KO.map((d, i) => <option key={i} value={i}>{d}요일</option>)}
+            </select>
+          ) : (
+            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+              <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap" }}>
+                <input type="checkbox" checked={lastDay} onChange={e => setLastDay(e.target.checked)} /> 마지막일
+              </label>
+              {!lastDay && <input type="number" min={1} max={31} value={dom} onChange={e => setDom(e.target.value)} style={{ ...S.fld, width: 50, fontSize: 12 }} />}
+              {!lastDay && <span style={{ fontSize: 11, color: "#6b7280" }}>일</span>}
+            </div>
+          )}
           <input style={{ ...S.inp, fontSize: 12 }} placeholder="반복할 할일..." value={nt} onChange={e => setNt(e.target.value)} onKeyDown={e => e.key === "Enter" && addR()} />
           <PrSel value={np} onChange={setNp} projects={projects} />
           <button style={S.btn()} onClick={addR}>추가</button>
@@ -1326,8 +1374,13 @@ function App() {
 
   const addTask = ({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => {
     const proj = projects.find(p => p.id === project);
-    setTasks(p => [...p, { id: gid(), text, status, project, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: planDate || TODAY, createdAt: TODAY, notes: "", focus: focus || false, subtasks: [] }]);
+    const tid = gid();
+    const newTask = { id: tid, text, status, project, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: planDate || TODAY, createdAt: TODAY, notes: "", focus: focus || false, subtasks: [], calEventId: "" };
+    setTasks(p => [...p, newTask]);
     addHistItem({ type: "added", text, projectName: proj?.name || "", project, time: nowTime() });
+    /* 캘린더 자동 동기화 */
+    const cp = calMakeParams(newTask, projects);
+    if (cp) calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(t => t.id === tid ? { ...t, calEventId: r.eventId } : t)); });
   };
 
   const toggleFocus = (id) => {
@@ -1366,6 +1419,20 @@ function App() {
           addHistItem({ type: "edited", text: updated.text, projectName: proj?.name || "", detail: changes.join(" · "), time: nowTime() });
         }
       }
+      /* 캘린더 자동 동기화 (날짜/제목/메모/과제 변경 시) */
+      const calChanged = prev.text !== updated.text || prev.planDate !== updated.planDate || prev.scheduledDate !== updated.scheduledDate || prev.notes !== updated.notes || prev.project !== updated.project;
+      const hasDate = updated.planDate || updated.scheduledDate;
+      if (calChanged && hasDate) {
+        const cp = calMakeParams(updated, projects);
+        if (updated.calEventId) {
+          calSync("update", { ...cp, eventId: updated.calEventId }).then(r => { if (r?.eventId && r.eventId !== updated.calEventId) setTasks(p => p.map(t => t.id === updated.id ? { ...t, calEventId: r.eventId } : t)); });
+        } else if (cp) {
+          calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(t => t.id === updated.id ? { ...t, calEventId: r.eventId } : t)); });
+        }
+      } else if (calChanged && !hasDate && updated.calEventId) {
+        calSync("delete", { eventId: updated.calEventId });
+        setTasks(p => p.map(t => t.id === updated.id ? { ...t, calEventId: "" } : t));
+      }
     }
   };
 
@@ -1374,6 +1441,8 @@ function App() {
     const proj = projects.find(p => p.id === task.project);
     const snap = { ...task };
     setTasks(p => p.filter(t => t.id !== id));
+    /* 캘린더 자동 삭제 */
+    if (task.calEventId) calSync("delete", { eventId: task.calEventId });
     const subCount = (task.subtasks || []).length;
     addHistItem({ type: "done", text: task.text, projectName: proj?.name || "", project: task.project, orig: snap, subCount, time: nowTime() });
     showT(`"${task.text}" 완료`, () => {
@@ -1387,6 +1456,8 @@ function App() {
     const task = tasks.find(t => t.id === id); if (!task) return;
     const proj = projects.find(p => p.id === task.project);
     setTasks(p => p.filter(t => t.id !== id));
+    /* 캘린더 자동 삭제 */
+    if (task.calEventId) calSync("delete", { eventId: task.calEventId });
     addHistItem({ type: "deleted", text: task.text, projectName: proj?.name || "", time: nowTime() });
     showT(`"${task.text}" 삭제됨`, () => { setTasks(p => [...p, task]); removeHistItem(it => it.type === "deleted" && it.text === task.text); hideT(); });
   };
