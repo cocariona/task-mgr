@@ -70,6 +70,7 @@ const TABS = [
   { id: "inbox", label: "인박스", icon: "📥" },
   { id: "projects", label: "과제별", icon: "📁" },
   { id: "memos", label: "메모", icon: "📝" },
+  { id: "files", label: "파일", icon: "📎" },
   { id: "history", label: "히스토리", icon: "📜" },
 ];
 
@@ -147,8 +148,35 @@ const cloudSave = (data) => {
   }, 2000);
 };
 
-/* 클라우드 로드: Firebase GET (1회 요청) */
-const cloudLoad = async () => { const q = await authParam(); return fetch(FB_URL + q).then(r => r.json()).catch(() => null); };
+/* 클라우드 로드: Firebase GET (1회 요청). 실패와 '빈 DB'를 구분해 반환 —
+   로드 실패 시 클라우드 저장을 계속 차단해야 stale 로컬이 클라우드를 덮지 않는다. */
+const cloudLoad = async () => {
+  try {
+    const q = await authParam();
+    const r = await fetch(FB_URL + q);
+    if (!r.ok) return { ok: false, status: r.status };
+    return { ok: true, data: await r.json() };
+  } catch { return { ok: false }; }
+};
+
+/* ─── 파일 업로드 (Firebase Storage, 로그인 필요) ─── */
+const uploadFile = async (file, onProgress) => {
+  const st = fbStorage(); const u = fbUser();
+  if (!st || !u) throw new Error("파일 업로드는 Firebase 설정 + 로그인 후 사용 가능합니다");
+  const fid = gid();
+  const path = "uploads/" + u.uid + "/" + fid + "_" + file.name;
+  const ref = st.ref(path);
+  const task = ref.put(file);
+  if (onProgress) task.on("state_changed", s => onProgress(Math.round(s.bytesTransferred / s.totalBytes * 100)));
+  await task;
+  const url = await ref.getDownloadURL();
+  return { id: fid, name: file.name, path, url, size: file.size, uploadedAt: new Date().toISOString() };
+};
+const deleteStoredFile = async (att) => {
+  const st = fbStorage();
+  if (st && att && att.path) { try { await st.ref(att.path).delete(); } catch {} }
+};
+const fmtSize = (b) => b >= 1048576 ? (b/1048576).toFixed(1)+" MB" : b >= 1024 ? Math.round(b/1024)+" KB" : (b||0)+" B";
 
 const GCAL_URL = GAS_URL;
 /* ─── 캘린더 JSONP 동기화 (add / update / delete) ─── */
@@ -242,6 +270,7 @@ const migrateData = (data) => {
     /* planDate 필드 없으면 추가 (기존 데이터 호환) */
     if (t.planDate === undefined) t = { ...t, planDate: "" };
     if (t.calEventId === undefined) t = { ...t, calEventId: "" };
+    if (t.attachments === undefined) t = { ...t, attachments: [] };
     if (t.subtasks?.length) t = { ...t, subtasks: t.subtasks.map(s => {
       let ns = s.status === "scheduled" ? { ...s, status: "action" } : { ...s };
       if (ns.planDate === undefined) ns = { ...ns, planDate: "" };
@@ -481,6 +510,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
             {subs.length > 0 && <span style={S.progBdg}>{doneSubCnt}/{subs.length}</span>}
             {showProj && p && <span style={{ fontSize: 11, color: "#9ca3af" }}>#{p.name}</span>}
             {task.calEventId && <span style={{ fontSize: 9, color: "#10B981", fontWeight: 600, background: "#ECFDF5", padding: "1px 4px", borderRadius: 4 }} title="캘린더 연동됨">📅✓</span>}
+            {(task.attachments || []).length > 0 && <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "1px 4px", borderRadius: 4 }} title="첨부파일">📎{task.attachments.length}</span>}
             {task.notes && <span onClick={(e) => { e.stopPropagation(); setShowNotes(!showNotes); }} style={{ cursor: "pointer", fontSize: 10, color: showNotes ? "#8B5CF6" : "#c4b5fd", background: showNotes ? "#F3E8FF" : "transparent", padding: "1px 4px", borderRadius: 4, userSelect: "none" }}>📝</span>}
           </div>
           <div style={S.txt}>{task.text}</div>
@@ -551,6 +581,53 @@ const AddForm = ({ projects, onAdd, defProj }) => {
   );
 };
 
+/* ─── 첨부파일 섹션 (EditModal·파일 탭 공용) ─── */
+const AttachmentSection = ({ attachments, onChange }) => {
+  const [uploading, setUploading] = useState(0); /* 0=idle, 1~100=진행% */
+  const [err, setErr] = useState("");
+  const inRef = useRef();
+  const canUpload = FB_CONFIGURED && !!fbUser();
+  const list = attachments || [];
+  const pick = async (e) => {
+    const file = e.target.files?.[0]; e.target.value = "";
+    if (!file) return;
+    setErr(""); setUploading(1);
+    try {
+      const att = await uploadFile(file, p => setUploading(Math.max(1, p)));
+      onChange([...list, att]);
+    } catch (ex) { setErr((ex && ex.message) || String(ex)); }
+    setUploading(0);
+  };
+  const remove = (att) => {
+    if (!window.confirm('"' + att.name + '" 첨부를 삭제할까요? (저장소 파일도 함께 삭제)')) return;
+    deleteStoredFile(att);
+    onChange(list.filter(a => a.id !== att.id));
+  };
+  return (
+    <div>
+      <div style={S.lbl}>📎 첨부파일</div>
+      {list.map(a => (
+        <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "3px 0" }}>
+          <a href={a.url} target="_blank" rel="noreferrer" style={{ color: "#3B82F6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📎 {a.name}</a>
+          <span style={{ color: "#9ca3af", fontSize: 10, flexShrink: 0 }}>{fmtSize(a.size)}</span>
+          <button style={{ ...S.gh, fontSize: 10, color: "#EF4444", flexShrink: 0 }} onClick={() => remove(a)}>✕</button>
+        </div>
+      ))}
+      {canUpload ? (
+        <div style={{ marginTop: 4 }}>
+          <input ref={inRef} type="file" style={{ display: "none" }} onChange={pick} />
+          {uploading > 0
+            ? <span style={{ fontSize: 12, color: "#F59E0B" }}>⬆️ 업로드 중… {uploading}%</span>
+            : <button style={{ ...S.gh, fontSize: 11 }} onClick={() => inRef.current?.click()}>+ 파일 첨부</button>}
+        </div>
+      ) : (
+        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>파일 업로드는 Firebase 설정(로그인) 후 사용 가능</div>
+      )}
+      {err && <div style={{ fontSize: 11, color: "#EF4444", marginTop: 2 }}>{err}</div>}
+    </div>
+  );
+};
+
 /* ─── EditModal (task + subtask 공용) ─── */
 const EditModal = ({ task, projects, onSave, onClose, isSubtask }) => {
   const [f, setF] = useState({ ...task });
@@ -583,6 +660,7 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask }) => {
               {f.scheduledDate && <button style={{ ...S.gh, fontSize: 10, color: "#EF4444" }} onClick={() => { u("scheduledDate", ""); u("scheduledLabel", ""); }}>✕</button>}
             </div>
           </div>
+          {!isSubtask && <AttachmentSection attachments={f.attachments} onChange={v => u("attachments", v)} />}
           <div><div style={S.lbl}>메모 / 맥락</div><textarea style={S.ta} rows={3} value={f.notes || ""} onChange={e => u("notes", e.target.value)} /></div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <button style={S.gh} onClick={onClose}>취소</button>
@@ -1047,6 +1125,76 @@ const InfoView = ({ projects, projectInfo, setProjectInfo, issues, onUpdateIssue
   );
 };
 
+/* ═══ 파일 뷰 (단독 업로드 보관함 + task 첨부 모아보기) ═══ */
+const FilesView = ({ files, setFiles, tasks, projects }) => {
+  const [uploading, setUploading] = useState(0);
+  const [err, setErr] = useState("");
+  const inRef = useRef();
+  const canUpload = FB_CONFIGURED && !!fbUser();
+  const taskAtts = useMemo(() => {
+    const out = [];
+    tasks.forEach(t => (t.attachments || []).forEach(a => out.push({ att: a, task: t })));
+    return out;
+  }, [tasks]);
+  const pick = async (e) => {
+    const file = e.target.files?.[0]; e.target.value = "";
+    if (!file) return;
+    setErr(""); setUploading(1);
+    try {
+      const att = await uploadFile(file, p => setUploading(Math.max(1, p)));
+      setFiles(prev => [...prev, att]);
+    } catch (ex) { setErr((ex && ex.message) || String(ex)); }
+    setUploading(0);
+  };
+  const remove = (att) => {
+    if (!window.confirm('"' + att.name + '" 파일을 삭제할까요? (저장소에서도 삭제)')) return;
+    deleteStoredFile(att);
+    setFiles(prev => prev.filter(a => a.id !== att.id));
+  };
+  const FileRow = ({ a, sub }) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, padding: "5px 4px", borderBottom: "1px solid #f3f4f6" }}>
+      <a href={a.url} target="_blank" rel="noreferrer" style={{ color: "#3B82F6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📎 {a.name}</a>
+      {sub}
+      <span style={{ color: "#9ca3af", fontSize: 10, flexShrink: 0 }}>{fmtSize(a.size)}</span>
+      <span style={{ color: "#c0c0c0", fontSize: 10, flexShrink: 0 }}>{a.uploadedAt ? fd(a.uploadedAt.slice(0, 10)) : ""}</span>
+    </div>
+  );
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={S.card}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>📎 파일 보관함 ({files.length})</div>
+          {canUpload && (
+            <div>
+              <input ref={inRef} type="file" style={{ display: "none" }} onChange={pick} />
+              {uploading > 0
+                ? <span style={{ fontSize: 12, color: "#F59E0B" }}>⬆️ 업로드 중… {uploading}%</span>
+                : <button style={S.btn()} onClick={() => inRef.current?.click()}>+ 파일 업로드</button>}
+            </div>
+          )}
+        </div>
+        {!canUpload && <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 6 }}>Firebase 설정(로그인) 후 어느 기기에서나 업로드·조회할 수 있습니다.</div>}
+        {err && <div style={{ fontSize: 11, color: "#EF4444", marginBottom: 6 }}>{err}</div>}
+        {files.length === 0 && <div style={{ ...S.emp, padding: 16 }}>업로드한 파일이 없습니다</div>}
+        {files.map(a => <FileRow key={a.id} a={a} sub={
+          <button style={{ ...S.gh, fontSize: 10, color: "#EF4444", flexShrink: 0 }} onClick={() => remove(a)}>✕</button>
+        } />)}
+      </div>
+      {taskAtts.length > 0 && (
+        <div style={S.card}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>📋 할 일에 첨부된 파일 ({taskAtts.length})</div>
+          {taskAtts.map(({ att, task }) => {
+            const p = projects.find(x => x.id === task.project);
+            return <FileRow key={att.id} a={att} sub={
+              <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p ? "#" + p.name + " · " : ""}{task.text}</span>
+            } />;
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 /* ═══ 히스토리 뷰 (일일 활동 로그) ═══ */
 const HTYPE = {
   done: { icon: "✅", color: "#10B981", label: "완료" },
@@ -1321,6 +1469,7 @@ function App() {
   const [issues, setIssues] = useState(saved?.issues || INIT_ISSUES);
   const [projectInfo, setProjectInfo] = useState(saved?.projectInfo || INIT_PROJECT_INFO);
   const [memos, setMemos] = useState(saved?.memos || {});
+  const [files, setFiles] = useState(saved?.files || []); /* 단독 업로드 파일 메타 (실제 파일=Firebase Storage) */
   const [history, setHistory] = useState(saved?.history || []);
   const [recurrings, setRecurrings] = useState(saved?.recurrings || [
     { id: gid(), dow: 5, text: "다운로드 폴더 정리", project: "proj_etc" },
@@ -1331,26 +1480,49 @@ function App() {
   const [toast, setToast] = useState(null);
   const fileRef = useRef();
 
-  /* 클라우드에서 데이터 로드 (페이지 로드 시 1회) */
+  /* 클라우드에서 데이터 로드 (페이지 로드 시 1회).
+     ⚠️ 로드가 '성공'했을 때만 cloudLoaded=true → 클라우드 저장 허용.
+     실패(오프라인/권한) 시 클라우드 쓰기를 계속 차단해 stale 로컬이 클라우드를 덮는 사고 방지
+     (로컬 저장은 계속 동작). */
   const [cloudLoaded, setCloudLoaded] = useState(false);
   useEffect(() => {
-    cloudLoad().then(cloudData => {
+    cloudLoad().then(res => {
+      if (!res.ok) {
+        const el = document.getElementById("sync-status");
+        if (el) { el.textContent = "☁️ 연결실패 — 로컬만 저장"; el.style.color = "#EF4444"; }
+        console.warn("[Sync] 초기 클라우드 로드 실패 — 클라우드 저장 차단", res.status || "");
+        return;
+      }
+      const cloudData = res.data;
       if (cloudData && cloudData.tasks && cloudData.tasks.length > 0 && cloudData.savedAt) {
         const localSaved = saved?.savedAt || "";
-        /* 클라우드가 더 최신이면 localStorage에 저장 후 리로드 */
+        /* 클라우드가 더 최신이면 reload 없이 메모리에서 직접 채택.
+           (예전 reload 방식은 localStorage가 막힌 환경에서 무한 리로드 루프) */
         if (cloudData.savedAt > localSaved) {
+          console.log("[Sync] 클라우드에서 복원:", cloudData.savedAt);
           saveToStorage(cloudData);
-          console.log("[Sync] 클라우드에서 복원, 리로드:", cloudData.savedAt);
-          window.location.reload();
-          return;
+          const m = migrateData(cloudData);
+          setTasks(m.tasks || []);
+          setProjects(m.projects || INIT_PROJECTS);
+          setIssues(m.issues || []);
+          setProjectInfo(m.projectInfo || INIT_PROJECT_INFO);
+          setMemos(m.memos || {});
+          setFiles(m.files || []);
+          setHistory(m.history || []);
+          setRecurrings(m.recurrings || []);
         }
       }
       setCloudLoaded(true);
     });
   }, []); /* eslint-disable-line */
 
-  /* 반복 태스크 자동 생성 (페이지 로드 시 1회) */
+  /* 반복 태스크 자동 생성 — ⚠️ 클라우드 화해가 끝난 뒤(cloudLoaded) 1회만.
+     예전엔 마운트 즉시 실행돼, stale/INIT 상태에서 반복 task와 캘린더 이벤트를
+     중복 생성했음(2026-06-10 아침 '위클리 작성' 캘린더 7중복의 원인). */
+  const recurDone = useRef(false);
   useEffect(() => {
+    if (!cloudLoaded || recurDone.current) return;
+    recurDone.current = true;
     const newTasks = generateRecurringTasks(recurrings, tasks, projects);
     if (newTasks.length > 0) {
       setTasks(p => [...p, ...newTasks]);
@@ -1370,17 +1542,16 @@ function App() {
         if (cp) calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === t.id ? { ...x, calEventId: r.eventId } : x)); });
       });
     }
-  }, []); /* eslint-disable-line */
+  }, [cloudLoaded, recurrings, tasks, projects]); /* eslint-disable-line */
 
-  /* 자동 저장 — ⚠️ 레이스 방지: 초기 클라우드 로드/화해가 끝나기 전(cloudLoaded=false)에는
-     절대 저장하지 않는다. 예전엔 느린 연결에서 cloudLoad보다 INIT 자동저장이 먼저 발사돼
-     클라우드를 INIT 데이터로 덮어쓰는 데이터 유실 버그가 있었음(2026-06-10 31일 히스토리 유실). */
+  /* 자동 저장 — ⚠️ 레이스 방지: 초기 클라우드 로드/화해가 성공하기 전(cloudLoaded=false)에는
+     클라우드에 절대 쓰지 않는다(로컬 저장만). 예전엔 느린 연결에서 cloudLoad보다 INIT 자동저장이
+     먼저 발사돼 클라우드를 INIT 데이터로 덮어쓰는 유실 버그가 있었음(2026-06-10 31일 히스토리 유실). */
   useEffect(() => {
-    if (!cloudLoaded) return;
-    const data = { tasks, projects, issues, projectInfo, history, recurrings, memos, savedAt: new Date().toISOString() };
+    const data = { tasks, projects, issues, projectInfo, history, recurrings, memos, files, savedAt: new Date().toISOString() };
     saveToStorage(data);
-    cloudSave(data);
-  }, [cloudLoaded, tasks, projects, issues, projectInfo, history, recurrings, memos]);
+    if (cloudLoaded) cloudSave(data);
+  }, [cloudLoaded, tasks, projects, issues, projectInfo, history, recurrings, memos, files]);
 
   const showT = (msg, undo) => setToast({ msg, undo });
   const hideT = () => setToast(null);
@@ -1528,7 +1699,7 @@ function App() {
   };
 
   const exportData = () => {
-    const data = JSON.stringify({ tasks, projects, issues, projectInfo, history, exportedAt: new Date().toISOString() }, null, 2);
+    const data = JSON.stringify({ tasks, projects, issues, projectInfo, history, recurrings, memos, files, exportedAt: new Date().toISOString() }, null, 2);
     const blob = new Blob([data], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `task-manager-${TODAY}.json`; a.click(); URL.revokeObjectURL(url);
@@ -1541,6 +1712,8 @@ function App() {
       if (d.tasks) setTasks(d.tasks); if (d.projects) setProjects(d.projects);
       if (d.issues) setIssues(d.issues); if (d.history) setHistory(d.history);
       if (d.projectInfo) setProjectInfo(d.projectInfo);
+      if (d.recurrings) setRecurrings(d.recurrings); if (d.memos) setMemos(d.memos);
+      if (d.files) setFiles(d.files);
       showT("데이터를 불러왔습니다", null);
     } catch { showT("파일 형식 오류", null); } };
     r.readAsText(file); e.target.value = "";
@@ -1600,6 +1773,7 @@ function App() {
         {tab === "inbox" && <InboxView projects={projects} onAddTask={({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => { addTask({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }); showT("✓ 등록됨: " + text.slice(0, 20), null); }} />}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} issues={issues} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onUpdate={updateTask} onReorder={reorderTask} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
+        {tab === "files" && <FilesView files={files} setFiles={setFiles} tasks={tasks} projects={projects} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} />}
       </div>
       {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} />}
