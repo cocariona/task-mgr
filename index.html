@@ -117,8 +117,8 @@ const FB_CONFIGURED = !!FIREBASE_CONFIG.apiKey && !FIREBASE_CONFIG.apiKey.starts
 if (FB_CONFIGURED && window.firebase && !firebase.apps.length) {
   try { firebase.initializeApp(FIREBASE_CONFIG); } catch (e) { console.error("[Firebase init]", e); }
 }
-const fbAuth = () => (FB_CONFIGURED && window.firebase) ? firebase.auth() : null;
-const fbStorage = () => (FB_CONFIGURED && window.firebase) ? firebase.storage() : null;
+const fbAuth = () => (FB_CONFIGURED && window.firebase && typeof firebase.auth === "function") ? firebase.auth() : null;
+const fbStorage = () => (FB_CONFIGURED && window.firebase && typeof firebase.storage === "function") ? firebase.storage() : null;
 const fbUser = () => { try { return fbAuth()?.currentUser || null; } catch { return null; } };
 
 const FB_URL = "https://taskmgr-sync-default-rtdb.firebaseio.com/data.json";
@@ -140,7 +140,11 @@ const cloudSave = (data) => {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
-    }).then(r => r.json()).then(() => {
+    }).then(r => {
+      /* RTDB는 401(권한거부)에도 유효한 JSON 바디를 주므로 r.ok를 반드시 확인 */
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(() => {
       if (el) { el.textContent = "☁️ 동기화됨"; el.style.color = "#10B981"; setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 2000); }
     }).catch(() => {
       if (el) { el.textContent = "☁️ 실패"; el.style.color = "#EF4444"; setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 3000); }
@@ -582,7 +586,9 @@ const AddForm = ({ projects, onAdd, defProj }) => {
 };
 
 /* ─── 첨부파일 섹션 (EditModal·파일 탭 공용) ─── */
-const AttachmentSection = ({ attachments, onChange }) => {
+/* deferred 모드(EditModal): Storage 부수효과를 모달의 저장/취소와 일치시킨다 —
+   업로드는 즉시 하되 '취소' 시 롤백 삭제, 삭제는 예약만 했다가 '저장' 시 실행. */
+const AttachmentSection = ({ attachments, onChange, deferred, onBusy }) => {
   const [uploading, setUploading] = useState(0); /* 0=idle, 1~100=진행% */
   const [err, setErr] = useState("");
   const inRef = useRef();
@@ -591,14 +597,21 @@ const AttachmentSection = ({ attachments, onChange }) => {
   const pick = async (e) => {
     const file = e.target.files?.[0]; e.target.value = "";
     if (!file) return;
-    setErr(""); setUploading(1);
+    setErr(""); setUploading(1); if (onBusy) onBusy(true);
     try {
       const att = await uploadFile(file, p => setUploading(Math.max(1, p)));
+      if (deferred) deferred.uploads.current.push(att);
       onChange([...list, att]);
     } catch (ex) { setErr((ex && ex.message) || String(ex)); }
-    setUploading(0);
+    setUploading(0); if (onBusy) onBusy(false);
   };
   const remove = (att) => {
+    if (deferred) {
+      if (!window.confirm('"' + att.name + '" 첨부를 삭제할까요? (저장을 눌러야 확정)')) return;
+      deferred.deletes.current.push(att);
+      onChange(list.filter(a => a.id !== att.id));
+      return;
+    }
     if (!window.confirm('"' + att.name + '" 첨부를 삭제할까요? (저장소 파일도 함께 삭제)')) return;
     deleteStoredFile(att);
     onChange(list.filter(a => a.id !== att.id));
@@ -632,8 +645,14 @@ const AttachmentSection = ({ attachments, onChange }) => {
 const EditModal = ({ task, projects, onSave, onClose, isSubtask }) => {
   const [f, setF] = useState({ ...task });
   const u = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const pendingUploads = useRef([]); const pendingDeletes = useRef([]);
+  const [attBusy, setAttBusy] = useState(false);
+  /* 취소/바깥클릭: 이번 모달에서 올린 파일은 롤백 삭제(고아 방지), 삭제 예약은 폐기(파일 보존) */
+  const cancel = () => { pendingUploads.current.forEach(deleteStoredFile); onClose(); };
+  /* 저장: 삭제 예약을 이때 실행(취소했을 때 깨진 링크가 남지 않게) */
+  const commit = () => { if (attBusy) return; pendingDeletes.current.forEach(deleteStoredFile); onSave(f); onClose(); };
   return (
-    <div style={S.mod} onClick={onClose}>
+    <div style={S.mod} onClick={cancel}>
       <div className="modal-content" style={S.modC} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>{isSubtask ? "하위 할일 수정" : "할 일 수정"}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -660,11 +679,11 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask }) => {
               {f.scheduledDate && <button style={{ ...S.gh, fontSize: 10, color: "#EF4444" }} onClick={() => { u("scheduledDate", ""); u("scheduledLabel", ""); }}>✕</button>}
             </div>
           </div>
-          {!isSubtask && <AttachmentSection attachments={f.attachments} onChange={v => u("attachments", v)} />}
+          {!isSubtask && <AttachmentSection attachments={f.attachments} onChange={v => u("attachments", v)} deferred={{ uploads: pendingUploads, deletes: pendingDeletes }} onBusy={setAttBusy} />}
           <div><div style={S.lbl}>메모 / 맥락</div><textarea style={S.ta} rows={3} value={f.notes || ""} onChange={e => u("notes", e.target.value)} /></div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <button style={S.gh} onClick={onClose}>취소</button>
-            <button style={S.btn()} onClick={() => { onSave(f); onClose(); }}>저장</button>
+            <button style={S.gh} onClick={cancel}>취소</button>
+            <button style={{ ...S.btn(), opacity: attBusy ? 0.4 : 1, cursor: attBusy ? "wait" : "pointer" }} onClick={commit} title={attBusy ? "파일 업로드 완료 후 저장할 수 있습니다" : ""}>저장</button>
           </div>
         </div>
       </div>
@@ -1485,10 +1504,13 @@ function App() {
      실패(오프라인/권한) 시 클라우드 쓰기를 계속 차단해 stale 로컬이 클라우드를 덮는 사고 방지
      (로컬 저장은 계속 동작). */
   const [cloudLoaded, setCloudLoaded] = useState(false);
+  const cloudLoadedRef = useRef(false);
   useEffect(() => {
-    cloudLoad().then(res => {
+    let cancelled = false;
+    const tryLoad = () => cloudLoad().then(res => {
+      if (cancelled || cloudLoadedRef.current) return;
+      const el = document.getElementById("sync-status");
       if (!res.ok) {
-        const el = document.getElementById("sync-status");
         if (el) { el.textContent = "☁️ 연결실패 — 로컬만 저장"; el.style.color = "#EF4444"; }
         console.warn("[Sync] 초기 클라우드 로드 실패 — 클라우드 저장 차단", res.status || "");
         return;
@@ -1497,10 +1519,11 @@ function App() {
       if (cloudData && cloudData.tasks && cloudData.tasks.length > 0 && cloudData.savedAt) {
         const localSaved = saved?.savedAt || "";
         /* 클라우드가 더 최신이면 reload 없이 메모리에서 직접 채택.
-           (예전 reload 방식은 localStorage가 막힌 환경에서 무한 리로드 루프) */
+           (예전 reload 방식은 localStorage가 막힌 환경에서 무한 리로드 루프)
+           saveToStorage는 여기서 호출하지 않는다 — 아래 자동저장 effect가 상태 변경을 감지해
+           한 번만 저장하므로, BACKUP_KEY에 '채택 직전 로컬'이 1세대 보존된다. */
         if (cloudData.savedAt > localSaved) {
           console.log("[Sync] 클라우드에서 복원:", cloudData.savedAt);
-          saveToStorage(cloudData);
           const m = migrateData(cloudData);
           setTasks(m.tasks || []);
           setProjects(m.projects || INIT_PROJECTS);
@@ -1512,8 +1535,15 @@ function App() {
           setRecurrings(m.recurrings || []);
         }
       }
+      cloudLoadedRef.current = true;
       setCloudLoaded(true);
+      if (el && el.textContent.indexOf("연결실패") >= 0) { el.textContent = "☁️"; el.style.color = "#9ca3af"; }
     });
+    tryLoad();
+    /* 일시적 글리치로 차단된 세션은 온라인 복귀 시 자동 재시도 */
+    const onOnline = () => { if (!cloudLoadedRef.current) tryLoad(); };
+    window.addEventListener("online", onOnline);
+    return () => { cancelled = true; window.removeEventListener("online", onOnline); };
   }, []); /* eslint-disable-line */
 
   /* 반복 태스크 자동 생성 — ⚠️ 클라우드 화해가 끝난 뒤(cloudLoaded) 1회만.
@@ -1544,14 +1574,19 @@ function App() {
     }
   }, [cloudLoaded, recurrings, tasks, projects]); /* eslint-disable-line */
 
-  /* 자동 저장 — ⚠️ 레이스 방지: 초기 클라우드 로드/화해가 성공하기 전(cloudLoaded=false)에는
-     클라우드에 절대 쓰지 않는다(로컬 저장만). 예전엔 느린 연결에서 cloudLoad보다 INIT 자동저장이
-     먼저 발사돼 클라우드를 INIT 데이터로 덮어쓰는 유실 버그가 있었음(2026-06-10 31일 히스토리 유실). */
+  /* 자동 저장 — ⚠️ 두 가지 유실 방지 장치:
+     ① 마운트 1회차 skip: 편집 없이 열람만 한 세션이 savedAt을 재도장하면, stale 로컬이
+        다음 세션의 화해 비교를 이겨 클라우드를 덮는다(2026-06-10 사고와 동일 클래스).
+        savedAt은 실제 상태 변경 시에만 갱신.
+     ② 클라우드 쓰기는 초기 로드 '성공' 후(cloudLoadedRef)에만 — INIT/stale 자동저장이
+        cloudLoad보다 먼저 발사돼 클라우드를 덮던 레이스 차단. */
+  const firstSaveSkip = useRef(true);
   useEffect(() => {
+    if (firstSaveSkip.current) { firstSaveSkip.current = false; return; }
     const data = { tasks, projects, issues, projectInfo, history, recurrings, memos, files, savedAt: new Date().toISOString() };
     saveToStorage(data);
-    if (cloudLoaded) cloudSave(data);
-  }, [cloudLoaded, tasks, projects, issues, projectInfo, history, recurrings, memos, files]);
+    if (cloudLoadedRef.current) cloudSave(data);
+  }, [tasks, projects, issues, projectInfo, history, recurrings, memos, files]);
 
   const showT = (msg, undo) => setToast({ msg, undo });
   const hideT = () => setToast(null);
@@ -1708,7 +1743,7 @@ function App() {
     const file = e.target.files?.[0]; if (!file) return;
     const r = new FileReader();
     r.onload = (ev) => { try {
-      const d = JSON.parse(ev.target.result);
+      const d = migrateData(JSON.parse(ev.target.result)); /* 옛 백업도 필드 기본값/상태 변환 적용 */
       if (d.tasks) setTasks(d.tasks); if (d.projects) setProjects(d.projects);
       if (d.issues) setIssues(d.issues); if (d.history) setHistory(d.history);
       if (d.projectInfo) setProjectInfo(d.projectInfo);
@@ -1790,12 +1825,13 @@ function AuthGate() {
   useEffect(() => {
     if (!FB_CONFIGURED) { setState("open"); return; } /* config 전 = 공개모드(기존 동작 유지) */
     const auth = fbAuth();
-    if (!auth) { setState("open"); return; }
-    auth.getRedirectResult().catch(() => {}); /* 모바일 redirect 로그인 결과 처리 */
+    if (!auth) { setState("open"); return; } /* SDK 로드 실패 시에도 흰 화면 대신 공개모드로 degrade */
     const unsub = auth.onAuthStateChanged(u => setState(u ? "signedin" : "signedout"));
     return () => unsub && unsub();
   }, []);
 
+  /* popup 전용 — redirect 폴백은 쓰지 않는다: 호스팅(*.github.io)과 authDomain(firebaseapp.com)이
+     달라 signInWithRedirect가 Safari/Firefox/최신 Chrome에서 조용히 실패함(Firebase 문서화된 제약). */
   const signIn = async () => {
     setErr("");
     const auth = fbAuth(); if (!auth) return;
@@ -1804,9 +1840,9 @@ function AuthGate() {
       await auth.signInWithPopup(provider);
     } catch (e) {
       const c = e && e.code;
-      if (c === "auth/popup-blocked" || c === "auth/operation-not-supported-in-this-environment" || c === "auth/cancelled-popup-request") {
-        try { await auth.signInWithRedirect(provider); return; } catch (e2) { setErr((e2 && e2.message) || String(e2)); }
-      } else if (c === "auth/popup-closed-by-user") {
+      if (c === "auth/popup-blocked" || c === "auth/operation-not-supported-in-this-environment") {
+        setErr("브라우저가 로그인 팝업을 차단했습니다. 주소창의 팝업 차단 아이콘에서 이 사이트의 팝업을 허용한 뒤 다시 눌러주세요.");
+      } else if (c === "auth/popup-closed-by-user" || c === "auth/cancelled-popup-request") {
         setErr("로그인 창이 닫혔습니다. 다시 시도해 주세요.");
       } else if (c === "auth/operation-not-allowed") {
         setErr("Firebase 콘솔에서 Google 로그인 공급자를 켜야 합니다.");
