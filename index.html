@@ -7,10 +7,10 @@
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <!-- Firebase (Auth 로그인 + Storage 파일업로드). compat 빌드 = 빌드툴 없이 전역 firebase 사용 -->
+  <!-- Firebase (Auth 로그인). compat 빌드 = 빌드툴 없이 전역 firebase 사용.
+       파일 저장은 Storage 대신 RTDB(/files, base64) — Storage는 신규 프로젝트에서 유료플랜 필수라 미사용 -->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #f9fafb; -webkit-text-size-adjust: 100%; }
@@ -116,7 +116,6 @@ if (FB_CONFIGURED && window.firebase && !firebase.apps.length) {
   try { firebase.initializeApp(FIREBASE_CONFIG); } catch (e) { console.error("[Firebase init]", e); }
 }
 const fbAuth = () => (FB_CONFIGURED && window.firebase && typeof firebase.auth === "function") ? firebase.auth() : null;
-const fbStorage = () => (FB_CONFIGURED && window.firebase && typeof firebase.storage === "function") ? firebase.storage() : null;
 const fbUser = () => { try { return fbAuth()?.currentUser || null; } catch { return null; } };
 
 const FB_URL = "https://taskmgr-sync-default-rtdb.firebaseio.com/data.json";
@@ -161,22 +160,57 @@ const cloudLoad = async () => {
   } catch { return { ok: false }; }
 };
 
-/* ─── 파일 업로드 (Firebase Storage, 로그인 필요) ─── */
-const uploadFile = async (file, onProgress) => {
-  const st = fbStorage(); const u = fbUser();
-  if (!st || !u) throw new Error("파일 업로드는 Firebase 설정 + 로그인 후 사용 가능합니다");
-  const fid = gid();
-  const path = "uploads/" + u.uid + "/" + fid + "_" + file.name;
-  const ref = st.ref(path);
-  const task = ref.put(file);
-  if (onProgress) task.on("state_changed", s => onProgress(Math.round(s.bytesTransferred / s.totalBytes * 100)));
-  await task;
-  const url = await ref.getDownloadURL();
-  return { id: fid, name: file.name, path, url, size: file.size, uploadedAt: new Date().toISOString() };
-};
+/* ─── 파일 업로드 (RTDB /files 에 base64 저장 — 같은 잠금 규칙 적용, 로그인 필요) ───
+   메타({id,name,size,...})는 task.attachments/files 상태에, 실제 bytes 는 /files/<id> 별도 경로에.
+   /data 자동저장 블롭과 분리되어 있어 매 저장마다 파일이 재전송되지 않는다. */
+const RTDB_FILES_URL = "https://taskmgr-sync-default-rtdb.firebaseio.com/files/";
+const FILE_MAX_BYTES = 20 * 1024 * 1024; /* base64 +33% 감안, DB 저장 방식의 실용 한도 */
+const uploadFile = (file, onProgress) => new Promise((resolve, reject) => {
+  const u = fbUser();
+  if (!FB_CONFIGURED || !u) { reject(new Error("파일 업로드는 로그인 후 사용 가능합니다")); return; }
+  if (file.size > FILE_MAX_BYTES) { reject(new Error("20MB 이하 파일만 업로드할 수 있습니다")); return; }
+  const reader = new FileReader();
+  reader.onerror = () => reject(new Error("파일 읽기 실패"));
+  reader.onload = async () => {
+    try {
+      const b64 = String(reader.result).split(",")[1] || "";
+      const token = await u.getIdToken();
+      const fid = gid();
+      const meta = { id: fid, name: file.name, mimeType: file.type || "application/octet-stream", size: file.size, uploadedAt: new Date().toISOString(), store: "rtdb" };
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", RTDB_FILES_URL + fid + ".json?auth=" + token);
+      xhr.setRequestHeader("Content-Type", "application/json");
+      if (onProgress && xhr.upload) xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(Math.round(e.loaded / e.total * 100)); };
+      xhr.onload = () => { (xhr.status >= 200 && xhr.status < 300) ? resolve(meta) : reject(new Error("업로드 실패 (HTTP " + xhr.status + ")")); };
+      xhr.onerror = () => reject(new Error("업로드 실패 (네트워크)"));
+      xhr.send(JSON.stringify({ name: meta.name, mimeType: meta.mimeType, size: meta.size, uploadedAt: meta.uploadedAt, data: b64 }));
+    } catch (e) { reject(e); }
+  };
+  reader.readAsDataURL(file);
+});
 const deleteStoredFile = async (att) => {
-  const st = fbStorage();
-  if (st && att && att.path) { try { await st.ref(att.path).delete(); } catch {} }
+  try {
+    const u = fbUser(); if (!u || !att || !att.id) return;
+    const token = await u.getIdToken();
+    await fetch(RTDB_FILES_URL + att.id + ".json?auth=" + token, { method: "DELETE" });
+  } catch {}
+};
+const downloadAttachment = async (att) => {
+  try {
+    const u = fbUser(); if (!u) { alert("로그인 후 사용 가능합니다"); return; }
+    const token = await u.getIdToken();
+    const r = await fetch(RTDB_FILES_URL + att.id + ".json?auth=" + token);
+    if (!r.ok) { alert("다운로드 실패 (HTTP " + r.status + ")"); return; }
+    const f = await r.json();
+    if (!f || !f.data) { alert("파일이 저장소에 없습니다 (삭제되었을 수 있음)"); return; }
+    const bin = atob(f.data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: f.mimeType || "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = f.name || att.name || "file"; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (e) { alert("다운로드 실패: " + ((e && e.message) || e)); }
 };
 const fmtSize = (b) => b >= 1048576 ? (b/1048576).toFixed(1)+" MB" : b >= 1024 ? Math.round(b/1024)+" KB" : (b||0)+" B";
 
@@ -619,7 +653,7 @@ const AttachmentSection = ({ attachments, onChange, deferred, onBusy }) => {
       <div style={S.lbl}>📎 첨부파일</div>
       {list.map(a => (
         <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "3px 0" }}>
-          <a href={a.url} target="_blank" rel="noreferrer" style={{ color: "#3B82F6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📎 {a.name}</a>
+          <a href="#" onClick={(e) => { e.preventDefault(); downloadAttachment(a); }} style={{ color: "#3B82F6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }} title="클릭하여 다운로드">📎 {a.name}</a>
           <span style={{ color: "#9ca3af", fontSize: 10, flexShrink: 0 }}>{fmtSize(a.size)}</span>
           <button style={{ ...S.gh, fontSize: 10, color: "#EF4444", flexShrink: 0 }} onClick={() => remove(a)}>✕</button>
         </div>
@@ -1170,7 +1204,7 @@ const FilesView = ({ files, setFiles, tasks, projects }) => {
   };
   const FileRow = ({ a, sub }) => (
     <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, padding: "5px 4px", borderBottom: "1px solid #f3f4f6" }}>
-      <a href={a.url} target="_blank" rel="noreferrer" style={{ color: "#3B82F6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📎 {a.name}</a>
+      <a href="#" onClick={(e) => { e.preventDefault(); downloadAttachment(a); }} style={{ color: "#3B82F6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }} title="클릭하여 다운로드">📎 {a.name}</a>
       {sub}
       <span style={{ color: "#9ca3af", fontSize: 10, flexShrink: 0 }}>{fmtSize(a.size)}</span>
       <span style={{ color: "#c0c0c0", fontSize: 10, flexShrink: 0 }}>{a.uploadedAt ? fd(a.uploadedAt.slice(0, 10)) : ""}</span>
