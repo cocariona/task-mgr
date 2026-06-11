@@ -75,7 +75,6 @@ const TABS_BY_WS = {
   ],
   personal: [
     { id: "today", label: "오늘", icon: "⭐" },
-    { id: "selfdev", label: "루틴/프로젝트", icon: "📔" },
     { id: "rmemos", label: "메모", icon: "📝" },
     { id: "files", label: "파일", icon: "📎" },
     { id: "history", label: "히스토리", icon: "📜" },
@@ -1216,7 +1215,7 @@ const SD_FALLBACK = [
   { key: "보컬", label: "🎤 보컬", hint: "화·수 21:00 / 토 17:00 노래방 · 목 레슨" },
   { key: "글쓰기", label: "✍️ 글쓰기", hint: "토 18:00 발행 · 평일 최소=swipe 1줄" },
 ];
-const SD_TYPES = [["글감", "✍️"], ["피드백", "💬"], ["메모", "📝"], ["할일", "✅"]];
+const SD_TYPES = [["글감", "✍️"], ["피드백", "💬"], ["프로젝트", "🚧"], ["메모", "📝"], ["할일", "✅"]];
 const SD_FB_TARGETS = ["운동", "영어", "보컬", "글쓰기", "시스템"];
 const sdFetch = async (path, opt) => {
   const u = fbUser(); if (!u) throw new Error("로그인 필요");
@@ -1226,26 +1225,36 @@ const sdFetch = async (path, opt) => {
   return r.json();
 };
 
-const SelfDevView = () => {
+const SelfDevView = ({ onAddTask }) => {
   const [plan, setPlan] = useState(null);      /* /selfdev/today (브리핑이 작성) */
+  const [sdOpenU, setSdOpenU] = useState(null); /* 루틴 카드 접기: null=auto(전부 done이면 접힘) */
   const [logs, setLogs] = useState({});        /* /selfdev/logs/<오늘> */
   const [inbox, setInbox] = useState({});      /* /selfdev/inbox */
   const [err, setErr] = useState("");
   const [capType, setCapType] = useState("글감");
   const [capTarget, setCapTarget] = useState("시스템"); /* 피드백 대상: 루틴별 or 시스템 */
+  const [capProj, setCapProj] = useState("");           /* 프로젝트 캡처 대상 (→ 2. Project/<name>/로그.md) */
   const [capText, setCapText] = useState("");
   const [memoDraft, setMemoDraft] = useState({});
   const load = async () => {
+    if (!fbUser()) return; /* 미로그인(open 모드): 에러 대신 기본 목록만 조용히 표시 */
     try {
       setErr("");
       const [p, l, ib] = await Promise.all([sdFetch("/today"), sdFetch("/logs/" + TODAY), sdFetch("/inbox")]);
       setPlan(p); setLogs(l || {}); setInbox(ib || {});
+      if (p && Array.isArray(p.projects) && p.projects.length) { try { localStorage.setItem("tm-sd-projnames", JSON.stringify(p.projects.map(x => x.name).filter(Boolean))); } catch {} }
     } catch (e) { setErr((e && e.message) || String(e)); }
   };
   useEffect(() => { load(); }, []); /* eslint-disable-line */
 
   /* 브리핑이 오늘자 plan을 썼으면 그걸, 아니면 고정 4영역 */
   const items = (plan && plan.date === TODAY && Array.isArray(plan.items) && plan.items.length) ? plan.items : SD_FALLBACK;
+  const doneCnt = items.filter(it => (logs[it.key] || {}).done).length;
+  const sdOpen = sdOpenU === null ? doneCnt < items.length : sdOpenU;
+  /* 프로젝트 캡처 대상 칩: 오늘 plan 우선, 없으면 마지막으로 본 목록(localStorage 캐시) */
+  const projChips = (plan && plan.date === TODAY && Array.isArray(plan.projects) && plan.projects.length)
+    ? plan.projects.map(p => p.name).filter(Boolean)
+    : (() => { try { return JSON.parse(localStorage.getItem("tm-sd-projnames") || "[]"); } catch { return []; } })();
 
   const saveLog = async (key, patch) => {
     const cur = logs[key] || {};
@@ -1256,11 +1265,18 @@ const SelfDevView = () => {
   };
   const capture = async () => {
     if (!capText.trim()) return;
-    const item = { type: capType, target: capType === "피드백" ? capTarget : null, text: capText.trim(), date: TODAY, ts: new Date().toISOString(), synced: false };
+    if (capType === "할일" && onAddTask) { /* 할일은 inbox 휘발 대신 바로 아래 개인 할일로 등록 */
+      onAddTask({ text: capText.trim(), status: "action" });
+      setCapText(""); setErr("");
+      return;
+    }
+    if (capType === "프로젝트" && !capProj.trim()) { setErr("프로젝트 대상을 먼저 선택하거나 입력하세요"); return; }
+    const target = capType === "피드백" ? capTarget : capType === "프로젝트" ? capProj.trim() : null;
+    const item = { type: capType, target, text: capText.trim(), date: TODAY, ts: new Date().toISOString(), synced: false };
     try {
       const r = await sdFetch("/inbox", { method: "POST", body: JSON.stringify(item) });
       setInbox(p => ({ ...p, [r.name]: item }));
-      setCapText("");
+      setCapText(""); setErr("");
     } catch (e) { setErr("캡처 실패: " + ((e && e.message) || e)); }
   };
   const delCapture = async (id) => {
@@ -1277,10 +1293,11 @@ const SelfDevView = () => {
   return (
     <div style={{ marginTop: 12 }}>
       <div style={S.card}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>📔 오늘 루틴 — {fd(TODAY)}</div>
-          <button style={{ ...S.gh, fontSize: 10 }} onClick={load}>↺ 새로고침</button>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, cursor: "pointer" }} onClick={() => setSdOpenU(!sdOpen)}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{sdOpen ? "▼" : "▶"} 📔 오늘 루틴 — {fd(TODAY)} <span style={{ fontSize: 11, color: doneCnt === items.length ? "#10B981" : "#9ca3af", fontWeight: 600 }}>{doneCnt}/{items.length} ✓</span></div>
+          <button style={{ ...S.gh, fontSize: 10 }} onClick={e => { e.stopPropagation(); load(); }}>↺ 새로고침</button>
         </div>
+        {sdOpen && <>
         {plan && plan.date === TODAY && plan.note && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", borderRadius: 6, padding: "5px 9px", marginBottom: 7 }}>{plan.note}</div>}
         {(!plan || plan.date !== TODAY) && <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 6 }}>오늘 브리핑 데이터 없음(기본 목록) — 기록은 그대로 저장됩니다</div>}
         {items.map(it => {
@@ -1307,6 +1324,7 @@ const SelfDevView = () => {
           );
         })}
         <div style={{ fontSize: 10, color: "#c0c0c0", marginTop: 6 }}>체크·메모는 즉시 저장 → Claude가 다음 가동 때 vault 일지로 옮김 (PC 꺼져 있어도 안전)</div>
+        </>}
       </div>
 
       <div style={S.card}>
@@ -1320,11 +1338,24 @@ const SelfDevView = () => {
           {SD_FB_TARGETS.map(t => <button key={t} onClick={() => setCapTarget(t)}
             style={{ ...S.gh, fontSize: 10, padding: "2px 7px", background: capTarget === t ? "#FEF3C7" : "#fff", color: capTarget === t ? "#92400E" : "#9ca3af", borderColor: capTarget === t ? "#FCD34D" : "#e5e7eb", fontWeight: capTarget === t ? 700 : 400 }}>{t}</button>)}
         </div>}
+        {capType === "프로젝트" && <div style={{ display: "flex", gap: 4, marginBottom: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: 10, color: "#9ca3af" }}>대상:</span>
+          {projChips.map(n => <button key={n} onClick={() => setCapProj(n)}
+            style={{ ...S.gh, fontSize: 10, padding: "2px 7px", background: capProj === n ? "#FEF3C7" : "#fff", color: capProj === n ? "#92400E" : "#9ca3af", borderColor: capProj === n ? "#FCD34D" : "#e5e7eb", fontWeight: capProj === n ? 700 : 400 }}>{n}</button>)}
+          <input style={{ ...S.inp, fontSize: 11, padding: "3px 8px", maxWidth: 160 }} placeholder="프로젝트명 직접 입력"
+            value={capProj} onChange={e => setCapProj(e.target.value)} />
+        </div>}
         <div style={{ display: "flex", gap: 6 }}>
-          <input style={S.inp} placeholder={capType === "글감" ? "글감 한 줄 (→ swipe 파일로)" : capType === "피드백" ? "루틴/시스템 피드백 (→ 개선 아이디어로)" : capType + " 한 줄"}
+          <input style={S.inp} placeholder={capType === "글감" ? "글감 한 줄" : capType === "피드백" ? "루틴/시스템 피드백" : capType === "프로젝트" ? "진행 메모·다음 액션 한 줄" : capType + " 한 줄"}
             value={capText} onChange={e => setCapText(e.target.value)} onKeyDown={e => e.key === "Enter" && capture()} />
           <button style={S.btn()} onClick={capture}>저장</button>
         </div>
+        <div style={{ fontSize: 10, color: capType === "프로젝트" && !capProj.trim() ? "#D97706" : "#9ca3af", marginTop: 4 }}>행선지 {
+          capType === "글감" ? "→ 글쓰기 swipe 파일" :
+          capType === "피드백" ? "→ 개선 아이디어 · " + capTarget :
+          capType === "프로젝트" ? (capProj.trim() ? "→ 2. Project/" + capProj.trim() + "/로그.md" : "⚠ 대상을 선택/입력해야 저장됩니다") :
+          capType === "할일" ? "→ 아래 '개인 할일' 목록에 오늘로 등록" :
+          "→ 아침 브리핑에 표시"}</div>
         {unsynced.length > 0 && <div style={{ marginTop: 8 }}>
           <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 3 }}>수거 대기 {unsynced.length}건 (Claude가 처리하면 사라짐)</div>
           {unsynced.slice(0, 8).map(([id, v]) => (
@@ -2131,10 +2162,9 @@ function App({ onSwitchWs }) {
         {TABS_BY_WS[WS.key].map(t => <button key={t.id} style={S.tab(tab === t.id)} onClick={() => setTab(t.id)}>{t.icon} {t.label}</button>)}
       </div>
       <div style={{ marginTop: 8 }}>
-        {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
+        {tab === "today" && <>{!isWork && <SelfDevView onAddTask={addTask} />}<TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
         {tab === "inbox" && <InboxView projects={projects} calImport={calImport} setCalImport={setCalImport} onAddTask={({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => { addTask({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }); showT("✓ 등록됨: " + text.slice(0, 20), null); }} />}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} issues={issues} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onUpdate={updateTask} onReorder={reorderTask} />}
-        {tab === "selfdev" && <SelfDevView />}
         {tab === "rmemos" && <RoutineMemosView />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
         {tab === "files" && <FilesView files={files} setFiles={setFiles} tasks={tasks} projects={projects} />}
