@@ -119,7 +119,7 @@ if (FB_CONFIGURED && window.firebase && !firebase.apps.length) {
 const fbAuth = () => (FB_CONFIGURED && window.firebase && typeof firebase.auth === "function") ? firebase.auth() : null;
 const fbUser = () => { try { return fbAuth()?.currentUser || null; } catch { return null; } };
 
-const FB_URL = "https://taskmgr-sync-default-rtdb.firebaseio.com/data.json";
+const fbDataUrl = () => "https://taskmgr-sync-default-rtdb.firebaseio.com/" + WS.fbPath + ".json";
 /* 로그인 상태면 ID 토큰을 ?auth= 로 붙여 인증 (잠근 DB 통과). 미로그인/미설정이면 빈 문자열=공개모드. */
 const authParam = async () => {
   try { const u = fbUser(); if (u) return "?auth=" + await u.getIdToken(); } catch {}
@@ -134,7 +134,7 @@ const cloudSave = (data) => {
     const el = document.getElementById("sync-status");
     if (el) { el.textContent = "☁️ 저장중..."; el.style.color = "#F59E0B"; }
     const q = await authParam();
-    fetch(FB_URL + q, {
+    fetch(fbDataUrl() + q, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -155,7 +155,7 @@ const cloudSave = (data) => {
 const cloudLoad = async () => {
   try {
     const q = await authParam();
-    const r = await fetch(FB_URL + q);
+    const r = await fetch(fbDataUrl() + q);
     if (!r.ok) return { ok: false, status: r.status };
     return { ok: true, data: await r.json() };
   } catch { return { ok: false }; }
@@ -232,7 +232,7 @@ const calMakeParams = (task, projects) => {
   if (!date) return null;
   const proj = projects?.find(p => p.id === task.project);
   const desc = [proj ? `#${proj.name}` : '', task.notes || ''].filter(Boolean).join('\n');
-  return { title: "0. 업무 / " + task.text, date, desc };
+  return { title: WS.calPrefix + task.text, date, desc };
 };
 /* 수동 버튼용: 기존 이벤트 있으면 update, 없으면 add */
 const addToCalendar = (task, projects, onResult) => {
@@ -277,15 +277,24 @@ const generateRecurringTasks = (recurrings, tasks, projects) => {
   return newTasks;
 };
 
-/* ─── localStorage (이중 백업) ─── */
-const STORAGE_KEY = "task-manager-v1";
-const BACKUP_KEY = "task-manager-v1-backup";
+/* ─── 워크스페이스 (업무 ⇄ 개인 — 데이터·캘린더 prefix 완전 분리) ─── */
+const WORKSPACES = {
+  work:     { key: "work",     label: "업무", icon: "📁", storageKey: "task-manager-v1",          fbPath: "data",     calPrefix: "0. 업무 / " },
+  personal: { key: "personal", label: "개인", icon: "🏠", storageKey: "task-manager-personal-v1", fbPath: "personal", calPrefix: "1. 개인 / " },
+};
+let WS = WORKSPACES[(() => { try { return localStorage.getItem("tm-workspace") === "personal" ? "personal" : "work"; } catch { return "work"; } })()];
+const PERSONAL_PROJECTS = [
+  { id: "appt", name: "약속", order: 0 },
+  { id: "petc", name: "기타", order: 1 },
+];
+
+/* ─── localStorage (이중 백업, 워크스페이스별 키) ─── */
 const loadSaved = () => {
   try {
-    const s = localStorage.getItem(STORAGE_KEY);
+    const s = localStorage.getItem(WS.storageKey);
     if (s) { const d = JSON.parse(s); if (d && d.tasks) return migrateData(d); }
     /* 메인 키 실패 시 백업에서 복구 */
-    const b = localStorage.getItem(BACKUP_KEY);
+    const b = localStorage.getItem(WS.storageKey + "-backup");
     if (b) { const d = JSON.parse(b); if (d && d.tasks) { console.warn("[TaskMgr] 백업에서 복구됨"); return migrateData(d); } }
     return null;
   } catch { return null; }
@@ -319,9 +328,9 @@ const migrateData = (data) => {
 };
 const saveToStorage = (data) => {
   try {
-    const prev = localStorage.getItem(STORAGE_KEY);
-    if (prev) localStorage.setItem(BACKUP_KEY, prev); /* 직전 상태를 백업 */
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    const prev = localStorage.getItem(WS.storageKey);
+    if (prev) localStorage.setItem(WS.storageKey + "-backup", prev); /* 직전 상태를 백업 */
+    localStorage.setItem(WS.storageKey, JSON.stringify(data));
   } catch {}
 };
 
@@ -1186,6 +1195,7 @@ const SD_FALLBACK = [
   { key: "글쓰기", label: "✍️ 글쓰기", hint: "토 18:00 발행 · 평일 최소=swipe 1줄" },
 ];
 const SD_TYPES = [["글감", "✍️"], ["피드백", "💬"], ["메모", "📝"], ["할일", "✅"]];
+const SD_FB_TARGETS = ["운동", "영어", "보컬", "글쓰기", "시스템"];
 const sdFetch = async (path, opt) => {
   const u = fbUser(); if (!u) throw new Error("로그인 필요");
   const token = await u.getIdToken();
@@ -1200,6 +1210,7 @@ const SelfDevView = () => {
   const [inbox, setInbox] = useState({});      /* /selfdev/inbox */
   const [err, setErr] = useState("");
   const [capType, setCapType] = useState("글감");
+  const [capTarget, setCapTarget] = useState("시스템"); /* 피드백 대상: 루틴별 or 시스템 */
   const [capText, setCapText] = useState("");
   const [memoDraft, setMemoDraft] = useState({});
   const load = async () => {
@@ -1223,7 +1234,7 @@ const SelfDevView = () => {
   };
   const capture = async () => {
     if (!capText.trim()) return;
-    const item = { type: capType, text: capText.trim(), date: TODAY, ts: new Date().toISOString(), synced: false };
+    const item = { type: capType, target: capType === "피드백" ? capTarget : null, text: capText.trim(), date: TODAY, ts: new Date().toISOString(), synced: false };
     try {
       const r = await sdFetch("/inbox", { method: "POST", body: JSON.stringify(item) });
       setInbox(p => ({ ...p, [r.name]: item }));
@@ -1282,6 +1293,11 @@ const SelfDevView = () => {
           {SD_TYPES.map(([t, ic]) => <button key={t} onClick={() => setCapType(t)}
             style={{ ...S.gh, fontSize: 11, background: capType === t ? "#EFF6FF" : "#fff", color: capType === t ? "#1D4ED8" : "#6b7280", borderColor: capType === t ? "#93C5FD" : "#e5e7eb", fontWeight: capType === t ? 700 : 400 }}>{ic} {t}</button>)}
         </div>
+        {capType === "피드백" && <div style={{ display: "flex", gap: 4, marginBottom: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: 10, color: "#9ca3af" }}>대상:</span>
+          {SD_FB_TARGETS.map(t => <button key={t} onClick={() => setCapTarget(t)}
+            style={{ ...S.gh, fontSize: 10, padding: "2px 7px", background: capTarget === t ? "#FEF3C7" : "#fff", color: capTarget === t ? "#92400E" : "#9ca3af", borderColor: capTarget === t ? "#FCD34D" : "#e5e7eb", fontWeight: capTarget === t ? 700 : 400 }}>{t}</button>)}
+        </div>}
         <div style={{ display: "flex", gap: 6 }}>
           <input style={S.inp} placeholder={capType === "글감" ? "글감 한 줄 (→ swipe 파일로)" : capType === "피드백" ? "루틴/시스템 피드백 (→ 개선 아이디어로)" : capType + " 한 줄"}
             value={capText} onChange={e => setCapText(e.target.value)} onKeyDown={e => e.key === "Enter" && capture()} />
@@ -1291,7 +1307,7 @@ const SelfDevView = () => {
           <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 3 }}>수거 대기 {unsynced.length}건 (Claude가 처리하면 사라짐)</div>
           {unsynced.slice(0, 8).map(([id, v]) => (
             <div key={id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "3px 0", borderBottom: "1px solid #f9fafb" }}>
-              <span style={{ fontSize: 10, color: "#6366F1", background: "#EEF2FF", padding: "1px 5px", borderRadius: 4, flexShrink: 0 }}>{v.type}</span>
+              <span style={{ fontSize: 10, color: "#6366F1", background: "#EEF2FF", padding: "1px 5px", borderRadius: 4, flexShrink: 0 }}>{v.type}{v.target ? "·" + v.target : ""}</span>
               <span style={{ flex: 1 }}>{v.text}</span>
               <span style={{ fontSize: 9, color: "#c0c0c0", flexShrink: 0 }}>{(v.date || "").slice(5)}</span>
               <button style={{ ...S.gh, fontSize: 9, color: "#EF4444", padding: "1px 5px" }} onClick={() => delCapture(id)}>✕</button>
@@ -1640,21 +1656,22 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
 };
 
 /* ═══════ 메인 앱 ═══════ */
-function App() {
+function App({ onSwitchWs }) {
+  const isWork = WS.key === "work";
   const saved = useMemo(() => loadSaved(), []);
   const [tab, setTab] = useState("today");
-  const [tasks, setTasks] = useState(saved?.tasks || INIT_TASKS);
-  const [projects, setProjects] = useState(saved?.projects || INIT_PROJECTS);
-  const [issues, setIssues] = useState(saved?.issues || INIT_ISSUES);
-  const [projectInfo, setProjectInfo] = useState(saved?.projectInfo || INIT_PROJECT_INFO);
+  const [tasks, setTasks] = useState(saved?.tasks || (isWork ? INIT_TASKS : []));
+  const [projects, setProjects] = useState(saved?.projects || (isWork ? INIT_PROJECTS : PERSONAL_PROJECTS));
+  const [issues, setIssues] = useState(saved?.issues || (isWork ? INIT_ISSUES : []));
+  const [projectInfo, setProjectInfo] = useState(saved?.projectInfo || (isWork ? INIT_PROJECT_INFO : {}));
   const [memos, setMemos] = useState(saved?.memos || {});
-  const [files, setFiles] = useState(saved?.files || []); /* 단독 업로드 파일 메타 (실제 파일=Firebase Storage) */
+  const [files, setFiles] = useState(saved?.files || []); /* 단독 업로드 파일 메타 (bytes=RTDB /files) */
   const [history, setHistory] = useState(saved?.history || []);
-  const [recurrings, setRecurrings] = useState(saved?.recurrings || [
+  const [recurrings, setRecurrings] = useState(saved?.recurrings || (isWork ? [
     { id: gid(), dow: 5, text: "다운로드 폴더 정리", project: "proj_etc" },
     { id: gid(), dow: 3, text: "위클리 작성", project: "proj_etc" },
     { id: gid(), dow: 2, text: "영어공부 기사 확인", project: "proj_etc" },
-  ]);
+  ] : []));
   const [editTarget, setEditTarget] = useState(null);
   const [toast, setToast] = useState(null);
   const fileRef = useRef();
@@ -1705,6 +1722,20 @@ function App() {
     window.addEventListener("online", onOnline);
     return () => { cancelled = true; window.removeEventListener("online", onOnline); };
   }, []); /* eslint-disable-line */
+
+  /* 지난 계획 미처리 자동 별표 — planDate가 지났는데 미완료면 전부 ★ (cloudLoaded 후 1회) */
+  const overdueStarred = useRef(false);
+  useEffect(() => {
+    if (!cloudLoaded || overdueStarred.current) return;
+    overdueStarred.current = true;
+    const isOver = (x) => x.status !== "done" && x.planDate && x.planDate < TODAY && !x.focus;
+    setTasks(p => p.map(t => {
+      let nt = isOver(t) ? { ...t, focus: true } : t;
+      const subs = nt.subtasks || [];
+      if (subs.some(isOver)) nt = { ...nt, subtasks: subs.map(s => isOver(s) ? { ...s, focus: true } : s) };
+      return nt;
+    }));
+  }, [cloudLoaded]); /* eslint-disable-line */
 
   /* 반복 태스크 자동 생성 — ⚠️ 클라우드 화해가 끝난 뒤(cloudLoaded) 1회만.
      예전엔 마운트 즉시 실행돼, stale/INIT 상태에서 반복 task와 캘린더 이벤트를
@@ -1947,6 +1978,7 @@ function App() {
       <div className="hdr-wrap" style={S.hdr}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={S.ttl}>Task Manager</span>
+          <button style={{ ...S.gh, fontWeight: 700, fontSize: 12, background: isWork ? "#EFF6FF" : "#FEF3C7", borderColor: isWork ? "#93C5FD" : "#FCD34D" }} onClick={onSwitchWs} title="업무 ⇄ 개인 전환">{WS.icon} {WS.label} ⇄</button>
           <span style={{ fontSize: 12, color: "#F59E0B", fontWeight: 600 }}>⭐{allFocused}</span>
           <span style={{ fontSize: 12, color: "#9ca3af" }}>다음행동 {activeCnt}건</span>
         </div>
@@ -2023,7 +2055,19 @@ function AuthGate() {
       {err && <div style={{ marginTop: 18, fontSize: 12, color: "#EF4444", lineHeight: 1.5 }}>{err}</div>}
     </div>
   );
-  return <App />; /* signedin 또는 open */
+  return <WorkspaceRoot />; /* signedin 또는 open */
+}
+
+/* ═══ 워크스페이스 루트 — 전환 시 App 리마운트(저장소·캘린더 prefix 교체) ═══ */
+function WorkspaceRoot() {
+  const [wsKey, setWsKey] = useState(WS.key);
+  const switchWs = () => {
+    const nk = wsKey === "work" ? "personal" : "work";
+    try { localStorage.setItem("tm-workspace", nk); } catch {}
+    WS = WORKSPACES[nk];
+    setWsKey(nk);
+  };
+  return <App key={wsKey} onSwitchWs={switchWs} />;
 }
 
 ReactDOM.render(<AuthGate />, document.getElementById("root"));
