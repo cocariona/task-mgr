@@ -65,15 +65,22 @@ const STATUSES = {
 };
 const SK = Object.keys(STATUSES).filter(k => k !== "done");
 
-const TABS = [
-  { id: "today", label: "오늘", icon: "⭐" },
-  { id: "selfdev", label: "루틴", icon: "📔" },
-  { id: "inbox", label: "인박스", icon: "📥" },
-  { id: "projects", label: "과제별", icon: "📁" },
-  { id: "memos", label: "메모", icon: "📝" },
-  { id: "files", label: "파일", icon: "📎" },
-  { id: "history", label: "히스토리", icon: "📜" },
-];
+const TABS_BY_WS = {
+  work: [
+    { id: "today", label: "오늘", icon: "⭐" },
+    { id: "inbox", label: "인박스", icon: "📥" },
+    { id: "projects", label: "과제별", icon: "📁" },
+    { id: "memos", label: "메모", icon: "📝" },
+    { id: "history", label: "히스토리", icon: "📜" },
+  ],
+  personal: [
+    { id: "today", label: "오늘", icon: "⭐" },
+    { id: "selfdev", label: "루틴/프로젝트", icon: "📔" },
+    { id: "rmemos", label: "메모", icon: "📝" },
+    { id: "files", label: "파일", icon: "📎" },
+    { id: "history", label: "히스토리", icon: "📜" },
+  ],
+};
 
 /* 로컬 시간 기준 오늘 날짜 (UTC가 아닌 KST 등 현지 시간) */
 let TODAY = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })();
@@ -214,6 +221,21 @@ const downloadAttachment = async (att) => {
   } catch (e) { alert("다운로드 실패: " + ((e && e.message) || e)); }
 };
 const fmtSize = (b) => b >= 1048576 ? (b/1048576).toFixed(1)+" MB" : b >= 1024 ? Math.round(b/1024)+" KB" : (b||0)+" B";
+
+/* ─── 회사 캘린더 가져오기 (회사 계정 GAS, 읽기 전용 단방향: 회사→앱) ───
+   배포: company-calendar-gas.gs 를 회사 계정 Apps Script로 배포 후 URL/KEY 교체. 미설정 시 기능 숨김. */
+const COMPANY_GAS_URL = "PASTE_COMPANY_GAS_URL";
+const COMPANY_GAS_KEY = "PASTE_COMPANY_KEY";
+const COMPANY_CONFIGURED = !COMPANY_GAS_URL.startsWith("PASTE");
+const companyFetchEvents = () => new Promise((resolve) => {
+  const cb = "_cg_" + gid();
+  const timer = setTimeout(() => { delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); }, 12000);
+  window[cb] = (r) => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve(r || { success: false }); };
+  const s = document.createElement("script");
+  s.src = COMPANY_GAS_URL + "?key=" + encodeURIComponent(COMPANY_GAS_KEY) + "&days=14&callback=" + cb;
+  s.onerror = () => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); };
+  document.body.appendChild(s);
+});
 
 const GCAL_URL = GAS_URL;
 /* ─── 캘린더 JSONP 동기화 (add / update / delete) ─── */
@@ -1315,7 +1337,79 @@ const SelfDevView = () => {
           ))}
         </div>}
       </div>
+      {plan && plan.date === TODAY && Array.isArray(plan.projects) && plan.projects.length > 0 && (
+        <div style={S.card}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>🚧 진행중 프로젝트</div>
+          {plan.projects.map((p, i) => (
+            <div key={i} style={{ fontSize: 12, padding: "3px 0", borderBottom: "1px solid #f9fafb" }}>
+              <b>{p.name}</b><span style={{ color: "#6b7280" }}> — {p.next}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {err && <div style={{ fontSize: 11, color: "#EF4444" }}>{err}</div>}
+    </div>
+  );
+};
+
+/* ═══ 루틴별 메모·이력 (개인탭 — 일지 메모(/selfdev/logs) + 노트(/selfdev/notes) 집계) ═══ */
+const SD_ROUTINES = ["운동", "영어", "보컬", "글쓰기"];
+const RoutineMemosView = () => {
+  const [sel, setSel] = useState("보컬");
+  const [logsAll, setLogsAll] = useState({});
+  const [notes, setNotes] = useState({});
+  const [txt, setTxt] = useState("");
+  const [err, setErr] = useState("");
+  const load = async () => {
+    try { setErr("");
+      const [l, n] = await Promise.all([sdFetch("/logs"), sdFetch("/notes")]);
+      setLogsAll(l || {}); setNotes(n || {});
+    } catch (e) { setErr((e && e.message) || String(e)); }
+  };
+  useEffect(() => { load(); }, []); /* eslint-disable-line */
+  const entries = useMemo(() => {
+    const out = [];
+    Object.entries(logsAll).forEach(([date, day]) => {
+      const r = day && day[sel];
+      if (r && r.memo) out.push({ date, text: r.memo, src: "일지", id: null });
+    });
+    Object.entries(notes).forEach(([id, n]) => {
+      if (n && n.routine === sel) out.push({ date: n.date || "", text: n.text, src: "노트", id });
+    });
+    return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [logsAll, notes, sel]);
+  const addNote = async () => {
+    if (!txt.trim()) return;
+    const item = { routine: sel, text: txt.trim(), date: TODAY, ts: new Date().toISOString(), synced: false };
+    try { const r = await sdFetch("/notes", { method: "POST", body: JSON.stringify(item) }); setNotes(p => ({ ...p, [r.name]: item })); setTxt(""); }
+    catch (e) { setErr("저장 실패: " + ((e && e.message) || e)); }
+  };
+  const delNote = async (id) => {
+    try { await sdFetch("/notes/" + id, { method: "DELETE" }); setNotes(p => { const n = { ...p }; delete n[id]; return n; }); } catch {}
+  };
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={S.card}>
+        <div style={{ display: "flex", gap: 4, marginBottom: 8, flexWrap: "wrap" }}>
+          {SD_ROUTINES.map(r => <button key={r} onClick={() => setSel(r)}
+            style={{ ...S.gh, fontSize: 12, background: sel === r ? "#EFF6FF" : "#fff", color: sel === r ? "#1D4ED8" : "#6b7280", borderColor: sel === r ? "#93C5FD" : "#e5e7eb", fontWeight: sel === r ? 700 : 400 }}>{r}</button>)}
+          <button style={{ ...S.gh, fontSize: 10, marginLeft: "auto" }} onClick={load}>↺</button>
+        </div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+          <input style={S.inp} placeholder={sel === "보컬" ? "예: 레슨 — 문제점/해결법/연습법 1줄" : sel + " 노트 한 줄"}
+            value={txt} onChange={e => setTxt(e.target.value)} onKeyDown={e => e.key === "Enter" && addNote()} />
+          <button style={S.btn()} onClick={addNote}>추가</button>
+        </div>
+        {entries.length === 0 && <div style={{ ...S.emp, padding: 14 }}>아직 기록 없음 — 일지 메모와 노트가 여기 쌓입니다</div>}
+        {entries.map((e, i) => (
+          <div key={e.id || (e.date + i)} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
+            <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0, marginTop: 2 }}>{(e.date || "").slice(5)}</span>
+            <span style={{ fontSize: 9, color: e.src === "노트" ? "#92400E" : "#6366F1", background: e.src === "노트" ? "#FEF3C7" : "#EEF2FF", padding: "1px 4px", borderRadius: 4, flexShrink: 0, marginTop: 1 }}>{e.src}</span>
+            <span style={{ flex: 1, whiteSpace: "pre-wrap" }}>{e.text}</span>
+            {e.id && <button style={{ ...S.gh, fontSize: 9, color: "#EF4444", padding: "1px 5px", flexShrink: 0 }} onClick={() => delNote(e.id)}>✕</button>}
+          </div>
+        ))}
+      </div>
     </div>
   );
 };
@@ -1460,7 +1554,7 @@ const InboxCard = ({ item, projects, onRegister, onDismiss }) => {
   const [status, setStatus] = useState(item.defaultStatus || "action");
   const [focus, setFocus] = useState(false);
   const [date, setDate] = useState("");
-  const [pd, setPd] = useState(TODAY);
+  const [pd, setPd] = useState(item.defaultPlanDate || TODAY);
   return (
     <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px", marginBottom: 6, display: "flex", gap: 8, alignItems: "flex-start" }}>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -1487,8 +1581,24 @@ const InboxCard = ({ item, projects, onRegister, onDismiss }) => {
   );
 };
 
-const InboxView = ({ projects, onAddTask }) => {
+const InboxView = ({ projects, onAddTask, calImport, setCalImport }) => {
   const [text, setText] = useState("");
+  /* 회사 캘린더 가져오기 (읽기 전용 단방향) */
+  const [coEvents, setCoEvents] = useState(null);
+  const [coBusy, setCoBusy] = useState(false);
+  const [coErr, setCoErr] = useState("");
+  const seen = (calImport && calImport.seen) || {};
+  const markSeen = (id, status, updated) => setCalImport(p => ({ ...(p || {}), seen: { ...((p && p.seen) || {}), [id]: { status, updated } } }));
+  const fetchCompany = async () => {
+    setCoBusy(true); setCoErr("");
+    const r = await companyFetchEvents();
+    setCoBusy(false);
+    if (!r || !r.success) { setCoErr("가져오기 실패 — 회사 GAS URL/KEY·배포 상태 확인"); setCoEvents([]); return; }
+    setCoEvents(r.events || []);
+  };
+  useEffect(() => { if (COMPANY_CONFIGURED) fetchCompany(); }, []); /* eslint-disable-line */
+  const freshNew = (coEvents || []).filter(ev => !seen[ev.id]);
+  const coChanged = (coEvents || []).filter(ev => seen[ev.id] && seen[ev.id].status === "registered" && seen[ev.id].updated !== ev.updated);
   const [items, setItems] = useState([]);
   const [doneCount, setDoneCount] = useState(0);
   const [dismissCount, setDismissCount] = useState(0);
@@ -1539,6 +1649,30 @@ const InboxView = ({ projects, onAddTask }) => {
 
   return (
     <div style={{ marginTop: 12 }}>
+      {/* 회사 캘린더 가져오기 (회사→앱 단방향, 역방향 없음) */}
+      {COMPANY_CONFIGURED && (
+        <div style={S.card}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>🏢 회사 캘린더 (향후 14일, 읽기 전용)</div>
+            <button style={{ ...S.btn("#6366F1"), opacity: coBusy ? 0.5 : 1 }} onClick={fetchCompany}>{coBusy ? "조회중…" : "↺ 가져오기"}</button>
+          </div>
+          {coErr && <div style={{ fontSize: 11, color: "#EF4444", marginBottom: 4 }}>{coErr}</div>}
+          {coChanged.map(ev => (
+            <div key={ev.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "4px 0", borderBottom: "1px solid #f9fafb" }}>
+              <span style={{ fontSize: 10, color: "#D97706", background: "#FFFBEB", padding: "1px 5px", borderRadius: 4, flexShrink: 0 }}>변경</span>
+              <span style={{ flex: 1 }}>{ev.title} → {ev.start}</span>
+              <button style={{ ...S.gh, fontSize: 10 }} onClick={() => markSeen(ev.id, "registered", ev.updated)} title="등록된 task의 날짜는 직접 수정">확인</button>
+            </div>
+          ))}
+          {freshNew.map(ev => (
+            <InboxCard key={ev.id} projects={projects}
+              item={{ id: ev.id, text: ev.title, defaultProj: projects[0]?.id, defaultStatus: "action", defaultPlanDate: ev.start }}
+              onRegister={(data) => { onAddTask(data); markSeen(ev.id, "registered", ev.updated); }}
+              onDismiss={() => markSeen(ev.id, "dismissed", ev.updated)} />
+          ))}
+          {coEvents !== null && freshNew.length === 0 && coChanged.length === 0 && !coErr && <div style={{ fontSize: 12, color: "#9ca3af" }}>새 일정 없음</div>}
+        </div>
+      )}
       {/* 입력 영역 */}
       <div style={S.card}>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>📥 인박스 — 스캔 결과 트리아지</div>
@@ -1672,6 +1806,7 @@ function App({ onSwitchWs }) {
     { id: gid(), dow: 3, text: "위클리 작성", project: "proj_etc" },
     { id: gid(), dow: 2, text: "영어공부 기사 확인", project: "proj_etc" },
   ] : []));
+  const [calImport, setCalImport] = useState(saved?.calImport || { seen: {} }); /* 회사 캘린더 가져오기 추적 */
   const [editTarget, setEditTarget] = useState(null);
   const [toast, setToast] = useState(null);
   const fileRef = useRef();
@@ -1774,10 +1909,10 @@ function App({ onSwitchWs }) {
   const firstSaveSkip = useRef(true);
   useEffect(() => {
     if (firstSaveSkip.current) { firstSaveSkip.current = false; return; }
-    const data = { tasks, projects, issues, projectInfo, history, recurrings, memos, files, savedAt: new Date().toISOString() };
+    const data = { tasks, projects, issues, projectInfo, history, recurrings, memos, files, calImport, savedAt: new Date().toISOString() };
     saveToStorage(data);
     if (cloudLoadedRef.current) cloudSave(data);
-  }, [tasks, projects, issues, projectInfo, history, recurrings, memos, files]);
+  }, [tasks, projects, issues, projectInfo, history, recurrings, memos, files, calImport]);
 
   const showT = (msg, undo) => setToast({ msg, undo });
   const hideT = () => setToast(null);
@@ -1939,7 +2074,7 @@ function App({ onSwitchWs }) {
       if (d.issues) setIssues(d.issues); if (d.history) setHistory(d.history);
       if (d.projectInfo) setProjectInfo(d.projectInfo);
       if (d.recurrings) setRecurrings(d.recurrings); if (d.memos) setMemos(d.memos);
-      if (d.files) setFiles(d.files);
+      if (d.files) setFiles(d.files); if (d.calImport) setCalImport(d.calImport);
       showT("데이터를 불러왔습니다", null);
     } catch { showT("파일 형식 오류", null); } };
     r.readAsText(file); e.target.value = "";
@@ -1993,13 +2128,14 @@ function App({ onSwitchWs }) {
         </div>
       </div>
       <div className="tab-bar" style={{ ...S.tabs, marginTop: 12 }}>
-        {TABS.map(t => <button key={t.id} style={S.tab(tab === t.id)} onClick={() => setTab(t.id)}>{t.icon} {t.label}</button>)}
+        {TABS_BY_WS[WS.key].map(t => <button key={t.id} style={S.tab(tab === t.id)} onClick={() => setTab(t.id)}>{t.icon} {t.label}</button>)}
       </div>
       <div style={{ marginTop: 8 }}>
         {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
-        {tab === "inbox" && <InboxView projects={projects} onAddTask={({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => { addTask({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }); showT("✓ 등록됨: " + text.slice(0, 20), null); }} />}
+        {tab === "inbox" && <InboxView projects={projects} calImport={calImport} setCalImport={setCalImport} onAddTask={({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => { addTask({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }); showT("✓ 등록됨: " + text.slice(0, 20), null); }} />}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} issues={issues} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onUpdate={updateTask} onReorder={reorderTask} />}
         {tab === "selfdev" && <SelfDevView />}
+        {tab === "rmemos" && <RoutineMemosView />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
         {tab === "files" && <FilesView files={files} setFiles={setFiles} tasks={tasks} projects={projects} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} />}
