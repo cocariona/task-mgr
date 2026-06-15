@@ -64,12 +64,14 @@ const STATUSES = {
   done: { label: "완료", color: "#10B981", bg: "#ECFDF5", icon: "✅" },
 };
 const SK = Object.keys(STATUSES).filter(k => k !== "done");
+/* 업무 채널 마커 (S3) — 🧠 지식 / 🎯 예측 / ✍️ 외화 */
+const MARKERS = [["지식", "🧠"], ["예측", "🎯"], ["외화", "✍️"]];
 
 const TABS_BY_WS = {
   work: [
     { id: "today", label: "오늘", icon: "⭐" },
-    { id: "inbox", label: "인박스", icon: "📥" },
     { id: "projects", label: "과제별", icon: "📁" },
+    { id: "channels", label: "모아보기", icon: "🔎" },
     { id: "memos", label: "메모", icon: "📝" },
     { id: "history", label: "히스토리", icon: "📜" },
   ],
@@ -338,6 +340,7 @@ const migrateData = (data) => {
     if (t.planDate === undefined) t = { ...t, planDate: "" };
     if (t.calEventId === undefined) t = { ...t, calEventId: "" };
     if (t.attachments === undefined) t = { ...t, attachments: [] };
+    if (t.marks === undefined) t = { ...t, marks: [] };
     if (t.subtasks?.length) t = { ...t, subtasks: t.subtasks.map(s => {
       let ns = s.status === "scheduled" ? { ...s, status: "action" } : { ...s };
       if (ns.planDate === undefined) ns = { ...ns, planDate: "" };
@@ -578,6 +581,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
             {showProj && p && <span style={{ fontSize: 11, color: "#9ca3af" }}>#{p.name}</span>}
             {task.calEventId && <span style={{ fontSize: 9, color: "#10B981", fontWeight: 600, background: "#ECFDF5", padding: "1px 4px", borderRadius: 4 }} title="캘린더 연동됨">📅✓</span>}
             {(task.attachments || []).length > 0 && <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "1px 4px", borderRadius: 4 }} title="첨부파일">📎{task.attachments.length}</span>}
+            {(task.marks || []).map(mk => { const m = MARKERS.find(x => x[0] === mk); return m ? <span key={mk} title={"채널: " + mk} style={{ fontSize: 11 }}>{m[1]}</span> : null; })}
             {task.notes && <span onClick={(e) => { e.stopPropagation(); setShowNotes(!showNotes); }} style={{ cursor: "pointer", fontSize: 10, color: showNotes ? "#8B5CF6" : "#c4b5fd", background: showNotes ? "#F3E8FF" : "transparent", padding: "1px 4px", borderRadius: 4, userSelect: "none" }}>📝</span>}
           </div>
           <div style={S.txt}>{task.text}</div>
@@ -705,7 +709,7 @@ const AttachmentSection = ({ attachments, onChange, deferred, onBusy }) => {
 };
 
 /* ─── EditModal (task + subtask 공용) ─── */
-const EditModal = ({ task, projects, onSave, onClose, isSubtask }) => {
+const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
   const [f, setF] = useState({ ...task });
   const u = (k, v) => setF(p => ({ ...p, [k]: v }));
   const pendingUploads = useRef([]); const pendingDeletes = useRef([]);
@@ -742,6 +746,15 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask }) => {
               {f.scheduledDate && <button style={{ ...S.gh, fontSize: 10, color: "#EF4444" }} onClick={() => { u("scheduledDate", ""); u("scheduledLabel", ""); }}>✕</button>}
             </div>
           </div>
+          {!isSubtask && isWork && <div>
+            <div style={S.lbl}>채널 마커 (🧠 지식 · 🎯 예측 · ✍️ 외화)</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {MARKERS.map(([k, i]) => { const on = (f.marks || []).includes(k); return (
+                <button key={k} onClick={() => u("marks", on ? (f.marks || []).filter(x => x !== k) : [...(f.marks || []), k])}
+                  style={{ ...S.gh, fontSize: 11, background: on ? "#EEF2FF" : "#fff", color: on ? "#4338CA" : "#9ca3af", borderColor: on ? "#A5B4FC" : "#e5e7eb", fontWeight: on ? 700 : 400 }}>{i} {k}</button>
+              ); })}
+            </div>
+          </div>}
           {!isSubtask && <AttachmentSection attachments={f.attachments} onChange={v => u("attachments", v)} deferred={{ uploads: pendingUploads, deletes: pendingDeletes }} onBusy={setAttBusy} />}
           <div><div style={S.lbl}>메모 / 맥락</div><textarea style={S.ta} rows={3} value={f.notes || ""} onChange={e => u("notes", e.target.value)} /></div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
@@ -1050,237 +1063,121 @@ const MemosView = ({ projects, memos, setMemos }) => {
   );
 };
 
-/* (과제정보 뷰 — 제거됨, 호환용 더미) */
-const InfoField = ({ label, value, onChange }) => (
-  <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6, fontSize: 13 }}>
-    <div style={{ width: 120, flexShrink: 0, color: "#6b7280", fontSize: 12, paddingTop: 6 }}>{label}</div>
-    <input style={{ ...S.fld, flex: 1 }} value={value || ""} onChange={e => onChange(e.target.value)} />
-  </div>
-);
-const SubField = ({ info, onChange }) => {
-  const isSub = info.isSubProject || false;
-  return (
-    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6, fontSize: 13 }}>
-      <div style={{ width: 120, flexShrink: 0, color: "#6b7280", fontSize: 12, paddingTop: 6 }}>총괄여부/세부</div>
-      <div style={{ flex: 1, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-        <select style={{ ...S.sel, fontSize: 12 }} value={isSub ? "sub" : "lead"} onChange={e => onChange("isSubProject", e.target.value === "sub")}>
-          <option value="lead">총괄</option><option value="sub">세부</option>
-        </select>
-        {isSub && <>
-          <input style={{ ...S.fld, width: 50, flex: "none" }} placeholder="번호" value={info.subNumber || ""} onChange={e => onChange("subNumber", e.target.value)} />
-          <input style={{ ...S.fld, flex: 1 }} placeholder="총괄과제명" value={info.parentTitle || ""} onChange={e => onChange("parentTitle", e.target.value)} />
-        </>}
-      </div>
-    </div>
-  );
-};
-const DocList = ({ docs, onAdd, onRemove }) => {
-  const [show, setShow] = useState(false);
-  const [title, setTitle] = useState(""); const [url, setUrl] = useState("");
-  return (
-    <div>
-      <div style={{ ...S.lbl, marginBottom: 6 }}>연결 문서</div>
-      {docs.map((d, i) => (
-        <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 13 }}>
-          <span>📎</span>
-          {d.url ? <a href={d.url} target="_blank" rel="noreferrer" style={{ color: "#3B82F6" }}>{d.title || d.url}</a> : <span>{d.title}</span>}
-          <button style={{ ...S.gh, fontSize: 10, padding: "1px 5px", color: "#EF4444" }} onClick={() => onRemove(i)}>✕</button>
-        </div>
-      ))}
-      {!show ? <button style={{ ...S.gh, fontSize: 11 }} onClick={() => setShow(true)}>+ 문서 추가</button>
-        : <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-            <input style={{ ...S.inp, maxWidth: 160 }} placeholder="문서 이름" value={title} onChange={e => setTitle(e.target.value)} />
-            <input style={{ ...S.inp, maxWidth: 240 }} placeholder="URL (선택)" value={url} onChange={e => setUrl(e.target.value)} />
-            <button style={S.btn()} onClick={() => { if (title.trim() || url.trim()) { onAdd({ title: title.trim(), url: url.trim() }); setTitle(""); setUrl(""); setShow(false); } }}>추가</button>
-            <button style={S.gh} onClick={() => setShow(false)}>취소</button>
-          </div>}
-    </div>
-  );
-};
-const IssueCard = ({ issue, onUpdate }) => {
-  const [open, setOpen] = useState(false);
-  const [ne, setNe] = useState(""); const [et, setEt] = useState("note");
-  const [editDir, setEditDir] = useState(false); const [dir, setDir] = useState(issue.direction || "");
-  const te = { note: "📝", action: "⚡", decision: "✅" }; const tl = { note: "메모", action: "액션", decision: "결정" };
-  const add = () => { if (!ne.trim()) return; onUpdate({ ...issue, entries: [...issue.entries, { id: gid(), date: TODAY, content: ne.trim(), type: et }] }); setNe(""); };
-  return (
-    <div style={{ ...S.card, padding: 12 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", cursor: "pointer" }} onClick={() => setOpen(!open)}>
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-            <span style={{ ...S.bdg(issue.status === "open" ? "action" : "done"), fontSize: 10 }}>{issue.status === "open" ? "진행중" : "해결됨"}</span>
-          </div>
-          <div style={{ fontWeight: 600, fontSize: 13 }}>{issue.title}</div>
-          {issue.direction && !editDir && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>💡 {issue.direction}</div>}
-        </div>
-        <span style={{ fontSize: 11, color: "#9ca3af" }}>{open ? "▲" : "▼"} {issue.entries.length}</span>
-      </div>
-      {open && <div style={{ marginTop: 10 }}>
-        {editDir ? <div style={{ marginBottom: 8 }}>
-          <textarea style={S.ta} rows={2} value={dir} onChange={e => setDir(e.target.value)} />
-          <div style={{ display: "flex", gap: 4, justifyContent: "flex-end", marginTop: 4 }}>
-            <button style={S.gh} onClick={() => setEditDir(false)}>취소</button>
-            <button style={S.btn()} onClick={() => { onUpdate({ ...issue, direction: dir }); setEditDir(false); }}>저장</button>
-          </div>
-        </div> : <button style={{ ...S.gh, marginBottom: 8, fontSize: 10 }} onClick={() => { setEditDir(true); setDir(issue.direction || ""); }}>✏️ 대응방향 {issue.direction ? "수정" : "작성"}</button>}
-        <div style={{ borderLeft: "2px solid #e5e7eb", paddingLeft: 10, marginLeft: 4 }}>
-          {issue.entries.map(e => <div key={e.id} style={{ marginBottom: 8 }}>
-            <div style={{ fontSize: 11, color: "#9ca3af" }}>{te[e.type]} {tl[e.type]} · {fd(e.date)}</div>
-            <div style={{ fontSize: 13 }}>{e.content}</div>
-          </div>)}
-        </div>
-        <div style={S.div} />
-        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-          <select style={{ ...S.sel, fontSize: 11 }} value={et} onChange={e => setEt(e.target.value)}>
-            <option value="note">📝 메모</option><option value="action">⚡ 액션</option><option value="decision">✅ 결정</option>
-          </select>
-          <input style={S.inp} placeholder="기록 추가..." value={ne} onChange={e => setNe(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} />
-          <button style={S.btn()} onClick={add}>추가</button>
-        </div>
-        <div style={{ display: "flex", gap: 4, marginTop: 6, justifyContent: "flex-end" }}>
-          <button style={S.gh} onClick={() => onUpdate({ ...issue, status: issue.status === "open" ? "resolved" : "open" })}>
-            {issue.status === "open" ? "해결됨" : "다시 열기"}</button>
-        </div>
-      </div>}
-    </div>
-  );
-};
-const InfoView = ({ projects, projectInfo, setProjectInfo, issues, onUpdateIssue, onAddIssue }) => {
-  const [openP, setOpenP] = useState(new Set([projects[0]?.id]));
-  const [addIssueFor, setAddIssueFor] = useState(null);
-  const [ni, setNi] = useState({ title: "", direction: "" });
-  const tog = id => setOpenP(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const upInfo = (pid, field, val) => setProjectInfo(prev => ({ ...prev, [pid]: { ...prev[pid], [field]: val } }));
-  const addDoc = (pid, doc) => setProjectInfo(prev => ({ ...prev, [pid]: { ...prev[pid], docs: [...(prev[pid]?.docs || []), doc] } }));
-  const rmDoc = (pid, idx) => setProjectInfo(prev => ({ ...prev, [pid]: { ...prev[pid], docs: (prev[pid]?.docs || []).filter((_, i) => i !== idx) } }));
-  const infoProjects = projects.filter(p => INFO_PROJECT_IDS.has(p.id));
-  return (
-    <div style={{ marginTop: 12 }}>
-      {infoProjects.map(p => {
-        const o = openP.has(p.id);
-        const info = projectInfo[p.id] || EMPTY_INFO();
-        const pi = issues.filter(i => i.project === p.id);
-        const openI = pi.filter(i => i.status === "open");
-        const closedI = pi.filter(i => i.status === "resolved");
-        return (
-          <div key={p.id} style={{ marginBottom: 6 }}>
-            <div style={S.ph(o)} onClick={() => tog(p.id)}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 11, color: "#9ca3af" }}>{o ? "▼" : "▶"}</span>
-                <span style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</span>
-                {openI.length > 0 && <span style={{ fontSize: 11, color: "#EF4444" }}>💬 이슈 {openI.length}</span>}
-              </div>
-            </div>
-            {o && <div style={{ paddingLeft: 8, marginBottom: 12 }}>
-              <div style={{ ...S.card, background: "#fafbfc" }}>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>📋 과제 정보</div>
-                {INFO_FIELDS.map(f => f.type === "sub" ? (
-                  <SubField key={f.key} info={info} onChange={(k, v) => upInfo(p.id, k, v)} />
-                ) : (
-                  <InfoField key={f.key} label={f.label} value={info[f.key]} onChange={v => upInfo(p.id, f.key, v)} />
-                ))}
-                <div style={{ marginTop: 8 }}><DocList docs={info.docs || []} onAdd={d => addDoc(p.id, d)} onRemove={i => rmDoc(p.id, i)} /></div>
-              </div>
-              <div style={{ marginTop: 8 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>💬 이슈 ({openI.length}건 진행 · {closedI.length}건 해결)</div>
-                  <button style={{ ...S.gh, fontSize: 10 }} onClick={() => setAddIssueFor(addIssueFor === p.id ? null : p.id)}>+ 이슈</button>
-                </div>
-                {addIssueFor === p.id && <div style={{ ...S.card, background: "#f8fafc", padding: 12, marginBottom: 8 }}>
-                  <input style={{ ...S.fld, marginBottom: 6 }} placeholder="이슈 제목" value={ni.title} onChange={e => setNi(x => ({ ...x, title: e.target.value }))} />
-                  <textarea style={{ ...S.ta, marginBottom: 6, minHeight: 36 }} rows={1} placeholder="대응방향 (선택)" value={ni.direction} onChange={e => setNi(x => ({ ...x, direction: e.target.value }))} />
-                  <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
-                    <button style={S.gh} onClick={() => setAddIssueFor(null)}>취소</button>
-                    <button style={S.btn()} onClick={() => { if (ni.title.trim()) { onAddIssue({ id: gid(), project: p.id, title: ni.title.trim(), direction: ni.direction.trim(), status: "open", entries: [] }); setNi({ title: "", direction: "" }); setAddIssueFor(null); } }}>등록</button>
-                  </div>
-                </div>}
-                {openI.map(i => <IssueCard key={i.id} issue={i} onUpdate={onUpdateIssue} />)}
-                {closedI.length > 0 && <details style={{ marginTop: 8 }}><summary style={{ fontSize: 11, color: "#9ca3af", cursor: "pointer" }}>해결됨 ({closedI.length})</summary>
-                  {closedI.map(i => <IssueCard key={i.id} issue={i} onUpdate={onUpdateIssue} />)}
-                </details>}
-              </div>
-            </div>}
-          </div>
-        );
-      })}
-    </div>
-  );
-};
+/* 과제정보·이슈 편집 뷰(InfoView/InfoField/SubField/DocList/IssueCard) 제거 — S1 (렌더 경로 없던 죽은 코드).
+   issues·projectInfo 데이터·blob·export/import는 보존(S3에서 대칭 구조로 재노출). */
 
-/* ═══ 루틴 뷰 (자기개발 — 오늘 체크 + 빠른 캡처. Claude가 /selfdev 경로를 비동기 수거) ═══ */
-const SELFDEV_URL = "https://taskmgr-sync-default-rtdb.firebaseio.com/selfdev";
-const SD_FALLBACK = [
-  { key: "운동", label: "🏋️ 운동", hint: "캘린더 참조 (평일 F45 / 토·일 헬스)" },
-  { key: "영어", label: "🇬🇧 영어", hint: "매일 22:00 루프 · 코어=월화목" },
-  { key: "보컬", label: "🎤 보컬", hint: "화·수 21:00 / 토 17:00 노래방 · 목 레슨" },
-  { key: "글쓰기", label: "✍️ 글쓰기", hint: "토 18:00 발행 · 평일 최소=swipe 1줄" },
-];
-const SD_TYPES = [["글감", "✍️"], ["피드백", "💬"], ["프로젝트", "🚧"], ["메모", "📝"], ["할일", "✅"]];
-const SD_FB_TARGETS = ["운동", "영어", "보컬", "글쓰기", "시스템"];
-const sdFetch = async (path, opt) => {
+/* ═══ 레코드 스트림 (개인 /selfdev · 업무 /worklog 공통 — 항목단위 기록·캡처, Claude가 비동기 수거) ═══ */
+const recFetch = (base) => async (path, opt) => {
   const u = fbUser(); if (!u) throw new Error("로그인 필요");
   const token = await u.getIdToken();
-  const r = await fetch(SELFDEV_URL + path + ".json?auth=" + token, opt);
+  const r = await fetch("https://taskmgr-sync-default-rtdb.firebaseio.com/" + base + path + ".json?auth=" + token, opt);
   if (!r.ok) throw new Error("HTTP " + r.status);
   return r.json();
 };
+const sdFetch = recFetch("selfdev"); /* 개인 회귀: 기존 selfdev URL·동작 동일 (RoutineMemosView 재사용) */
 
-const SelfDevView = ({ onAddTask }) => {
-  const [plan, setPlan] = useState(null);      /* /selfdev/today (브리핑이 작성) */
-  const [sdOpenU, setSdOpenU] = useState(null); /* 루틴 카드 접기: null=auto(전부 done이면 접힘) */
-  const [logs, setLogs] = useState({});        /* /selfdev/logs/<오늘> */
-  const [inbox, setInbox] = useState({});      /* /selfdev/inbox */
+/* 개인(루틴) 레코드 설정 */
+/* B1: 요일별 고정 4루틴 — 브리핑 plan 없어도 항상 표시 + 요일 기본 tier·힌트 */
+const sdToday = () => {
+  const d = getTodayDow(); /* 0일~6토 */
+  const wk = d >= 1 && d <= 5;
+  const core = d === 1 || d === 2 || d === 4; /* 영어 코어=월·화·목 */
+  return [
+    { key: "운동", label: "🏋️ 운동", hint: wk ? "평일 F45 19:30 · 권장 보통" : "주말 헬스(토 체중·일) · 권장 보통" },
+    { key: "영어", label: "🇬🇧 영어", hint: core ? (d === 1 ? "코어 · 월 23:00 수업 · 권장 보통" : "코어 22:00 · 권장 보통") : "22:00 루프 · 권장 최소(5문장)" },
+    { key: "보컬", label: "🎤 보컬", hint: (d === 2 || d === 3) ? "21:00 노래방 · 권장 보통" : d === 6 ? "토 17:00 노래방 · 권장 보통" : d === 4 ? "목 17:00 레슨 · 권장 보통" : "자율 · 권장 최소" },
+    { key: "글쓰기", label: "✍️ 글쓰기", hint: d === 6 ? "토 18:00 발행 · 권장 보통" : "swipe 1줄 · 권장 최소" },
+  ];
+};
+/* 캡처 타입: target = none|fbList|project|inlineTask, req=대상 필수, route=행선지 힌트 */
+const SD_CAP_TYPES = [
+  { key: "글감", icon: "✍️", ph: "글감 한 줄", target: "none", route: () => "→ 글쓰기 swipe 파일" },
+  { key: "피드백", icon: "💬", ph: "루틴/시스템 피드백", target: "fbList", route: (t) => "→ 개선 아이디어 · " + t },
+  { key: "프로젝트", icon: "🚧", ph: "진행 메모·다음 액션 한 줄", target: "project", req: true, route: (t) => t ? "→ 2. Project/" + t + "/로그.md" : "⚠ 대상을 선택/입력해야 저장됩니다" },
+  { key: "메모", icon: "📝", ph: "메모 한 줄", target: "none", route: () => "→ 아침 브리핑에 표시" },
+  { key: "할일", icon: "✅", ph: "할일 한 줄", target: "inlineTask", route: () => "→ 아래 '개인 할일' 목록에 오늘로 등록" },
+];
+const SD_FB_TARGETS = ["운동", "영어", "보컬", "글쓰기", "시스템"];
+const SELFDEV_CFG = {
+  title: "📔 오늘 루틴",
+  checklist: { tiers: ["최소", "보통", "최대"], memoPh: (key) => key === "보컬" ? "녹음○/청취○/약점 한 단어" : key === "운동" ? "메모 (토: 체중 NN.Nkg)" : "한 줄 메모 (선택)" },
+  fallback: sdToday,
+  capTypes: SD_CAP_TYPES,
+  fbTargets: SD_FB_TARGETS,
+  projChips: "plan",   /* 프로젝트 칩 출처: 오늘 plan.projects / localStorage 캐시 */
+  progress: true,      /* 🚧 진행중 프로젝트(plan.projects) 카드 */
+  emptyHint: "오늘 브리핑 데이터 없음(기본 목록) — 기록은 그대로 저장됩니다",
+};
+
+/* (S3) 업무 캡처·/worklog 제거 — 업무 채널(🧠 지식/🎯 예측/✍️ 외화)은 과제·메모·할일+마커로 운영. */
+
+const RecordStreamView = ({ base, config, projects, onAddTask }) => {
+  const fetchB = recFetch(base);
+  const hasChecklist = !!config.checklist;
+  const [plan, setPlan] = useState(null);      /* /<base>/today (개인=브리핑이 작성) */
+  const [openU, setOpenU] = useState(null);    /* 체크리스트 카드 접기: null=auto(전부 done이면 접힘) */
+  const [logs, setLogs] = useState({});        /* /<base>/logs/<오늘> */
+  const [inbox, setInbox] = useState({});      /* /<base>/inbox */
   const [err, setErr] = useState("");
-  const [capType, setCapType] = useState("글감");
-  const [capTarget, setCapTarget] = useState("시스템"); /* 피드백 대상: 루틴별 or 시스템 */
-  const [capProj, setCapProj] = useState("");           /* 프로젝트 캡처 대상 (→ 2. Project/<name>/로그.md) */
+  const [capType, setCapType] = useState(config.capTypes[0].key);
+  const [capTarget, setCapTarget] = useState((config.fbTargets && config.fbTargets[config.fbTargets.length - 1]) || ""); /* fbList 기본(개인='시스템') */
+  const [capProj, setCapProj] = useState("");  /* project 타입 대상 */
   const [capText, setCapText] = useState("");
   const [memoDraft, setMemoDraft] = useState({});
   const load = async () => {
     if (!fbUser()) return; /* 미로그인(open 모드): 에러 대신 기본 목록만 조용히 표시 */
     try {
       setErr("");
-      const [p, l, ib] = await Promise.all([sdFetch("/today"), sdFetch("/logs/" + TODAY), sdFetch("/inbox")]);
-      setPlan(p); setLogs(l || {}); setInbox(ib || {});
-      if (p && Array.isArray(p.projects) && p.projects.length) { try { localStorage.setItem("tm-sd-projnames", JSON.stringify(p.projects.map(x => x.name).filter(Boolean))); } catch {} }
+      if (hasChecklist) {
+        const [p, l, ib] = await Promise.all([fetchB("/today"), fetchB("/logs/" + TODAY), fetchB("/inbox")]);
+        setPlan(p); setLogs(l || {}); setInbox(ib || {});
+        if (p && Array.isArray(p.projects) && p.projects.length) { try { localStorage.setItem("tm-sd-projnames", JSON.stringify(p.projects.map(x => x.name).filter(Boolean))); } catch {} }
+      } else {
+        const ib = await fetchB("/inbox");
+        setInbox(ib || {});
+      }
     } catch (e) { setErr((e && e.message) || String(e)); }
   };
   useEffect(() => { load(); }, []); /* eslint-disable-line */
 
-  /* 브리핑이 오늘자 plan을 썼으면 그걸, 아니면 고정 4영역 */
-  const items = (plan && plan.date === TODAY && Array.isArray(plan.items) && plan.items.length) ? plan.items : SD_FALLBACK;
+  /* 브리핑이 오늘자 plan을 썼으면 그걸, 아니면 config.fallback(함수면 호출=요일별) */
+  const fallbackItems = typeof config.fallback === "function" ? config.fallback() : (config.fallback || []);
+  const items = (plan && plan.date === TODAY && Array.isArray(plan.items) && plan.items.length) ? plan.items : fallbackItems;
   const doneCnt = items.filter(it => (logs[it.key] || {}).done).length;
-  const sdOpen = sdOpenU === null ? doneCnt < items.length : sdOpenU;
-  /* 프로젝트 캡처 대상 칩: 오늘 plan 우선, 없으면 마지막으로 본 목록(localStorage 캐시) */
-  const projChips = (plan && plan.date === TODAY && Array.isArray(plan.projects) && plan.projects.length)
-    ? plan.projects.map(p => p.name).filter(Boolean)
-    : (() => { try { return JSON.parse(localStorage.getItem("tm-sd-projnames") || "[]"); } catch { return []; } })();
+  const open = openU === null ? doneCnt < items.length : openU;
+  /* 프로젝트 칩: 업무=과제 목록(props.projects), 개인=오늘 plan / localStorage 캐시 */
+  const projChips = config.projChips === "projects"
+    ? (projects || []).map(p => p.name).filter(Boolean)
+    : ((plan && plan.date === TODAY && Array.isArray(plan.projects) && plan.projects.length)
+        ? plan.projects.map(p => p.name).filter(Boolean)
+        : (() => { try { return JSON.parse(localStorage.getItem("tm-sd-projnames") || "[]"); } catch { return []; } })());
 
   const saveLog = async (key, patch) => {
     const cur = logs[key] || {};
     const next = { ...cur, ...patch, ts: new Date().toISOString(), synced: false };
     setLogs(p => ({ ...p, [key]: next })); /* 낙관적 표시 */
-    try { await sdFetch("/logs/" + TODAY + "/" + encodeURIComponent(key), { method: "PUT", body: JSON.stringify(next) }); }
+    try { await fetchB("/logs/" + TODAY + "/" + encodeURIComponent(key), { method: "PUT", body: JSON.stringify(next) }); }
     catch (e) { setErr("저장 실패: " + ((e && e.message) || e)); }
   };
+  const curType = config.capTypes.find(t => t.key === capType) || config.capTypes[0];
   const capture = async () => {
     if (!capText.trim()) return;
-    if (capType === "할일" && onAddTask) { /* 할일은 inbox 휘발 대신 바로 아래 개인 할일로 등록 */
+    if (curType.target === "inlineTask" && onAddTask) { /* 할일은 inbox 휘발 대신 워크스페이스 할일로 등록 */
       onAddTask({ text: capText.trim(), status: "action" });
       setCapText(""); setErr("");
       return;
     }
-    if (capType === "프로젝트" && !capProj.trim()) { setErr("프로젝트 대상을 먼저 선택하거나 입력하세요"); return; }
-    const target = capType === "피드백" ? capTarget : capType === "프로젝트" ? capProj.trim() : null;
+    if (curType.target === "project" && curType.req && !capProj.trim()) { setErr("대상을 먼저 선택하거나 입력하세요"); return; }
+    const target = curType.target === "fbList" ? capTarget : curType.target === "project" ? (capProj.trim() || null) : null;
     const item = { type: capType, target, text: capText.trim(), date: TODAY, ts: new Date().toISOString(), synced: false };
     try {
-      const r = await sdFetch("/inbox", { method: "POST", body: JSON.stringify(item) });
+      const r = await fetchB("/inbox", { method: "POST", body: JSON.stringify(item) });
       setInbox(p => ({ ...p, [r.name]: item }));
       setCapText(""); setErr("");
     } catch (e) { setErr("캡처 실패: " + ((e && e.message) || e)); }
   };
   const delCapture = async (id) => {
-    try { await sdFetch("/inbox/" + id, { method: "DELETE" }); setInbox(p => { const n = { ...p }; delete n[id]; return n; }); } catch {}
+    try { await fetchB("/inbox/" + id, { method: "DELETE" }); setInbox(p => { const n = { ...p }; delete n[id]; return n; }); } catch {}
   };
 
   const TierChip = ({ k, cur, t }) => (
@@ -1292,14 +1189,15 @@ const SelfDevView = ({ onAddTask }) => {
 
   return (
     <div style={{ marginTop: 12 }}>
+      {hasChecklist && (
       <div style={S.card}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, cursor: "pointer" }} onClick={() => setSdOpenU(!sdOpen)}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>{sdOpen ? "▼" : "▶"} 📔 오늘 루틴 — {fd(TODAY)} <span style={{ fontSize: 11, color: doneCnt === items.length ? "#10B981" : "#9ca3af", fontWeight: 600 }}>{doneCnt}/{items.length} ✓</span></div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, cursor: "pointer" }} onClick={() => setOpenU(!open)}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{open ? "▼" : "▶"} {config.title} — {fd(TODAY)} <span style={{ fontSize: 11, color: doneCnt === items.length ? "#10B981" : "#9ca3af", fontWeight: 600 }}>{doneCnt}/{items.length} ✓</span></div>
           <button style={{ ...S.gh, fontSize: 10 }} onClick={e => { e.stopPropagation(); load(); }}>↺ 새로고침</button>
         </div>
-        {sdOpen && <>
+        {open && <>
         {plan && plan.date === TODAY && plan.note && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", borderRadius: 6, padding: "5px 9px", marginBottom: 7 }}>{plan.note}</div>}
-        {(!plan || plan.date !== TODAY) && <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 6 }}>오늘 브리핑 데이터 없음(기본 목록) — 기록은 그대로 저장됩니다</div>}
+        {(!plan || plan.date !== TODAY) && <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 6 }}>{config.emptyHint}</div>}
         {items.map(it => {
           const lg = logs[it.key] || {};
           return (
@@ -1307,14 +1205,14 @@ const SelfDevView = ({ onAddTask }) => {
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <button onClick={() => saveLog(it.key, { done: !lg.done })}
                   style={{ width: 20, height: 20, borderRadius: "50%", border: "2px solid " + (lg.done ? "#10B981" : "#d1d5db"), background: lg.done ? "#10B981" : "transparent", color: "#fff", fontSize: 12, lineHeight: "16px", cursor: "pointer", flexShrink: 0 }}>{lg.done ? "✓" : ""}</button>
-                <span style={{ fontSize: 13.5, fontWeight: 600, textDecoration: lg.done ? "none" : "none" }}>{it.label}</span>
+                <span style={{ fontSize: 13.5, fontWeight: 600 }}>{it.label}</span>
                 <span style={{ display: "flex", gap: 3 }}>
-                  {["최소", "보통", "최대"].map(t => <TierChip key={t} k={it.key} cur={lg.tier} t={t} />)}
+                  {config.checklist.tiers.map(t => <TierChip key={t} k={it.key} cur={lg.tier} t={t} />)}
                 </span>
               </div>
               <div style={{ fontSize: 10.5, color: "#9ca3af", margin: "2px 0 4px 28px" }}>{it.hint || ""}</div>
               <div style={{ display: "flex", gap: 4, marginLeft: 28 }}>
-                <input style={{ ...S.inp, fontSize: 12, padding: "4px 8px" }} placeholder={it.key === "보컬" ? "녹음○/청취○/약점 한 단어" : it.key === "운동" ? "메모 (토: 체중 NN.Nkg)" : "한 줄 메모 (선택)"}
+                <input style={{ ...S.inp, fontSize: 12, padding: "4px 8px" }} placeholder={config.checklist.memoPh(it.key)}
                   value={memoDraft[it.key] !== undefined ? memoDraft[it.key] : (lg.memo || "")}
                   onChange={e => setMemoDraft(p => ({ ...p, [it.key]: e.target.value }))}
                   onBlur={e => { if (e.target.value !== (lg.memo || "")) saveLog(it.key, { memo: e.target.value }); }}
@@ -1326,36 +1224,32 @@ const SelfDevView = ({ onAddTask }) => {
         <div style={{ fontSize: 10, color: "#c0c0c0", marginTop: 6 }}>체크·메모는 즉시 저장 → Claude가 다음 가동 때 vault 일지로 옮김 (PC 꺼져 있어도 안전)</div>
         </>}
       </div>
+      )}
 
       <div style={S.card}>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>⚡ 빠른 캡처</div>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{config.captureTitle || "⚡ 빠른 캡처"}</div>
         <div style={{ display: "flex", gap: 4, marginBottom: 6, flexWrap: "wrap" }}>
-          {SD_TYPES.map(([t, ic]) => <button key={t} onClick={() => setCapType(t)}
-            style={{ ...S.gh, fontSize: 11, background: capType === t ? "#EFF6FF" : "#fff", color: capType === t ? "#1D4ED8" : "#6b7280", borderColor: capType === t ? "#93C5FD" : "#e5e7eb", fontWeight: capType === t ? 700 : 400 }}>{ic} {t}</button>)}
+          {config.capTypes.map(t => <button key={t.key} onClick={() => setCapType(t.key)}
+            style={{ ...S.gh, fontSize: 11, background: capType === t.key ? "#EFF6FF" : "#fff", color: capType === t.key ? "#1D4ED8" : "#6b7280", borderColor: capType === t.key ? "#93C5FD" : "#e5e7eb", fontWeight: capType === t.key ? 700 : 400 }}>{t.icon} {t.key}</button>)}
         </div>
-        {capType === "피드백" && <div style={{ display: "flex", gap: 4, marginBottom: 6, flexWrap: "wrap", alignItems: "center" }}>
+        {curType.target === "fbList" && config.fbTargets && <div style={{ display: "flex", gap: 4, marginBottom: 6, flexWrap: "wrap", alignItems: "center" }}>
           <span style={{ fontSize: 10, color: "#9ca3af" }}>대상:</span>
-          {SD_FB_TARGETS.map(t => <button key={t} onClick={() => setCapTarget(t)}
+          {config.fbTargets.map(t => <button key={t} onClick={() => setCapTarget(t)}
             style={{ ...S.gh, fontSize: 10, padding: "2px 7px", background: capTarget === t ? "#FEF3C7" : "#fff", color: capTarget === t ? "#92400E" : "#9ca3af", borderColor: capTarget === t ? "#FCD34D" : "#e5e7eb", fontWeight: capTarget === t ? 700 : 400 }}>{t}</button>)}
         </div>}
-        {capType === "프로젝트" && <div style={{ display: "flex", gap: 4, marginBottom: 6, flexWrap: "wrap", alignItems: "center" }}>
+        {curType.target === "project" && <div style={{ display: "flex", gap: 4, marginBottom: 6, flexWrap: "wrap", alignItems: "center" }}>
           <span style={{ fontSize: 10, color: "#9ca3af" }}>대상:</span>
           {projChips.map(n => <button key={n} onClick={() => setCapProj(n)}
             style={{ ...S.gh, fontSize: 10, padding: "2px 7px", background: capProj === n ? "#FEF3C7" : "#fff", color: capProj === n ? "#92400E" : "#9ca3af", borderColor: capProj === n ? "#FCD34D" : "#e5e7eb", fontWeight: capProj === n ? 700 : 400 }}>{n}</button>)}
-          <input style={{ ...S.inp, fontSize: 11, padding: "3px 8px", maxWidth: 160 }} placeholder="프로젝트명 직접 입력"
+          <input style={{ ...S.inp, fontSize: 11, padding: "3px 8px", maxWidth: 160 }} placeholder={config.projChips === "projects" ? "과제명 직접 입력" : "프로젝트명 직접 입력"}
             value={capProj} onChange={e => setCapProj(e.target.value)} />
         </div>}
         <div style={{ display: "flex", gap: 6 }}>
-          <input style={S.inp} placeholder={capType === "글감" ? "글감 한 줄" : capType === "피드백" ? "루틴/시스템 피드백" : capType === "프로젝트" ? "진행 메모·다음 액션 한 줄" : capType + " 한 줄"}
+          <input style={S.inp} placeholder={curType.ph}
             value={capText} onChange={e => setCapText(e.target.value)} onKeyDown={e => e.key === "Enter" && capture()} />
           <button style={S.btn()} onClick={capture}>저장</button>
         </div>
-        <div style={{ fontSize: 10, color: capType === "프로젝트" && !capProj.trim() ? "#D97706" : "#9ca3af", marginTop: 4 }}>행선지 {
-          capType === "글감" ? "→ 글쓰기 swipe 파일" :
-          capType === "피드백" ? "→ 개선 아이디어 · " + capTarget :
-          capType === "프로젝트" ? (capProj.trim() ? "→ 2. Project/" + capProj.trim() + "/로그.md" : "⚠ 대상을 선택/입력해야 저장됩니다") :
-          capType === "할일" ? "→ 아래 '개인 할일' 목록에 오늘로 등록" :
-          "→ 아침 브리핑에 표시"}</div>
+        <div style={{ fontSize: 10, color: curType.target === "project" && curType.req && !capProj.trim() ? "#D97706" : "#9ca3af", marginTop: 4 }}>행선지 {curType.route(curType.target === "fbList" ? capTarget : curType.target === "project" ? capProj.trim() : null)}</div>
         {unsynced.length > 0 && <div style={{ marginTop: 8 }}>
           <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 3 }}>수거 대기 {unsynced.length}건 (Claude가 처리하면 사라짐)</div>
           {unsynced.slice(0, 8).map(([id, v]) => (
@@ -1368,7 +1262,7 @@ const SelfDevView = ({ onAddTask }) => {
           ))}
         </div>}
       </div>
-      {plan && plan.date === TODAY && Array.isArray(plan.projects) && plan.projects.length > 0 && (
+      {config.progress && plan && plan.date === TODAY && Array.isArray(plan.projects) && plan.projects.length > 0 && (
         <div style={S.card}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>🚧 진행중 프로젝트</div>
           {plan.projects.map((p, i) => (
@@ -1579,186 +1473,10 @@ const HistRow = ({ item, date, idx, onRestore }) => {
   );
 };
 
-/* ═══ 인박스 뷰 ═══ */
-const InboxCard = ({ item, projects, onRegister, onDismiss }) => {
-  const [proj, setProj] = useState(item.defaultProj || projects[0]?.id);
-  const [status, setStatus] = useState(item.defaultStatus || "action");
-  const [focus, setFocus] = useState(false);
-  const [date, setDate] = useState("");
-  const [pd, setPd] = useState(item.defaultPlanDate || TODAY);
-  return (
-    <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px", marginBottom: 6, display: "flex", gap: 8, alignItems: "flex-start" }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 6, wordBreak: "break-word" }}>{item.text}</div>
-        <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-          <PrSel value={proj} onChange={setProj} projects={projects} />
-          <StSel value={status} onChange={setStatus} compact />
-          <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
-            <span style={{ fontSize: 10, color: "#6366F1" }}>📆</span>
-            <input type="date" value={pd} onChange={e => setPd(e.target.value)} style={{ ...S.sel, fontSize: 11, padding: "4px 6px" }} title="📆 언제할지 (선택)" />
-          </div>
-          <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
-            <span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span>
-            <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ ...S.sel, fontSize: 11, padding: "4px 6px" }} title="마감일 (선택)" />
-          </div>
-          <button onClick={() => setFocus(!focus)} style={{ ...S.star(focus), width: 24, height: 24 }} title="오늘 집중">★</button>
-        </div>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
-        <button onClick={() => { onRegister({ text: item.text, project: proj, status, focus, scheduledDate: date, scheduledLabel: "", planDate: pd }); }} style={{ ...S.btn("#10B981"), fontSize: 12, padding: "5px 10px" }}>✓ 등록</button>
-        <button onClick={() => onDismiss(item.id)} style={{ ...S.btn("#9CA3AF"), fontSize: 12, padding: "5px 10px" }}>✕ 무시</button>
-      </div>
-    </div>
-  );
-};
+/* (S3) InboxCard 제거 — InboxView와 함께 인박스 탭 삭제. */
 
-const InboxView = ({ projects, onAddTask, calImport, setCalImport }) => {
-  const [text, setText] = useState("");
-  /* 회사 캘린더 가져오기 (읽기 전용 단방향) */
-  const [coEvents, setCoEvents] = useState(null);
-  const [coBusy, setCoBusy] = useState(false);
-  const [coErr, setCoErr] = useState("");
-  const seen = (calImport && calImport.seen) || {};
-  const markSeen = (id, status, updated) => setCalImport(p => ({ ...(p || {}), seen: { ...((p && p.seen) || {}), [id]: { status, updated } } }));
-  const fetchCompany = async () => {
-    setCoBusy(true); setCoErr("");
-    const r = await companyFetchEvents();
-    setCoBusy(false);
-    if (!r || !r.success) { setCoErr("가져오기 실패 — 회사 GAS URL/KEY·배포 상태 확인"); setCoEvents([]); return; }
-    setCoEvents(r.events || []);
-  };
-  useEffect(() => { if (COMPANY_CONFIGURED) fetchCompany(); }, []); /* eslint-disable-line */
-  const freshNew = (coEvents || []).filter(ev => !seen[ev.id]);
-  const coChanged = (coEvents || []).filter(ev => seen[ev.id] && seen[ev.id].status === "registered" && seen[ev.id].updated !== ev.updated);
-  const [items, setItems] = useState([]);
-  const [doneCount, setDoneCount] = useState(0);
-  const [dismissCount, setDismissCount] = useState(0);
-
-  /* 텍스트 → 카드 파싱. [과제명] prefix 자동 인식 */
-  const projMap = useMemo(() => {
-    const m = {};
-    projects.forEach(p => { m[p.name.toLowerCase()] = p.id; m[p.id] = p.id; });
-    /* 추가 별명 매핑 */
-    m["최적화"] = "optcode"; m["독파모"] = "dokpamo"; m["rag"] = "rag";
-    m["컴파일러"] = "compiler"; m["gpu"] = "gpu"; m["itrc"] = "itrc";
-    m["가속라이브러리"] = "accel"; m["학습추론인프라"] = "hakchuin";
-    m["기타"] = "proj_etc"; m["일반"] = "proj_general";
-    return m;
-  }, [projects]);
-
-  const parseLines = () => {
-    const lines = text.split("\n").filter(l => l.trim());
-    if (!lines.length) return;
-    const parsed = lines.map(l => {
-      const raw = l.trim();
-      /* [과제명] prefix 파싱 */
-      const m = raw.match(/^\[([^\]]+)\]\s*(.*)/);
-      let proj = projects[0]?.id;
-      let txt = raw;
-      if (m) {
-        const key = m[1].trim().toLowerCase();
-        if (projMap[key]) proj = projMap[key];
-        txt = m[2] || raw;
-      }
-      return { id: gid(), text: txt, defaultProj: proj, defaultStatus: "action" };
-    });
-    setItems(prev => [...prev, ...parsed]);
-    setText("");
-  };
-
-  const handleRegister = (data) => {
-    onAddTask(data);
-    setDoneCount(c => c + 1);
-  };
-  const handleDismiss = (id) => {
-    setItems(prev => prev.filter(i => i.id !== id));
-    setDismissCount(c => c + 1);
-  };
-
-  const total = items.length + doneCount + dismissCount;
-  const remaining = items.length;
-
-  return (
-    <div style={{ marginTop: 12 }}>
-      {/* 회사 캘린더 가져오기 (회사→앱 단방향, 역방향 없음) */}
-      {COMPANY_CONFIGURED && (
-        <div style={S.card}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>🏢 회사 캘린더 (향후 14일, 읽기 전용)</div>
-            <button style={{ ...S.btn("#6366F1"), opacity: coBusy ? 0.5 : 1 }} onClick={fetchCompany}>{coBusy ? "조회중…" : "↺ 가져오기"}</button>
-          </div>
-          {coErr && <div style={{ fontSize: 11, color: "#EF4444", marginBottom: 4 }}>{coErr}</div>}
-          {coChanged.map(ev => (
-            <div key={ev.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "4px 0", borderBottom: "1px solid #f9fafb" }}>
-              <span style={{ fontSize: 10, color: "#D97706", background: "#FFFBEB", padding: "1px 5px", borderRadius: 4, flexShrink: 0 }}>변경</span>
-              <span style={{ flex: 1 }}>{ev.title} → {ev.start}</span>
-              <button style={{ ...S.gh, fontSize: 10 }} onClick={() => markSeen(ev.id, "registered", ev.updated)} title="등록된 task의 날짜는 직접 수정">확인</button>
-            </div>
-          ))}
-          {freshNew.map(ev => (
-            <InboxCard key={ev.id} projects={projects}
-              item={{ id: ev.id, text: ev.title, defaultProj: projects[0]?.id, defaultStatus: "action", defaultPlanDate: ev.start }}
-              onRegister={(data) => { onAddTask(data); markSeen(ev.id, "registered", ev.updated); }}
-              onDismiss={() => markSeen(ev.id, "dismissed", ev.updated)} />
-          ))}
-          {coEvents !== null && freshNew.length === 0 && coChanged.length === 0 && !coErr && <div style={{ fontSize: 12, color: "#9ca3af" }}>새 일정 없음</div>}
-        </div>
-      )}
-      {/* 입력 영역 */}
-      <div style={S.card}>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>📥 인박스 — 스캔 결과 트리아지</div>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>스캔 결과를 붙여넣고 "분류 시작"을 누르세요. 각 항목을 하나씩 등록하거나 무시할 수 있습니다.</div>
-        <textarea style={{ ...S.ta, minHeight: 100 }} value={text} onChange={e => setText(e.target.value)} placeholder={"한 줄에 하나씩 붙여넣기\n[과제명] prefix 자동 인식 예:\n[독파모] 임정수님 질문 답변\n[RAG] follow-up 확인"} />
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
-          <div style={{ flex: 1 }} />
-          {text.split("\n").filter(l => l.trim()).length > 0 && <span style={{ fontSize: 12, color: "#3B82F6", fontWeight: 600 }}>{text.split("\n").filter(l => l.trim()).length}줄 감지</span>}
-          <button style={{ ...S.btn(), opacity: text.trim() ? 1 : 0.4 }} onClick={parseLines}>분류 시작 →</button>
-        </div>
-      </div>
-
-      {/* 진행 상태 바 */}
-      {total > 0 && (
-        <div style={{ ...S.card, padding: "10px 16px", display: "flex", alignItems: "center", gap: 12, marginTop: 4 }}>
-          <div style={{ flex: 1, height: 6, background: "#f3f4f6", borderRadius: 3, overflow: "hidden" }}>
-            <div style={{ height: "100%", borderRadius: 3, background: remaining === 0 ? "#10B981" : "linear-gradient(90deg, #10B981 0%, #3B82F6 100%)", width: `${((doneCount + dismissCount) / total * 100)}%`, transition: "width 0.3s" }} />
-          </div>
-          <span style={{ fontSize: 11, color: "#6b7280", whiteSpace: "nowrap" }}>
-            ✓{doneCount} ✕{dismissCount} / 남은 {remaining}건
-          </span>
-          {remaining === 0 && total > 0 && <span style={{ fontSize: 12, fontWeight: 600, color: "#10B981" }}>완료!</span>}
-        </div>
-      )}
-
-      {/* 트리아지 카드 목록 */}
-      {items.length > 0 && (
-        <div style={{ marginTop: 8 }}>
-          {items.map(item => (
-            <InboxCard key={item.id} item={item} projects={projects} onRegister={(data) => { handleRegister(data); handleDismiss(item.id); }} onDismiss={handleDismiss} />
-          ))}
-          {items.length > 1 && (
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}>
-              <button onClick={() => { setItems([]); setDismissCount(c => c + items.length); }} style={{ ...S.gh, color: "#EF4444" }}>전체 무시</button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 비어있을 때 안내 */}
-      {items.length === 0 && total === 0 && (
-        <div style={{ ...S.card, background: "#f8fafc", marginTop: 8 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>💡 사용법</div>
-          <div style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.8 }}>
-            1. Cowork 스캔 결과를 복사하여 위에 붙여넣기<br/>
-            2. "분류 시작" 클릭 → 각 항목이 카드로 표시됨<br/>
-            3. 카드마다 과제/상태 선택 후 ✓등록 또는 ✕무시<br/>
-            4. <b>[과제명]</b> prefix 자동 인식 (예: [독파모] 할일내용)<br/>
-            <span style={{ color: "#3B82F6" }}>→ 등록 즉시 과제별 탭에 반영됩니다</span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
+/* (S3) InboxView 제거 — 업무 인박스 탭(붙여넣기 트리아지·🏢회사 캘린더 가져오기) 삭제.
+   InboxCard·COMPANY_GAS_*·companyFetchEvents·calImport는 잔존(inert) → 후속 cleanup 후보. */
 
 /* ═══ 반복 태스크 설정 ═══ */
 const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
@@ -1816,6 +1534,62 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
           <button style={S.btn()} onClick={addR}>추가</button>
         </div>
       </div>}
+    </div>
+  );
+};
+
+/* ═══ 모아보기 (업무 채널 — 마커별 진행중 + 해소·완료(history) 통합 · 예측 회고 핵심) ═══ */
+const ChannelView = ({ tasks, history, projects, onEdit }) => {
+  const [sel, setSel] = useState("예측");
+  const pname = (id) => projects.find(p => p.id === id)?.name || "";
+  const ic = (MARKERS.find(m => m[0] === sel) || [])[1] || "";
+  const active = useMemo(() => tasks.filter(t => (t.marks || []).includes(sel) && t.status !== "done"), [tasks, sel]);
+  const resolved = useMemo(() => {
+    const out = [];
+    (history || []).forEach(day => (day.items || []).forEach(it => {
+      if (it.type === "done" && it.orig && (it.orig.marks || []).includes(sel))
+        out.push({ key: (it.orig.id || it.text) + day.date, text: it.text, notes: it.orig.notes, proj: it.projectName || pname(it.orig.project), date: day.date });
+    }));
+    return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [history, sel, projects]);
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: "flex", gap: 4, marginBottom: 10, flexWrap: "wrap" }}>
+        {MARKERS.map(([k, i]) => <button key={k} onClick={() => setSel(k)}
+          style={{ ...S.gh, fontSize: 12, background: sel === k ? "#EFF6FF" : "#fff", color: sel === k ? "#1D4ED8" : "#6b7280", borderColor: sel === k ? "#93C5FD" : "#e5e7eb", fontWeight: sel === k ? 700 : 400 }}>{i} {k}</button>)}
+      </div>
+      {sel === "예측" && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", borderRadius: 6, padding: "5px 9px", marginBottom: 8 }}>🎯 해소일에 task를 완료하면 아래 '해소·완료'로 내려가 회고에 남습니다 (근거·reality·action).</div>}
+      {sel === "외화" && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", borderRadius: 6, padding: "5px 9px", marginBottom: 8 }}>✍️ 주간에 여기 모인 것 중 1개 → 사외 글 발행(글쓰기 루틴).</div>}
+      <div style={S.card}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{ic} 진행중 ({active.length})</div>
+        {active.length === 0 && <div style={{ ...S.emp, padding: 12 }}>없음 — task 편집에서 {ic} {sel} 마커를 달면 모입니다</div>}
+        {active.map(t => {
+          const dl = t.scheduledDate ? deadlineInfo(t.scheduledDate) : null;
+          return (
+            <div key={t.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
+              {dl && <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div>{t.text} {(() => { const n = pname(t.project); return n ? <span style={{ fontSize: 10, color: "#9ca3af" }}>#{n}</span> : null; })()}</div>
+                {t.notes && <div style={S.note}>{t.notes}</div>}
+              </div>
+              <button style={{ ...S.gh, fontSize: 10 }} onClick={() => onEdit(t)}>✏️</button>
+            </div>
+          );
+        })}
+      </div>
+      <div style={S.card}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{ic} 해소·완료 ({resolved.length})</div>
+        {resolved.length === 0 && <div style={{ ...S.emp, padding: 12 }}>완료 기록 없음 (task 완료 시 여기로 모임)</div>}
+        {resolved.map(e => (
+          <div key={e.key} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
+            <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0, marginTop: 2 }}>{(e.date || "").slice(5)}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: "#6b7280" }}>{e.text} {e.proj && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{e.proj}</span>}</div>
+              {e.notes && <div style={S.note}>{e.notes}</div>}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 };
@@ -2162,15 +1936,15 @@ function App({ onSwitchWs }) {
         {TABS_BY_WS[WS.key].map(t => <button key={t.id} style={S.tab(tab === t.id)} onClick={() => setTab(t.id)}>{t.icon} {t.label}</button>)}
       </div>
       <div style={{ marginTop: 8 }}>
-        {tab === "today" && <>{!isWork && <SelfDevView onAddTask={addTask} />}<TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
-        {tab === "inbox" && <InboxView projects={projects} calImport={calImport} setCalImport={setCalImport} onAddTask={({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => { addTask({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }); showT("✓ 등록됨: " + text.slice(0, 20), null); }} />}
+        {tab === "today" && <>{!isWork && <RecordStreamView base="selfdev" config={SELFDEV_CFG} projects={projects} onAddTask={addTask} />}<TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} issues={issues} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onUpdate={updateTask} onReorder={reorderTask} />}
+        {tab === "channels" && <ChannelView tasks={tasks} history={history} projects={projects} onEdit={handleEdit} />}
         {tab === "rmemos" && <RoutineMemosView />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
         {tab === "files" && <FilesView files={files} setFiles={setFiles} tasks={tasks} projects={projects} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} />}
       </div>
-      {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} />}
+      {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} isWork={isWork} />}
       {toast && <Toast msg={toast.msg} onUndo={toast.undo} onX={hideT} />}
       <div id="cal-toast" style={{ display: "none", position: "fixed", top: 24, left: "50%", transform: "translateX(-50%)", background: "#1f2937", color: "#fff", padding: "8px 16px", borderRadius: 8, fontSize: 13, zIndex: 300, boxShadow: "0 4px 12px rgba(0,0,0,0.2)" }} />
     </div>
