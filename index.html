@@ -71,14 +71,14 @@ const TABS_BY_WS = {
   work: [
     { id: "today", label: "오늘", icon: "⭐" },
     { id: "projects", label: "과제별", icon: "📁" },
-    { id: "channels", label: "모아보기", icon: "🔎" },
-    { id: "memos", label: "메모", icon: "📝" },
+    { id: "channels", label: "회고", icon: "🔎" },
+    { id: "memos", label: "과제 맥락", icon: "📝" },
     { id: "history", label: "히스토리", icon: "📜" },
   ],
   personal: [
     { id: "today", label: "오늘", icon: "⭐" },
-    { id: "rmemos", label: "메모", icon: "📝" },
-    { id: "files", label: "파일", icon: "📎" },
+    { id: "projects", label: "유형별", icon: "📁" },
+    { id: "channels", label: "회고", icon: "🔎" },
     { id: "history", label: "히스토리", icon: "📜" },
   ],
 };
@@ -307,8 +307,11 @@ const WORKSPACES = {
 };
 let WS = WORKSPACES[(() => { try { return localStorage.getItem("tm-workspace") === "personal" ? "personal" : "work"; } catch { return "work"; } })()];
 const PERSONAL_PROJECTS = [
-  { id: "appt", name: "약속", order: 0 },
-  { id: "petc", name: "기타", order: 1 },
+  { id: "p_invest", name: "투자원칙 정립", order: 0 },
+  { id: "p_workcap", name: "업무역량 시스템", order: 1 },
+  { id: "appt", name: "약속", order: 2 },
+  { id: "p_house", name: "집안일", order: 3 },
+  { id: "petc", name: "기타", order: 4 },
 ];
 
 /* ─── localStorage (이중 백업, 워크스페이스별 키) ─── */
@@ -1077,18 +1080,13 @@ const recFetch = (base) => async (path, opt) => {
 const sdFetch = recFetch("selfdev"); /* 개인 회귀: 기존 selfdev URL·동작 동일 (RoutineMemosView 재사용) */
 
 /* 개인(루틴) 레코드 설정 */
-/* B1: 요일별 고정 4루틴 — 브리핑 plan 없어도 항상 표시 + 요일 기본 tier·힌트 */
-const sdToday = () => {
-  const d = getTodayDow(); /* 0일~6토 */
-  const wk = d >= 1 && d <= 5;
-  const core = d === 1 || d === 2 || d === 4; /* 영어 코어=월·화·목 */
-  return [
-    { key: "운동", label: "🏋️ 운동", hint: wk ? "평일 F45 19:30 · 권장 보통" : "주말 헬스(토 체중·일) · 권장 보통" },
-    { key: "영어", label: "🇬🇧 영어", hint: core ? (d === 1 ? "코어 · 월 23:00 수업 · 권장 보통" : "코어 22:00 · 권장 보통") : "22:00 루프 · 권장 최소(5문장)" },
-    { key: "보컬", label: "🎤 보컬", hint: (d === 2 || d === 3) ? "21:00 노래방 · 권장 보통" : d === 6 ? "토 17:00 노래방 · 권장 보통" : d === 4 ? "목 17:00 레슨 · 권장 보통" : "자율 · 권장 최소" },
-    { key: "글쓰기", label: "✍️ 글쓰기", hint: d === 6 ? "토 18:00 발행 · 권장 보통" : "swipe 1줄 · 권장 최소" },
-  ];
-};
+/* 고정 4루틴 — 브리핑 plan 없어도 항상 표시(힌트 없음, 기본 tier=보통은 방법론[Track2]) */
+const sdToday = () => [
+  { key: "운동", label: "🏋️ 운동" },
+  { key: "영어", label: "🇬🇧 영어" },
+  { key: "보컬", label: "🎤 보컬" },
+  { key: "글쓰기", label: "✍️ 글쓰기" },
+];
 /* 캡처 타입: target = none|fbList|project|inlineTask, req=대상 필수, route=행선지 힌트 */
 const SD_CAP_TYPES = [
   { key: "글감", icon: "✍️", ph: "글감 한 줄", target: "none", route: () => "→ 글쓰기 swipe 파일" },
@@ -1538,58 +1536,168 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
   );
 };
 
-/* ═══ 모아보기 (업무 채널 — 마커별 진행중 + 해소·완료(history) 통합 · 예측 회고 핵심) ═══ */
-const ChannelView = ({ tasks, history, projects, onEdit }) => {
-  const [sel, setSel] = useState("예측");
+/* ═══ 회고 (통합) — 업무: 마커별(보기+파일) / 개인: 루틴·프로젝트별(보기+입력+파일). 완료=history ═══ */
+const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit }) => {
+  const targets = isWork
+    ? MARKERS.map(([k, ic]) => ({ kind: "marker", key: k, label: ic + " " + k }))
+    : [...SD_ROUTINES.map(r => ({ kind: "routine", key: r, label: "📔 " + r })),
+       ...(projects || []).map(p => ({ kind: "project", key: p.id, label: "📁 " + p.name }))];
+  const [selKey, setSelKey] = useState(targets[0] ? targets[0].kind + ":" + targets[0].key : "");
+  const cur = targets.find(t => (t.kind + ":" + t.key) === selKey) || targets[0] || { kind: "none", key: "", label: "" };
   const pname = (id) => projects.find(p => p.id === id)?.name || "";
-  const ic = (MARKERS.find(m => m[0] === sel) || [])[1] || "";
-  const active = useMemo(() => tasks.filter(t => (t.marks || []).includes(sel) && t.status !== "done"), [tasks, sel]);
-  const resolved = useMemo(() => {
+  const [logsAll, setLogsAll] = useState({});
+  const [notes, setNotes] = useState({});
+  const [txt, setTxt] = useState("");
+  const [err, setErr] = useState("");
+  useEffect(() => { (async () => {
+    if (isWork || !fbUser()) return;
+    try { const [l, n] = await Promise.all([sdFetch("/logs"), sdFetch("/notes")]); setLogsAll(l || {}); setNotes(n || {}); }
+    catch (e) { setErr((e && e.message) || String(e)); }
+  })(); }, []); /* eslint-disable-line */
+
+  const active = useMemo(() => cur.kind === "marker" ? tasks.filter(t => t.status !== "done" && (t.marks || []).includes(cur.key))
+    : cur.kind === "project" ? tasks.filter(t => t.status !== "done" && t.project === cur.key) : [], [tasks, cur.kind, cur.key]);
+  const doneHist = useMemo(() => {
     const out = [];
     (history || []).forEach(day => (day.items || []).forEach(it => {
-      if (it.type === "done" && it.orig && (it.orig.marks || []).includes(sel))
-        out.push({ key: (it.orig.id || it.text) + day.date, text: it.text, notes: it.orig.notes, proj: it.projectName || pname(it.orig.project), date: day.date });
+      if (it.type !== "done" || !it.orig) return;
+      const ok = cur.kind === "marker" ? (it.orig.marks || []).includes(cur.key) : cur.kind === "project" ? it.orig.project === cur.key : false;
+      if (ok) out.push({ key: (it.orig.id || it.text) + day.date, text: it.text, notes: it.orig.notes, proj: it.projectName || pname(it.orig.project), date: day.date });
     }));
     return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  }, [history, sel, projects]);
+  }, [history, cur.kind, cur.key]);
+  const routineEntries = useMemo(() => {
+    if (cur.kind !== "routine") return [];
+    const out = [];
+    Object.entries(logsAll).forEach(([date, day]) => { const r = day && day[cur.key]; if (r && r.memo) out.push({ key: "l" + date, date, text: r.memo, src: r.tier ? ("tier=" + r.tier + (r.done ? "·done" : "")) : "" }); });
+    Object.entries(notes).forEach(([id, n]) => { if (n && n.routine === cur.key) out.push({ key: "n" + id, date: n.date || "", text: n.text, src: "노트" }); });
+    return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [logsAll, notes, cur.kind, cur.key]);
+
+  const addNote = async () => {
+    if (!txt.trim() || isWork) return;
+    try {
+      if (cur.kind === "routine") { const item = { routine: cur.key, text: txt.trim(), date: TODAY, ts: new Date().toISOString(), synced: false }; const r = await sdFetch("/notes", { method: "POST", body: JSON.stringify(item) }); setNotes(p => ({ ...p, [r.name]: item })); }
+      else if (cur.kind === "project") { const item = { type: "프로젝트", target: pname(cur.key), text: txt.trim(), date: TODAY, ts: new Date().toISOString(), synced: false }; await sdFetch("/inbox", { method: "POST", body: JSON.stringify(item) }); }
+      setTxt(""); setErr("");
+    } catch (e) { setErr("저장 실패: " + ((e && e.message) || e)); }
+  };
+  const inRef = useRef(); const [uploading, setUploading] = useState(0);
+  const canUpload = FB_CONFIGURED && !!fbUser();
+  const pickFile = async (e) => { const file = e.target.files?.[0]; e.target.value = ""; if (!file) return; setUploading(1);
+    try { const att = await uploadFile(file, p => setUploading(Math.max(1, p))); setFiles(prev => [...prev, att]); } catch (ex) { setErr((ex && ex.message) || String(ex)); } setUploading(0); };
+
   return (
     <div style={{ marginTop: 12 }}>
       <div style={{ display: "flex", gap: 4, marginBottom: 10, flexWrap: "wrap" }}>
-        {MARKERS.map(([k, i]) => <button key={k} onClick={() => setSel(k)}
-          style={{ ...S.gh, fontSize: 12, background: sel === k ? "#EFF6FF" : "#fff", color: sel === k ? "#1D4ED8" : "#6b7280", borderColor: sel === k ? "#93C5FD" : "#e5e7eb", fontWeight: sel === k ? 700 : 400 }}>{i} {k}</button>)}
+        {targets.map(t => { const k = t.kind + ":" + t.key; const on = k === (cur.kind + ":" + cur.key); return (
+          <button key={k} onClick={() => setSelKey(k)}
+            style={{ ...S.gh, fontSize: 12, background: on ? "#EFF6FF" : "#fff", color: on ? "#1D4ED8" : "#6b7280", borderColor: on ? "#93C5FD" : "#e5e7eb", fontWeight: on ? 700 : 400 }}>{t.label}</button>
+        ); })}
       </div>
-      {sel === "예측" && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", borderRadius: 6, padding: "5px 9px", marginBottom: 8 }}>🎯 해소일에 task를 완료하면 아래 '해소·완료'로 내려가 회고에 남습니다 (근거·reality·action).</div>}
-      {sel === "외화" && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", borderRadius: 6, padding: "5px 9px", marginBottom: 8 }}>✍️ 주간에 여기 모인 것 중 1개 → 사외 글 발행(글쓰기 루틴).</div>}
+      {isWork && cur.key === "예측" && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", borderRadius: 6, padding: "5px 9px", marginBottom: 8 }}>🎯 해소일에 task 완료 시 아래 '완료·해소'로 내려가 회고에 남습니다(근거·reality·action).</div>}
+
+      {cur.kind !== "routine" && <div style={S.card}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>진행중 ({active.length})</div>
+        {active.length === 0 && <div style={{ ...S.emp, padding: 12 }}>없음</div>}
+        {active.map(t => { const dl = t.scheduledDate ? deadlineInfo(t.scheduledDate) : null; return (
+          <div key={t.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
+            {dl && <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>}
+            <div style={{ flex: 1, minWidth: 0 }}><div>{t.text} {(t.marks || []).map(mk => { const m = MARKERS.find(x => x[0] === mk); return m ? <span key={mk}>{m[1]}</span> : null; })} {isWork && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{pname(t.project)}</span>}</div>{t.notes && <div style={S.note}>{t.notes}</div>}</div>
+            <button style={{ ...S.gh, fontSize: 10 }} onClick={() => onEdit(t)}>✏️</button>
+          </div>); })}
+      </div>}
+
+      {cur.kind === "routine" && <div style={S.card}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{cur.label} 기록·노트 ({routineEntries.length})</div>
+        {routineEntries.length === 0 && <div style={{ ...S.emp, padding: 12 }}>아직 기록 없음</div>}
+        {routineEntries.map(e => <div key={e.key} style={{ display: "flex", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
+          <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0, marginTop: 2 }}>{(e.date || "").slice(5)}</span>
+          <span style={{ flex: 1, whiteSpace: "pre-wrap" }}>{e.text}{e.src && <span style={{ fontSize: 9, color: "#c4b5fd", marginLeft: 6 }}>{e.src}</span>}</span>
+        </div>)}
+      </div>}
+
       <div style={S.card}>
-        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{ic} 진행중 ({active.length})</div>
-        {active.length === 0 && <div style={{ ...S.emp, padding: 12 }}>없음 — task 편집에서 {ic} {sel} 마커를 달면 모입니다</div>}
-        {active.map(t => {
-          const dl = t.scheduledDate ? deadlineInfo(t.scheduledDate) : null;
-          return (
-            <div key={t.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
-              {dl && <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div>{t.text} {(() => { const n = pname(t.project); return n ? <span style={{ fontSize: 10, color: "#9ca3af" }}>#{n}</span> : null; })()}</div>
-                {t.notes && <div style={S.note}>{t.notes}</div>}
-              </div>
-              <button style={{ ...S.gh, fontSize: 10 }} onClick={() => onEdit(t)}>✏️</button>
-            </div>
-          );
-        })}
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>완료·해소 ({doneHist.length})</div>
+        {doneHist.length === 0 && <div style={{ ...S.emp, padding: 12 }}>완료 기록 없음 (task 완료 시 모임)</div>}
+        {doneHist.map(e => <div key={e.key} style={{ display: "flex", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
+          <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0, marginTop: 2 }}>{(e.date || "").slice(5)}</span>
+          <div style={{ flex: 1, minWidth: 0 }}><div style={{ color: "#6b7280" }}>{e.text} {e.proj && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{e.proj}</span>}</div>{e.notes && <div style={S.note}>{e.notes}</div>}</div>
+        </div>)}
       </div>
+
+      {!isWork && cur.kind !== "none" && <div style={S.card}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>✍️ 회고 입력 — {cur.label}</div>
+        <textarea style={{ ...S.ta, minHeight: 70 }} placeholder={cur.kind === "routine" ? "이 루틴 회고/노트(문제점·해결법 등)" : "이 프로젝트 회고·다음 액션"} value={txt} onChange={e => setTxt(e.target.value)} />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
+          <span style={{ fontSize: 10, color: "#9ca3af" }}>{cur.kind === "routine" ? "→ 해당 루틴 일지(vault) 수거" : "→ 2.Project/" + pname(cur.key) + "/로그.md 수거"}</span>
+          <button style={S.btn()} onClick={addNote}>추가</button>
+        </div>
+      </div>}
+
       <div style={S.card}>
-        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{ic} 해소·완료 ({resolved.length})</div>
-        {resolved.length === 0 && <div style={{ ...S.emp, padding: 12 }}>완료 기록 없음 (task 완료 시 여기로 모임)</div>}
-        {resolved.map(e => (
-          <div key={e.key} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
-            <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0, marginTop: 2 }}>{(e.date || "").slice(5)}</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ color: "#6b7280" }}>{e.text} {e.proj && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{e.proj}</span>}</div>
-              {e.notes && <div style={S.note}>{e.notes}</div>}
-            </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: 12, fontWeight: 600 }}>📎 파일 ({files.length}) <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 400 }}>회고 첨부(녹음 등)</span></div>
+          {canUpload ? <div><input ref={inRef} type="file" style={{ display: "none" }} onChange={pickFile} />{uploading > 0 ? <span style={{ fontSize: 12, color: "#F59E0B" }}>⬆️ {uploading}%</span> : <button style={{ ...S.gh, fontSize: 11 }} onClick={() => inRef.current?.click()}>+ 파일</button>}</div> : <span style={{ fontSize: 11, color: "#9ca3af" }}>로그인 후</span>}
+        </div>
+        {files.slice(-8).reverse().map(a => <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "3px 0" }}>
+          <a href="#" onClick={(e) => { e.preventDefault(); downloadAttachment(a); }} style={{ color: "#3B82F6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📎 {a.name}</a>
+          <span style={{ color: "#9ca3af", fontSize: 10 }}>{fmtSize(a.size)}</span>
+        </div>)}
+      </div>
+      {err && <div style={{ fontSize: 11, color: "#EF4444" }}>{err}</div>}
+    </div>
+  );
+};
+
+/* ═══ S4b: 개인 오늘탭 상단 루틴 고정 체크 (힌트 없음, /selfdev/logs 기록 — 기존과 동일) ═══ */
+const RoutineSection = () => {
+  const [plan, setPlan] = useState(null);
+  const [logs, setLogs] = useState({});
+  const [memoDraft, setMemoDraft] = useState({});
+  const [err, setErr] = useState("");
+  const load = async () => {
+    if (!fbUser()) return;
+    try { setErr(""); const [p, l] = await Promise.all([sdFetch("/today"), sdFetch("/logs/" + TODAY)]); setPlan(p); setLogs(l || {}); }
+    catch (e) { setErr((e && e.message) || String(e)); }
+  };
+  useEffect(() => { load(); }, []); /* eslint-disable-line */
+  const items = (plan && plan.date === TODAY && Array.isArray(plan.items) && plan.items.length) ? plan.items : sdToday();
+  const doneCnt = items.filter(it => (logs[it.key] || {}).done).length;
+  const saveLog = async (key, patch) => {
+    const cur = logs[key] || {};
+    const next = { ...cur, ...patch, ts: new Date().toISOString(), synced: false };
+    setLogs(p => ({ ...p, [key]: next }));
+    try { await sdFetch("/logs/" + TODAY + "/" + encodeURIComponent(key), { method: "PUT", body: JSON.stringify(next) }); }
+    catch (e) { setErr("저장 실패: " + ((e && e.message) || e)); }
+  };
+  const TierChip = ({ k, cur, t }) => (
+    <button onClick={() => saveLog(k, { tier: t })}
+      style={{ ...S.gh, fontSize: 10, padding: "2px 7px", background: cur === t ? "#EEF2FF" : "#fff", color: cur === t ? "#4338CA" : "#9ca3af", borderColor: cur === t ? "#A5B4FC" : "#e5e7eb", fontWeight: cur === t ? 700 : 400 }}>{t}</button>
+  );
+  return (
+    <div style={{ ...S.card, marginTop: 12, marginBottom: 8 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>📔 오늘 루틴 — {fd(TODAY)} <span style={{ fontSize: 11, color: doneCnt === items.length ? "#10B981" : "#9ca3af", fontWeight: 600 }}>{doneCnt}/{items.length} ✓</span></div>
+      {plan && plan.date === TODAY && plan.note && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", borderRadius: 6, padding: "5px 9px", marginBottom: 7 }}>{plan.note}</div>}
+      {items.map(it => {
+        const lg = logs[it.key] || {};
+        return (
+          <div key={it.key} style={{ borderBottom: "1px solid #f3f4f6", padding: "6px 2px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => saveLog(it.key, { done: !lg.done })}
+              style={{ width: 20, height: 20, borderRadius: "50%", border: "2px solid " + (lg.done ? "#10B981" : "#d1d5db"), background: lg.done ? "#10B981" : "transparent", color: "#fff", fontSize: 12, lineHeight: "16px", cursor: "pointer", flexShrink: 0 }}>{lg.done ? "✓" : ""}</button>
+            <span style={{ fontSize: 13.5, fontWeight: 600 }}>{it.label}</span>
+            <span style={{ display: "flex", gap: 3 }}>{["최소", "보통", "최대"].map(t => <TierChip key={t} k={it.key} cur={lg.tier} t={t} />)}</span>
+            <input style={{ ...S.inp, fontSize: 12, padding: "3px 8px", flex: 1, minWidth: 110 }} placeholder="메모(선택)"
+              value={memoDraft[it.key] !== undefined ? memoDraft[it.key] : (lg.memo || "")}
+              onChange={e => setMemoDraft(p => ({ ...p, [it.key]: e.target.value }))}
+              onBlur={e => { if (e.target.value !== (lg.memo || "")) saveLog(it.key, { memo: e.target.value }); }}
+              onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }} />
           </div>
-        ))}
-      </div>
+        );
+      })}
+      {plan && plan.date === TODAY && Array.isArray(plan.projects) && plan.projects.length > 0 &&
+        <div style={{ fontSize: 11, color: "#6b7280", marginTop: 6 }}>🚧 진행중: {plan.projects.map(p => p.name).filter(Boolean).join(" · ")}</div>}
+      {err && <div style={{ fontSize: 11, color: "#EF4444", marginTop: 4 }}>{err}</div>}
     </div>
   );
 };
@@ -1675,6 +1783,21 @@ function App({ onSwitchWs }) {
       if (subs.some(isOver)) nt = { ...nt, subtasks: subs.map(s => isOver(s) ? { ...s, focus: true } : s) };
       return nt;
     }));
+  }, [cloudLoaded]); /* eslint-disable-line */
+
+  /* S4a: 개인 프로젝트 5종 보강(기존 데이터에 신규 추가, 정본 순서·id 보존) */
+  const personalProjDone = useRef(false);
+  useEffect(() => {
+    if (isWork || !cloudLoaded || personalProjDone.current) return;
+    personalProjDone.current = true;
+    setProjects(prev => {
+      const byId = Object.fromEntries(prev.map(p => [p.id, p]));
+      const canonical = PERSONAL_PROJECTS.map(p => byId[p.id] || p);
+      const extra = prev.filter(p => !PERSONAL_PROJECTS.some(c => c.id === p.id));
+      const merged = [...canonical, ...extra];
+      const same = merged.length === prev.length && merged.every((p, i) => p.id === prev[i]?.id);
+      return same ? prev : merged;
+    });
   }, [cloudLoaded]); /* eslint-disable-line */
 
   /* 반복 태스크 자동 생성 — ⚠️ 클라우드 화해가 끝난 뒤(cloudLoaded) 1회만.
@@ -1936,12 +2059,10 @@ function App({ onSwitchWs }) {
         {TABS_BY_WS[WS.key].map(t => <button key={t.id} style={S.tab(tab === t.id)} onClick={() => setTab(t.id)}>{t.icon} {t.label}</button>)}
       </div>
       <div style={{ marginTop: 8 }}>
-        {tab === "today" && <>{!isWork && <RecordStreamView base="selfdev" config={SELFDEV_CFG} projects={projects} onAddTask={addTask} />}<TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
+        {tab === "today" && <>{!isWork && <RoutineSection />}<TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} issues={issues} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onUpdate={updateTask} onReorder={reorderTask} />}
-        {tab === "channels" && <ChannelView tasks={tasks} history={history} projects={projects} onEdit={handleEdit} />}
-        {tab === "rmemos" && <RoutineMemosView />}
+        {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
-        {tab === "files" && <FilesView files={files} setFiles={setFiles} tasks={tasks} projects={projects} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} />}
       </div>
       {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} isWork={isWork} />}
