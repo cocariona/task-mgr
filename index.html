@@ -223,20 +223,7 @@ const downloadAttachment = async (att) => {
 };
 const fmtSize = (b) => b >= 1048576 ? (b/1048576).toFixed(1)+" MB" : b >= 1024 ? Math.round(b/1024)+" KB" : (b||0)+" B";
 
-/* ─── 회사 캘린더 가져오기 (회사 계정 GAS, 읽기 전용 단방향: 회사→앱) ───
-   배포: company-calendar-gas.gs 를 회사 계정 Apps Script로 배포 후 URL/KEY 교체. 미설정 시 기능 숨김. */
-const COMPANY_GAS_URL = "PASTE_COMPANY_GAS_URL";
-const COMPANY_GAS_KEY = "PASTE_COMPANY_KEY";
-const COMPANY_CONFIGURED = !COMPANY_GAS_URL.startsWith("PASTE");
-const companyFetchEvents = () => new Promise((resolve) => {
-  const cb = "_cg_" + gid();
-  const timer = setTimeout(() => { delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); }, 12000);
-  window[cb] = (r) => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve(r || { success: false }); };
-  const s = document.createElement("script");
-  s.src = COMPANY_GAS_URL + "?key=" + encodeURIComponent(COMPANY_GAS_KEY) + "&days=14&callback=" + cb;
-  s.onerror = () => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); };
-  document.body.appendChild(s);
-});
+/* (S3·cleanup 2026-06-16) 회사 캘린더 가져오기(COMPANY_GAS_URL/KEY·companyFetchEvents) 제거 — 인박스 탭과 함께 폐지(inert였음). */
 
 const GCAL_URL = GAS_URL;
 /* ─── 캘린더 JSONP 동기화 (add / update / delete) ─── */
@@ -1077,7 +1064,7 @@ const recFetch = (base) => async (path, opt) => {
   if (!r.ok) throw new Error("HTTP " + r.status);
   return r.json();
 };
-const sdFetch = recFetch("selfdev"); /* 개인 회귀: 기존 selfdev URL·동작 동일 (RoutineMemosView 재사용) */
+const sdFetch = recFetch("selfdev"); /* 개인 회귀: 기존 selfdev URL·동작 동일 (RoutineSection·RecapView 사용) */
 
 /* 개인(루틴) 레코드 설정 */
 /* 고정 4루틴 — 브리핑 plan 없어도 항상 표시(힌트 없음, 기본 tier=보통은 방법론[Track2]) */
@@ -1087,325 +1074,9 @@ const sdToday = () => [
   { key: "보컬", label: "🎤 보컬" },
   { key: "글쓰기", label: "✍️ 글쓰기" },
 ];
-/* 캡처 타입: target = none|fbList|project|inlineTask, req=대상 필수, route=행선지 힌트 */
-const SD_CAP_TYPES = [
-  { key: "글감", icon: "✍️", ph: "글감 한 줄", target: "none", route: () => "→ 글쓰기 swipe 파일" },
-  { key: "피드백", icon: "💬", ph: "루틴/시스템 피드백", target: "fbList", route: (t) => "→ 개선 아이디어 · " + t },
-  { key: "프로젝트", icon: "🚧", ph: "진행 메모·다음 액션 한 줄", target: "project", req: true, route: (t) => t ? "→ 2. Project/" + t + "/로그.md" : "⚠ 대상을 선택/입력해야 저장됩니다" },
-  { key: "메모", icon: "📝", ph: "메모 한 줄", target: "none", route: () => "→ 아침 브리핑에 표시" },
-  { key: "할일", icon: "✅", ph: "할일 한 줄", target: "inlineTask", route: () => "→ 아래 '개인 할일' 목록에 오늘로 등록" },
-];
-const SD_FB_TARGETS = ["운동", "영어", "보컬", "글쓰기", "시스템"];
-const SELFDEV_CFG = {
-  title: "📔 오늘 루틴",
-  checklist: { tiers: ["최소", "보통", "최대"], memoPh: (key) => key === "보컬" ? "녹음○/청취○/약점 한 단어" : key === "운동" ? "메모 (토: 체중 NN.Nkg)" : "한 줄 메모 (선택)" },
-  fallback: sdToday,
-  capTypes: SD_CAP_TYPES,
-  fbTargets: SD_FB_TARGETS,
-  projChips: "plan",   /* 프로젝트 칩 출처: 오늘 plan.projects / localStorage 캐시 */
-  progress: true,      /* 🚧 진행중 프로젝트(plan.projects) 카드 */
-  emptyHint: "오늘 브리핑 데이터 없음(기본 목록) — 기록은 그대로 저장됩니다",
-};
-
-/* (S3) 업무 캡처·/worklog 제거 — 업무 채널(🧠 지식/🎯 예측/✍️ 외화)은 과제·메모·할일+마커로 운영. */
-
-const RecordStreamView = ({ base, config, projects, onAddTask }) => {
-  const fetchB = recFetch(base);
-  const hasChecklist = !!config.checklist;
-  const [plan, setPlan] = useState(null);      /* /<base>/today (개인=브리핑이 작성) */
-  const [openU, setOpenU] = useState(null);    /* 체크리스트 카드 접기: null=auto(전부 done이면 접힘) */
-  const [logs, setLogs] = useState({});        /* /<base>/logs/<오늘> */
-  const [inbox, setInbox] = useState({});      /* /<base>/inbox */
-  const [err, setErr] = useState("");
-  const [capType, setCapType] = useState(config.capTypes[0].key);
-  const [capTarget, setCapTarget] = useState((config.fbTargets && config.fbTargets[config.fbTargets.length - 1]) || ""); /* fbList 기본(개인='시스템') */
-  const [capProj, setCapProj] = useState("");  /* project 타입 대상 */
-  const [capText, setCapText] = useState("");
-  const [memoDraft, setMemoDraft] = useState({});
-  const load = async () => {
-    if (!fbUser()) return; /* 미로그인(open 모드): 에러 대신 기본 목록만 조용히 표시 */
-    try {
-      setErr("");
-      if (hasChecklist) {
-        const [p, l, ib] = await Promise.all([fetchB("/today"), fetchB("/logs/" + TODAY), fetchB("/inbox")]);
-        setPlan(p); setLogs(l || {}); setInbox(ib || {});
-        if (p && Array.isArray(p.projects) && p.projects.length) { try { localStorage.setItem("tm-sd-projnames", JSON.stringify(p.projects.map(x => x.name).filter(Boolean))); } catch {} }
-      } else {
-        const ib = await fetchB("/inbox");
-        setInbox(ib || {});
-      }
-    } catch (e) { setErr((e && e.message) || String(e)); }
-  };
-  useEffect(() => { load(); }, []); /* eslint-disable-line */
-
-  /* 브리핑이 오늘자 plan을 썼으면 그걸, 아니면 config.fallback(함수면 호출=요일별) */
-  const fallbackItems = typeof config.fallback === "function" ? config.fallback() : (config.fallback || []);
-  const items = (plan && plan.date === TODAY && Array.isArray(plan.items) && plan.items.length) ? plan.items : fallbackItems;
-  const doneCnt = items.filter(it => (logs[it.key] || {}).done).length;
-  const open = openU === null ? doneCnt < items.length : openU;
-  /* 프로젝트 칩: 업무=과제 목록(props.projects), 개인=오늘 plan / localStorage 캐시 */
-  const projChips = config.projChips === "projects"
-    ? (projects || []).map(p => p.name).filter(Boolean)
-    : ((plan && plan.date === TODAY && Array.isArray(plan.projects) && plan.projects.length)
-        ? plan.projects.map(p => p.name).filter(Boolean)
-        : (() => { try { return JSON.parse(localStorage.getItem("tm-sd-projnames") || "[]"); } catch { return []; } })());
-
-  const saveLog = async (key, patch) => {
-    const cur = logs[key] || {};
-    const next = { ...cur, ...patch, ts: new Date().toISOString(), synced: false };
-    setLogs(p => ({ ...p, [key]: next })); /* 낙관적 표시 */
-    try { await fetchB("/logs/" + TODAY + "/" + encodeURIComponent(key), { method: "PUT", body: JSON.stringify(next) }); }
-    catch (e) { setErr("저장 실패: " + ((e && e.message) || e)); }
-  };
-  const curType = config.capTypes.find(t => t.key === capType) || config.capTypes[0];
-  const capture = async () => {
-    if (!capText.trim()) return;
-    if (curType.target === "inlineTask" && onAddTask) { /* 할일은 inbox 휘발 대신 워크스페이스 할일로 등록 */
-      onAddTask({ text: capText.trim(), status: "action" });
-      setCapText(""); setErr("");
-      return;
-    }
-    if (curType.target === "project" && curType.req && !capProj.trim()) { setErr("대상을 먼저 선택하거나 입력하세요"); return; }
-    const target = curType.target === "fbList" ? capTarget : curType.target === "project" ? (capProj.trim() || null) : null;
-    const item = { type: capType, target, text: capText.trim(), date: TODAY, ts: new Date().toISOString(), synced: false };
-    try {
-      const r = await fetchB("/inbox", { method: "POST", body: JSON.stringify(item) });
-      setInbox(p => ({ ...p, [r.name]: item }));
-      setCapText(""); setErr("");
-    } catch (e) { setErr("캡처 실패: " + ((e && e.message) || e)); }
-  };
-  const delCapture = async (id) => {
-    try { await fetchB("/inbox/" + id, { method: "DELETE" }); setInbox(p => { const n = { ...p }; delete n[id]; return n; }); } catch {}
-  };
-
-  const TierChip = ({ k, cur, t }) => (
-    <button onClick={() => saveLog(k, { tier: t })}
-      style={{ ...S.gh, fontSize: 10, padding: "2px 7px", background: cur === t ? "#EEF2FF" : "#fff", color: cur === t ? "#4338CA" : "#9ca3af", borderColor: cur === t ? "#A5B4FC" : "#e5e7eb", fontWeight: cur === t ? 700 : 400 }}>{t}</button>
-  );
-
-  const unsynced = Object.entries(inbox).filter(([, v]) => v && !v.synced).sort((a, b) => (b[1].ts || "").localeCompare(a[1].ts || ""));
-
-  return (
-    <div style={{ marginTop: 12 }}>
-      {hasChecklist && (
-      <div style={S.card}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, cursor: "pointer" }} onClick={() => setOpenU(!open)}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>{open ? "▼" : "▶"} {config.title} — {fd(TODAY)} <span style={{ fontSize: 11, color: doneCnt === items.length ? "#10B981" : "#9ca3af", fontWeight: 600 }}>{doneCnt}/{items.length} ✓</span></div>
-          <button style={{ ...S.gh, fontSize: 10 }} onClick={e => { e.stopPropagation(); load(); }}>↺ 새로고침</button>
-        </div>
-        {open && <>
-        {plan && plan.date === TODAY && plan.note && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", borderRadius: 6, padding: "5px 9px", marginBottom: 7 }}>{plan.note}</div>}
-        {(!plan || plan.date !== TODAY) && <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 6 }}>{config.emptyHint}</div>}
-        {items.map(it => {
-          const lg = logs[it.key] || {};
-          return (
-            <div key={it.key} style={{ borderBottom: "1px solid #f3f4f6", padding: "7px 2px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <button onClick={() => saveLog(it.key, { done: !lg.done })}
-                  style={{ width: 20, height: 20, borderRadius: "50%", border: "2px solid " + (lg.done ? "#10B981" : "#d1d5db"), background: lg.done ? "#10B981" : "transparent", color: "#fff", fontSize: 12, lineHeight: "16px", cursor: "pointer", flexShrink: 0 }}>{lg.done ? "✓" : ""}</button>
-                <span style={{ fontSize: 13.5, fontWeight: 600 }}>{it.label}</span>
-                <span style={{ display: "flex", gap: 3 }}>
-                  {config.checklist.tiers.map(t => <TierChip key={t} k={it.key} cur={lg.tier} t={t} />)}
-                </span>
-              </div>
-              <div style={{ fontSize: 10.5, color: "#9ca3af", margin: "2px 0 4px 28px" }}>{it.hint || ""}</div>
-              <div style={{ display: "flex", gap: 4, marginLeft: 28 }}>
-                <input style={{ ...S.inp, fontSize: 12, padding: "4px 8px" }} placeholder={config.checklist.memoPh(it.key)}
-                  value={memoDraft[it.key] !== undefined ? memoDraft[it.key] : (lg.memo || "")}
-                  onChange={e => setMemoDraft(p => ({ ...p, [it.key]: e.target.value }))}
-                  onBlur={e => { if (e.target.value !== (lg.memo || "")) saveLog(it.key, { memo: e.target.value }); }}
-                  onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }} />
-              </div>
-            </div>
-          );
-        })}
-        <div style={{ fontSize: 10, color: "#c0c0c0", marginTop: 6 }}>체크·메모는 즉시 저장 → Claude가 다음 가동 때 vault 일지로 옮김 (PC 꺼져 있어도 안전)</div>
-        </>}
-      </div>
-      )}
-
-      <div style={S.card}>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{config.captureTitle || "⚡ 빠른 캡처"}</div>
-        <div style={{ display: "flex", gap: 4, marginBottom: 6, flexWrap: "wrap" }}>
-          {config.capTypes.map(t => <button key={t.key} onClick={() => setCapType(t.key)}
-            style={{ ...S.gh, fontSize: 11, background: capType === t.key ? "#EFF6FF" : "#fff", color: capType === t.key ? "#1D4ED8" : "#6b7280", borderColor: capType === t.key ? "#93C5FD" : "#e5e7eb", fontWeight: capType === t.key ? 700 : 400 }}>{t.icon} {t.key}</button>)}
-        </div>
-        {curType.target === "fbList" && config.fbTargets && <div style={{ display: "flex", gap: 4, marginBottom: 6, flexWrap: "wrap", alignItems: "center" }}>
-          <span style={{ fontSize: 10, color: "#9ca3af" }}>대상:</span>
-          {config.fbTargets.map(t => <button key={t} onClick={() => setCapTarget(t)}
-            style={{ ...S.gh, fontSize: 10, padding: "2px 7px", background: capTarget === t ? "#FEF3C7" : "#fff", color: capTarget === t ? "#92400E" : "#9ca3af", borderColor: capTarget === t ? "#FCD34D" : "#e5e7eb", fontWeight: capTarget === t ? 700 : 400 }}>{t}</button>)}
-        </div>}
-        {curType.target === "project" && <div style={{ display: "flex", gap: 4, marginBottom: 6, flexWrap: "wrap", alignItems: "center" }}>
-          <span style={{ fontSize: 10, color: "#9ca3af" }}>대상:</span>
-          {projChips.map(n => <button key={n} onClick={() => setCapProj(n)}
-            style={{ ...S.gh, fontSize: 10, padding: "2px 7px", background: capProj === n ? "#FEF3C7" : "#fff", color: capProj === n ? "#92400E" : "#9ca3af", borderColor: capProj === n ? "#FCD34D" : "#e5e7eb", fontWeight: capProj === n ? 700 : 400 }}>{n}</button>)}
-          <input style={{ ...S.inp, fontSize: 11, padding: "3px 8px", maxWidth: 160 }} placeholder={config.projChips === "projects" ? "과제명 직접 입력" : "프로젝트명 직접 입력"}
-            value={capProj} onChange={e => setCapProj(e.target.value)} />
-        </div>}
-        <div style={{ display: "flex", gap: 6 }}>
-          <input style={S.inp} placeholder={curType.ph}
-            value={capText} onChange={e => setCapText(e.target.value)} onKeyDown={e => e.key === "Enter" && capture()} />
-          <button style={S.btn()} onClick={capture}>저장</button>
-        </div>
-        <div style={{ fontSize: 10, color: curType.target === "project" && curType.req && !capProj.trim() ? "#D97706" : "#9ca3af", marginTop: 4 }}>행선지 {curType.route(curType.target === "fbList" ? capTarget : curType.target === "project" ? capProj.trim() : null)}</div>
-        {unsynced.length > 0 && <div style={{ marginTop: 8 }}>
-          <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 3 }}>수거 대기 {unsynced.length}건 (Claude가 처리하면 사라짐)</div>
-          {unsynced.slice(0, 8).map(([id, v]) => (
-            <div key={id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "3px 0", borderBottom: "1px solid #f9fafb" }}>
-              <span style={{ fontSize: 10, color: "#6366F1", background: "#EEF2FF", padding: "1px 5px", borderRadius: 4, flexShrink: 0 }}>{v.type}{v.target ? "·" + v.target : ""}</span>
-              <span style={{ flex: 1 }}>{v.text}</span>
-              <span style={{ fontSize: 9, color: "#c0c0c0", flexShrink: 0 }}>{(v.date || "").slice(5)}</span>
-              <button style={{ ...S.gh, fontSize: 9, color: "#EF4444", padding: "1px 5px" }} onClick={() => delCapture(id)}>✕</button>
-            </div>
-          ))}
-        </div>}
-      </div>
-      {config.progress && plan && plan.date === TODAY && Array.isArray(plan.projects) && plan.projects.length > 0 && (
-        <div style={S.card}>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>🚧 진행중 프로젝트</div>
-          {plan.projects.map((p, i) => (
-            <div key={i} style={{ fontSize: 12, padding: "3px 0", borderBottom: "1px solid #f9fafb" }}>
-              <b>{p.name}</b><span style={{ color: "#6b7280" }}> — {p.next}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      {err && <div style={{ fontSize: 11, color: "#EF4444" }}>{err}</div>}
-    </div>
-  );
-};
-
-/* ═══ 루틴별 메모·이력 (개인탭 — 일지 메모(/selfdev/logs) + 노트(/selfdev/notes) 집계) ═══ */
+/* (cleanup 2026-06-16) SD_CAP_TYPES·SD_FB_TARGETS·SELFDEV_CFG + RecordStreamView 제거 — S4에서 RoutineSection(오늘탭)+RecapView(회고탭)로 대체. sdToday(위)·SD_ROUTINES(아래)는 라이브 → 유지. */
 const SD_ROUTINES = ["운동", "영어", "보컬", "글쓰기"];
-const RoutineMemosView = () => {
-  const [sel, setSel] = useState("보컬");
-  const [logsAll, setLogsAll] = useState({});
-  const [notes, setNotes] = useState({});
-  const [txt, setTxt] = useState("");
-  const [err, setErr] = useState("");
-  const load = async () => {
-    try { setErr("");
-      const [l, n] = await Promise.all([sdFetch("/logs"), sdFetch("/notes")]);
-      setLogsAll(l || {}); setNotes(n || {});
-    } catch (e) { setErr((e && e.message) || String(e)); }
-  };
-  useEffect(() => { load(); }, []); /* eslint-disable-line */
-  const entries = useMemo(() => {
-    const out = [];
-    Object.entries(logsAll).forEach(([date, day]) => {
-      const r = day && day[sel];
-      if (r && r.memo) out.push({ date, text: r.memo, src: "일지", id: null });
-    });
-    Object.entries(notes).forEach(([id, n]) => {
-      if (n && n.routine === sel) out.push({ date: n.date || "", text: n.text, src: "노트", id });
-    });
-    return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  }, [logsAll, notes, sel]);
-  const addNote = async () => {
-    if (!txt.trim()) return;
-    const item = { routine: sel, text: txt.trim(), date: TODAY, ts: new Date().toISOString(), synced: false };
-    try { const r = await sdFetch("/notes", { method: "POST", body: JSON.stringify(item) }); setNotes(p => ({ ...p, [r.name]: item })); setTxt(""); }
-    catch (e) { setErr("저장 실패: " + ((e && e.message) || e)); }
-  };
-  const delNote = async (id) => {
-    try { await sdFetch("/notes/" + id, { method: "DELETE" }); setNotes(p => { const n = { ...p }; delete n[id]; return n; }); } catch {}
-  };
-  return (
-    <div style={{ marginTop: 12 }}>
-      <div style={S.card}>
-        <div style={{ display: "flex", gap: 4, marginBottom: 8, flexWrap: "wrap" }}>
-          {SD_ROUTINES.map(r => <button key={r} onClick={() => setSel(r)}
-            style={{ ...S.gh, fontSize: 12, background: sel === r ? "#EFF6FF" : "#fff", color: sel === r ? "#1D4ED8" : "#6b7280", borderColor: sel === r ? "#93C5FD" : "#e5e7eb", fontWeight: sel === r ? 700 : 400 }}>{r}</button>)}
-          <button style={{ ...S.gh, fontSize: 10, marginLeft: "auto" }} onClick={load}>↺</button>
-        </div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-          <input style={S.inp} placeholder={sel === "보컬" ? "예: 레슨 — 문제점/해결법/연습법 1줄" : sel + " 노트 한 줄"}
-            value={txt} onChange={e => setTxt(e.target.value)} onKeyDown={e => e.key === "Enter" && addNote()} />
-          <button style={S.btn()} onClick={addNote}>추가</button>
-        </div>
-        {entries.length === 0 && <div style={{ ...S.emp, padding: 14 }}>아직 기록 없음 — 일지 메모와 노트가 여기 쌓입니다</div>}
-        {entries.map((e, i) => (
-          <div key={e.id || (e.date + i)} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
-            <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0, marginTop: 2 }}>{(e.date || "").slice(5)}</span>
-            <span style={{ fontSize: 9, color: e.src === "노트" ? "#92400E" : "#6366F1", background: e.src === "노트" ? "#FEF3C7" : "#EEF2FF", padding: "1px 4px", borderRadius: 4, flexShrink: 0, marginTop: 1 }}>{e.src}</span>
-            <span style={{ flex: 1, whiteSpace: "pre-wrap" }}>{e.text}</span>
-            {e.id && <button style={{ ...S.gh, fontSize: 9, color: "#EF4444", padding: "1px 5px", flexShrink: 0 }} onClick={() => delNote(e.id)}>✕</button>}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
-/* ═══ 파일 뷰 (단독 업로드 보관함 + task 첨부 모아보기) ═══ */
-const FilesView = ({ files, setFiles, tasks, projects }) => {
-  const [uploading, setUploading] = useState(0);
-  const [err, setErr] = useState("");
-  const inRef = useRef();
-  const canUpload = FB_CONFIGURED && !!fbUser();
-  const taskAtts = useMemo(() => {
-    const out = [];
-    tasks.forEach(t => (t.attachments || []).forEach(a => out.push({ att: a, task: t })));
-    return out;
-  }, [tasks]);
-  const pick = async (e) => {
-    const file = e.target.files?.[0]; e.target.value = "";
-    if (!file) return;
-    setErr(""); setUploading(1);
-    try {
-      const att = await uploadFile(file, p => setUploading(Math.max(1, p)));
-      setFiles(prev => [...prev, att]);
-    } catch (ex) { setErr((ex && ex.message) || String(ex)); }
-    setUploading(0);
-  };
-  const remove = (att) => {
-    if (!window.confirm('"' + att.name + '" 파일을 삭제할까요? (저장소에서도 삭제)')) return;
-    deleteStoredFile(att);
-    setFiles(prev => prev.filter(a => a.id !== att.id));
-  };
-  const FileRow = ({ a, sub }) => (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, padding: "5px 4px", borderBottom: "1px solid #f3f4f6" }}>
-      <a href="#" onClick={(e) => { e.preventDefault(); downloadAttachment(a); }} style={{ color: "#3B82F6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }} title="클릭하여 다운로드">📎 {a.name}</a>
-      {sub}
-      <span style={{ color: "#9ca3af", fontSize: 10, flexShrink: 0 }}>{fmtSize(a.size)}</span>
-      <span style={{ color: "#c0c0c0", fontSize: 10, flexShrink: 0 }}>{a.uploadedAt ? fd(a.uploadedAt.slice(0, 10)) : ""}</span>
-    </div>
-  );
-  return (
-    <div style={{ marginTop: 12 }}>
-      <div style={S.card}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>📎 파일 보관함 ({files.length})</div>
-          {canUpload && (
-            <div>
-              <input ref={inRef} type="file" style={{ display: "none" }} onChange={pick} />
-              {uploading > 0
-                ? <span style={{ fontSize: 12, color: "#F59E0B" }}>⬆️ 업로드 중… {uploading}%</span>
-                : <button style={S.btn()} onClick={() => inRef.current?.click()}>+ 파일 업로드</button>}
-            </div>
-          )}
-        </div>
-        {!canUpload && <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 6 }}>Firebase 설정(로그인) 후 어느 기기에서나 업로드·조회할 수 있습니다.</div>}
-        {err && <div style={{ fontSize: 11, color: "#EF4444", marginBottom: 6 }}>{err}</div>}
-        {files.length === 0 && <div style={{ ...S.emp, padding: 16 }}>업로드한 파일이 없습니다</div>}
-        {files.map(a => <FileRow key={a.id} a={a} sub={
-          <button style={{ ...S.gh, fontSize: 10, color: "#EF4444", flexShrink: 0 }} onClick={() => remove(a)}>✕</button>
-        } />)}
-      </div>
-      {taskAtts.length > 0 && (
-        <div style={S.card}>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>📋 할 일에 첨부된 파일 ({taskAtts.length})</div>
-          {taskAtts.map(({ att, task }) => {
-            const p = projects.find(x => x.id === task.project);
-            return <FileRow key={att.id} a={att} sub={
-              <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p ? "#" + p.name + " · " : ""}{task.text}</span>
-            } />;
-          })}
-        </div>
-      )}
-    </div>
-  );
-};
+/* (cleanup 2026-06-16) RoutineMemosView·FilesView 제거 — 회고 탭(RecapView)이 일지/노트/파일을 통합 제공. */
 
 /* ═══ 히스토리 뷰 (일일 활동 로그) ═══ */
 const HTYPE = {
@@ -1474,7 +1145,7 @@ const HistRow = ({ item, date, idx, onRestore }) => {
 /* (S3) InboxCard 제거 — InboxView와 함께 인박스 탭 삭제. */
 
 /* (S3) InboxView 제거 — 업무 인박스 탭(붙여넣기 트리아지·🏢회사 캘린더 가져오기) 삭제.
-   InboxCard·COMPANY_GAS_*·companyFetchEvents·calImport는 잔존(inert) → 후속 cleanup 후보. */
+   (cleanup 2026-06-16: COMPANY_GAS_*·companyFetchEvents·calImport 제거 완료.) */
 
 /* ═══ 반복 태스크 설정 ═══ */
 const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
@@ -1719,7 +1390,6 @@ function App({ onSwitchWs }) {
     { id: gid(), dow: 3, text: "위클리 작성", project: "proj_etc" },
     { id: gid(), dow: 2, text: "영어공부 기사 확인", project: "proj_etc" },
   ] : []));
-  const [calImport, setCalImport] = useState(saved?.calImport || { seen: {} }); /* 회사 캘린더 가져오기 추적 */
   const [editTarget, setEditTarget] = useState(null);
   const [toast, setToast] = useState(null);
   const fileRef = useRef();
@@ -1837,10 +1507,10 @@ function App({ onSwitchWs }) {
   const firstSaveSkip = useRef(true);
   useEffect(() => {
     if (firstSaveSkip.current) { firstSaveSkip.current = false; return; }
-    const data = { tasks, projects, issues, projectInfo, history, recurrings, memos, files, calImport, savedAt: new Date().toISOString() };
+    const data = { tasks, projects, issues, projectInfo, history, recurrings, memos, files, savedAt: new Date().toISOString() };
     saveToStorage(data);
     if (cloudLoadedRef.current) cloudSave(data);
-  }, [tasks, projects, issues, projectInfo, history, recurrings, memos, files, calImport]);
+  }, [tasks, projects, issues, projectInfo, history, recurrings, memos, files]);
 
   const showT = (msg, undo) => setToast({ msg, undo });
   const hideT = () => setToast(null);
@@ -2002,7 +1672,7 @@ function App({ onSwitchWs }) {
       if (d.issues) setIssues(d.issues); if (d.history) setHistory(d.history);
       if (d.projectInfo) setProjectInfo(d.projectInfo);
       if (d.recurrings) setRecurrings(d.recurrings); if (d.memos) setMemos(d.memos);
-      if (d.files) setFiles(d.files); if (d.calImport) setCalImport(d.calImport);
+      if (d.files) setFiles(d.files);
       showT("데이터를 불러왔습니다", null);
     } catch { showT("파일 형식 오류", null); } };
     r.readAsText(file); e.target.value = "";
