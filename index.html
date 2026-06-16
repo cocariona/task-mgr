@@ -294,12 +294,14 @@ const WORKSPACES = {
 };
 let WS = WORKSPACES[(() => { try { return localStorage.getItem("tm-workspace") === "personal" ? "personal" : "work"; } catch { return "work"; } })()];
 const PERSONAL_PROJECTS = [
-  { id: "p_invest", name: "투자원칙 정립", order: 0 },
-  { id: "p_workcap", name: "업무역량 시스템", order: 1 },
-  { id: "appt", name: "약속", order: 2 },
-  { id: "p_house", name: "집안일", order: 3 },
-  { id: "petc", name: "기타", order: 4 },
+  { id: "p_invest", name: "투자원칙 정립", order: 0, kind: "project" },
+  { id: "p_workcap", name: "업무역량 시스템", order: 1, kind: "project" },
+  { id: "appt", name: "약속", order: 2, kind: "bucket" },
+  { id: "p_house", name: "집안일", order: 3, kind: "bucket" },
+  { id: "petc", name: "기타", order: 4, kind: "bucket" },
 ];
+const PERSONAL_BUCKET_IDS = ["appt", "p_house", "petc"];
+const isBucketProj = (p) => p && (p.kind === "bucket" || PERSONAL_BUCKET_IDS.includes(p.id));
 
 /* ─── localStorage (이중 백업, 워크스페이스별 키) ─── */
 const loadSaved = () => {
@@ -331,6 +333,7 @@ const migrateData = (data) => {
     if (t.calEventId === undefined) t = { ...t, calEventId: "" };
     if (t.attachments === undefined) t = { ...t, attachments: [] };
     if (t.marks === undefined) t = { ...t, marks: [] };
+    if (t.recap === undefined) t = { ...t, recap: "" };
     if (t.subtasks?.length) t = { ...t, subtasks: t.subtasks.map(s => {
       let ns = s.status === "scheduled" ? { ...s, status: "action" } : { ...s };
       if (ns.planDate === undefined) ns = { ...ns, planDate: "" };
@@ -747,6 +750,7 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
           </div>}
           {!isSubtask && <AttachmentSection attachments={f.attachments} onChange={v => u("attachments", v)} deferred={{ uploads: pendingUploads, deletes: pendingDeletes }} onBusy={setAttBusy} />}
           <div><div style={S.lbl}>메모 / 맥락</div><textarea style={S.ta} rows={3} value={f.notes || ""} onChange={e => u("notes", e.target.value)} /></div>
+          <div><div style={{ ...S.lbl, color: "#7C3AED", fontWeight: 600 }}>🪞 회고 (메모와 별개 — 완료·예측 결과)</div><textarea style={{ ...S.ta, background: "#FAF5FF" }} rows={3} placeholder="이 task의 회고(근거·결과·다음 액션 등). 회고 탭에 모입니다." value={f.recap || ""} onChange={e => u("recap", e.target.value)} /></div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <button style={S.gh} onClick={cancel}>취소</button>
             <button style={{ ...S.btn(), opacity: attBusy ? 0.4 : 1, cursor: attBusy ? "wait" : "pointer" }} onClick={commit} title={attBusy ? "파일 업로드 완료 후 저장할 수 있습니다" : ""}>저장</button>
@@ -926,42 +930,68 @@ const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onU
 };
 
 /* ═══ 과제별 뷰 ═══ */
-const ProjectsView = ({ tasks, projects, issues, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onUpdate, onReorder }) => {
+const ProjectsView = ({ tasks, projects, issues, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, onReorder, isWork }) => {
   const [open, setOpen] = useState(new Set(projects.filter(p => tasks.some(t => t.project === p.id && t.status !== "done")).map(p => p.id)));
   const [np, setNp] = useState("");
+  const [editId, setEditId] = useState(null);
+  const [editName, setEditName] = useState("");
   const tog = id => setOpen(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const dragHandlers = useDragReorder(onReorder);
+  const isDefault = (id) => PERSONAL_PROJECTS.some(d => d.id === id);
+  const startEdit = (e, p) => { e.stopPropagation(); setEditId(p.id); setEditName(p.name); };
+  const saveEdit = () => { if (editName.trim()) onEditProj(editId, editName.trim()); setEditId(null); setEditName(""); };
+  const askDel = (e, p) => { e.stopPropagation();
+    const cnt = tasks.filter(t => t.project === p.id && t.status !== "done").length;
+    if (window.confirm('"' + p.name + '" 과제를 삭제할까요?' + (cnt > 0 ? " (할일 " + cnt + "개도 함께 삭제)" : ""))) onDelProj(p.id);
+  };
+  const renderProj = (p) => {
+    const pt = tasks.filter(t => t.project === p.id && t.status !== "done");
+    const pi = issues.filter(i => i.project === p.id && i.status === "open");
+    const fc = pt.filter(t => t.focus).length;
+    const o = open.has(p.id);
+    const canDel = isWork || !isDefault(p.id);
+    return (
+      <div key={p.id} style={{ marginBottom: 6 }}>
+        <div style={S.ph(o)} onClick={() => { if (editId !== p.id) tog(p.id); }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
+            <span style={{ fontSize: 11, color: "#9ca3af" }}>{o ? "▼" : "▶"}</span>
+            {editId === p.id
+              ? <input autoFocus value={editName} onClick={e => e.stopPropagation()} onChange={e => setEditName(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") { setEditId(null); setEditName(""); } }}
+                  onBlur={saveEdit} style={{ ...S.inp, fontSize: 14, padding: "2px 6px", maxWidth: 200 }} />
+              : <span style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</span>}
+            <span style={S.cnt(pt.length)}>{pt.length}</span>
+            {fc > 0 && <span style={{ fontSize: 11, color: "#F59E0B" }}>⭐{fc}</span>}
+            {pi.length > 0 && <span style={{ fontSize: 11, color: "#EF4444" }}>💬 {pi.length}</span>}
+          </div>
+          {editId !== p.id && <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+            <button style={{ ...S.gh, fontSize: 10, padding: "1px 5px" }} onClick={e => startEdit(e, p)} title="이름 수정">✏️</button>
+            {canDel && <button style={{ ...S.gh, fontSize: 10, padding: "1px 5px", color: "#EF4444" }} onClick={e => askDel(e, p)} title="과제 삭제">🗑</button>}
+          </div>}
+        </div>
+        {o && <div style={{ paddingLeft: 8, marginBottom: 12 }}>
+          {SK.map(s => { const items = pt.filter(t => t.status === s); if (!items.length) return null;
+            return <div key={s} style={{ marginBottom: 4 }}>{items.map(t => <TaskRow key={t.id} task={t} projects={projects} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={dragHandlers} />)}</div>; })}
+          {pt.length === 0 && <div style={{ ...S.emp, padding: 16 }}>할 일 없음</div>}
+          <div style={S.div} /><AddForm projects={projects} onAdd={onAdd} defProj={p.id} />
+        </div>}
+      </div>
+    );
+  };
+  const mainProjs = projects.filter(p => !isBucketProj(p));
+  const bucketProjs = projects.filter(p => isBucketProj(p));
   return (
     <div style={{ marginTop: 12 }}>
-      {projects.map(p => {
-        const pt = tasks.filter(t => t.project === p.id && t.status !== "done");
-        const pi = issues.filter(i => i.project === p.id && i.status === "open");
-        const fc = pt.filter(t => t.focus).length;
-        const o = open.has(p.id);
-        return (
-          <div key={p.id} style={{ marginBottom: 6 }}>
-            <div style={S.ph(o)} onClick={() => tog(p.id)}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 11, color: "#9ca3af" }}>{o ? "▼" : "▶"}</span>
-                <span style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</span>
-                <span style={S.cnt(pt.length)}>{pt.length}</span>
-                {fc > 0 && <span style={{ fontSize: 11, color: "#F59E0B" }}>⭐{fc}</span>}
-                {pi.length > 0 && <span style={{ fontSize: 11, color: "#EF4444" }}>💬 {pi.length}</span>}
-              </div>
-            </div>
-            {o && <div style={{ paddingLeft: 8, marginBottom: 12 }}>
-              {SK.map(s => { const items = pt.filter(t => t.status === s); if (!items.length) return null;
-                return <div key={s} style={{ marginBottom: 4 }}>{items.map(t => <TaskRow key={t.id} task={t} projects={projects} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={dragHandlers} />)}</div>; })}
-              {pt.length === 0 && <div style={{ ...S.emp, padding: 16 }}>할 일 없음</div>}
-              <div style={S.div} /><AddForm projects={projects} onAdd={onAdd} defProj={p.id} />
-            </div>}
-          </div>
-        );
-      })}
+      {!isWork && bucketProjs.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#6366F1", margin: "2px 0 6px" }}>📂 프로젝트</div>}
+      {mainProjs.map(renderProj)}
+      {!isWork && bucketProjs.length > 0 && <>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#9ca3af", margin: "14px 0 6px" }}>🗂 그 외 (약속·집안일·기타)</div>
+        {bucketProjs.map(renderProj)}
+      </>}
       <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 16, padding: "8px 0" }}>
-        <input style={{ ...S.inp, maxWidth: 200 }} placeholder="새 과제 추가..." value={np} onChange={e => setNp(e.target.value)}
+        <input style={{ ...S.inp, maxWidth: 200 }} placeholder={isWork ? "새 과제 추가..." : "새 프로젝트 추가..."} value={np} onChange={e => setNp(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter" && np.trim()) { onAddProj(np.trim()); setNp(""); }}} />
-        <button style={S.gh} onClick={() => { if (np.trim()) { onAddProj(np.trim()); setNp(""); }}}>+ 과제 추가</button>
+        <button style={S.gh} onClick={() => { if (np.trim()) { onAddProj(np.trim()); setNp(""); }}}>+ {isWork ? "과제" : "프로젝트"} 추가</button>
       </div>
     </div>
   );
@@ -1137,7 +1167,7 @@ const HistRow = ({ item, date, idx, onRestore }) => {
       {item.detail && <span style={{ fontSize: 10, color: "#8B5CF6" }}>{item.detail}</span>}
       {item.subCount > 0 && <span style={{ fontSize: 10, color: "#9ca3af" }}>+{item.subCount} sub</span>}
       {item.time && <span style={{ fontSize: 10, color: "#c0c0c0", flexShrink: 0 }}>{item.time}</span>}
-      {h && item.type === "done" && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
+      {h && item.type === "done" && !item.routineKey && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
     </div>
   );
 };
@@ -1208,13 +1238,33 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
 };
 
 /* ═══ 회고 (통합) — 업무: 마커별(보기+파일) / 개인: 루틴·프로젝트별(보기+입력+파일). 완료=history ═══ */
-const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit }) => {
+const RecapDoneRow = ({ e, onSaveRecap }) => {
+  const [draft, setDraft] = useState(e.recap || "");
+  useEffect(() => { setDraft(e.recap || ""); }, [e.recap, e.key]);
+  return (
+    <div style={{ display: "flex", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
+      <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0, marginTop: 2 }}>{(e.date || "").slice(5)}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ color: "#6b7280" }}>{e.text} {e.proj && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{e.proj}</span>}</div>
+        {e.notes && <div style={S.note}>{e.notes}</div>}
+        {e.origId
+          ? <textarea value={draft} onChange={ev => setDraft(ev.target.value)}
+              onBlur={() => { if (draft !== (e.recap || "")) onSaveRecap(e.date, e.origId, draft); }}
+              placeholder="🪞 회고 (근거·결과·다음 액션)" rows={2}
+              style={{ ...S.ta, minHeight: 0, fontSize: 12, marginTop: 4, background: "#FAF5FF", borderColor: "#E9D5FF" }} />
+          : (e.recap ? <div style={{ ...S.note, color: "#7C3AED" }}>🪞 {e.recap}</div> : null)}
+      </div>
+    </div>
+  );
+};
+const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, onUpdateHistRecap }) => {
   const targets = isWork
     ? MARKERS.map(([k, ic]) => ({ kind: "marker", key: k, label: ic + " " + k }))
-    : [...SD_ROUTINES.map(r => ({ kind: "routine", key: r, label: "📔 " + r })),
-       ...(projects || []).map(p => ({ kind: "project", key: p.id, label: "📁 " + p.name }))];
+    : [...SD_ROUTINES.map(r => ({ kind: "routine", key: r, label: r })),
+       ...(projects || []).filter(p => !isBucketProj(p)).map(p => ({ kind: "project", key: p.id, label: p.name }))];
   const [selKey, setSelKey] = useState(targets[0] ? targets[0].kind + ":" + targets[0].key : "");
   const cur = targets.find(t => (t.kind + ":" + t.key) === selKey) || targets[0] || { kind: "none", key: "", label: "" };
+  const recapKey = cur.kind + ":" + cur.key;
   const pname = (id) => projects.find(p => p.id === id)?.name || "";
   const [logsAll, setLogsAll] = useState({});
   const [notes, setNotes] = useState({});
@@ -1233,14 +1283,14 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit }
     (history || []).forEach(day => (day.items || []).forEach(it => {
       if (it.type !== "done" || !it.orig) return;
       const ok = cur.kind === "marker" ? (it.orig.marks || []).includes(cur.key) : cur.kind === "project" ? it.orig.project === cur.key : false;
-      if (ok) out.push({ key: (it.orig.id || it.text) + day.date, text: it.text, notes: it.orig.notes, proj: it.projectName || pname(it.orig.project), date: day.date });
+      if (ok) out.push({ key: (it.orig.id || it.text) + day.date, origId: it.orig.id, text: it.text, notes: it.orig.notes, recap: it.orig.recap || "", proj: it.projectName || pname(it.orig.project), date: day.date });
     }));
     return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   }, [history, cur.kind, cur.key]);
   const routineEntries = useMemo(() => {
     if (cur.kind !== "routine") return [];
     const out = [];
-    Object.entries(logsAll).forEach(([date, day]) => { const r = day && day[cur.key]; if (r && r.memo) out.push({ key: "l" + date, date, text: r.memo, src: r.tier ? ("tier=" + r.tier + (r.done ? "·done" : "")) : "" }); });
+    Object.entries(logsAll).forEach(([date, day]) => { const r = day && day[cur.key]; if (r && (r.memo || r.done || r.tier)) out.push({ key: "l" + date, date, text: r.memo || (r.done ? "✓ 완료" : "기록"), src: [r.done ? "done" : "", r.tier ? "tier=" + r.tier : ""].filter(Boolean).join("·") }); });
     Object.entries(notes).forEach(([id, n]) => { if (n && n.routine === cur.key) out.push({ key: "n" + id, date: n.date || "", text: n.text, src: "노트" }); });
     return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   }, [logsAll, notes, cur.kind, cur.key]);
@@ -1255,18 +1305,24 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit }
   };
   const inRef = useRef(); const [uploading, setUploading] = useState(0);
   const canUpload = FB_CONFIGURED && !!fbUser();
-  const pickFile = async (e) => { const file = e.target.files?.[0]; e.target.value = ""; if (!file) return; setUploading(1);
-    try { const att = await uploadFile(file, p => setUploading(Math.max(1, p))); setFiles(prev => [...prev, att]); } catch (ex) { setErr((ex && ex.message) || String(ex)); } setUploading(0); };
+  const scopedFiles = (files || []).filter(a => (a.recapKey || "") === recapKey);
+  const pickFile = async (e) => { const file = e.target.files?.[0]; e.target.value = ""; if (!file || cur.kind === "none") return; setUploading(1);
+    try { const att = await uploadFile(file, p => setUploading(Math.max(1, p))); setFiles(prev => [...prev, { ...att, recapKey }]); } catch (ex) { setErr((ex && ex.message) || String(ex)); } setUploading(0); };
+  const delFile = (a) => { if (!window.confirm('"' + a.name + '" 파일을 삭제할까요?')) return; deleteStoredFile(a); setFiles(prev => prev.filter(x => x.id !== a.id)); };
 
   return (
     <div style={{ marginTop: 12 }}>
       <div style={{ display: "flex", gap: 4, marginBottom: 10, flexWrap: "wrap" }}>
-        {targets.map(t => { const k = t.kind + ":" + t.key; const on = k === (cur.kind + ":" + cur.key); return (
+        {targets.map(t => { const k = t.kind + ":" + t.key; const on = k === (cur.kind + ":" + cur.key);
+          const pal = t.kind === "routine" ? { bg: "#EDE9FE", fg: "#6D28D9", bd: "#C4B5FD", dot: "#8B5CF6" }
+                    : t.kind === "project" ? { bg: "#ECFDF5", fg: "#047857", bd: "#6EE7B7", dot: "#10B981" }
+                    : { bg: "#EFF6FF", fg: "#1D4ED8", bd: "#93C5FD", dot: "#3B82F6" };
+          return (
           <button key={k} onClick={() => setSelKey(k)}
-            style={{ ...S.gh, fontSize: 12, background: on ? "#EFF6FF" : "#fff", color: on ? "#1D4ED8" : "#6b7280", borderColor: on ? "#93C5FD" : "#e5e7eb", fontWeight: on ? 700 : 400 }}>{t.label}</button>
+            style={{ ...S.gh, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5, background: on ? pal.bg : "#fff", color: on ? pal.fg : "#6b7280", borderColor: on ? pal.bd : "#e5e7eb", fontWeight: on ? 700 : 400 }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: pal.dot, flexShrink: 0 }} />{t.label}</button>
         ); })}
       </div>
-      {isWork && cur.key === "예측" && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", borderRadius: 6, padding: "5px 9px", marginBottom: 8 }}>🎯 해소일에 task 완료 시 아래 '완료·해소'로 내려가 회고에 남습니다(근거·reality·action).</div>}
 
       {cur.kind !== "routine" && <div style={S.card}>
         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>진행중 ({active.length})</div>
@@ -1274,7 +1330,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit }
         {active.map(t => { const dl = t.scheduledDate ? deadlineInfo(t.scheduledDate) : null; return (
           <div key={t.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
             {dl && <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>}
-            <div style={{ flex: 1, minWidth: 0 }}><div>{t.text} {(t.marks || []).map(mk => { const m = MARKERS.find(x => x[0] === mk); return m ? <span key={mk}>{m[1]}</span> : null; })} {isWork && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{pname(t.project)}</span>}</div>{t.notes && <div style={S.note}>{t.notes}</div>}</div>
+            <div style={{ flex: 1, minWidth: 0 }}><div>{t.text} {(t.marks || []).map(mk => { const m = MARKERS.find(x => x[0] === mk); return m ? <span key={mk}>{m[1]}</span> : null; })} {isWork && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{pname(t.project)}</span>}</div>{t.notes && <div style={S.note}>{t.notes}</div>}{t.recap && <div style={{ ...S.note, color: "#7C3AED" }}>🪞 {t.recap}</div>}</div>
             <button style={{ ...S.gh, fontSize: 10 }} onClick={() => onEdit(t)}>✏️</button>
           </div>); })}
       </div>}
@@ -1288,14 +1344,11 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit }
         </div>)}
       </div>}
 
-      <div style={S.card}>
+      {cur.kind !== "routine" && <div style={S.card}>
         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>완료·해소 ({doneHist.length})</div>
         {doneHist.length === 0 && <div style={{ ...S.emp, padding: 12 }}>완료 기록 없음 (task 완료 시 모임)</div>}
-        {doneHist.map(e => <div key={e.key} style={{ display: "flex", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
-          <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0, marginTop: 2 }}>{(e.date || "").slice(5)}</span>
-          <div style={{ flex: 1, minWidth: 0 }}><div style={{ color: "#6b7280" }}>{e.text} {e.proj && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{e.proj}</span>}</div>{e.notes && <div style={S.note}>{e.notes}</div>}</div>
-        </div>)}
-      </div>
+        {doneHist.map(e => <RecapDoneRow key={e.key} e={e} onSaveRecap={onUpdateHistRecap} />)}
+      </div>}
 
       {!isWork && cur.kind !== "none" && <div style={S.card}>
         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>✍️ 회고 입력 — {cur.label}</div>
@@ -1306,50 +1359,65 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit }
         </div>
       </div>}
 
-      <div style={S.card}>
+      {cur.kind !== "none" && <div style={S.card}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontSize: 12, fontWeight: 600 }}>📎 파일 ({files.length}) <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 400 }}>회고 첨부(녹음 등)</span></div>
+          <div style={{ fontSize: 12, fontWeight: 600 }}>📎 파일 ({scopedFiles.length}) <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 400 }}>{cur.label} 회고 첨부</span></div>
           {canUpload ? <div><input ref={inRef} type="file" style={{ display: "none" }} onChange={pickFile} />{uploading > 0 ? <span style={{ fontSize: 12, color: "#F59E0B" }}>⬆️ {uploading}%</span> : <button style={{ ...S.gh, fontSize: 11 }} onClick={() => inRef.current?.click()}>+ 파일</button>}</div> : <span style={{ fontSize: 11, color: "#9ca3af" }}>로그인 후</span>}
         </div>
-        {files.slice(-8).reverse().map(a => <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "3px 0" }}>
-          <a href="#" onClick={(e) => { e.preventDefault(); downloadAttachment(a); }} style={{ color: "#3B82F6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📎 {a.name}</a>
+        {scopedFiles.length === 0 && <div style={{ ...S.emp, padding: 10, fontSize: 11 }}>이 회고에 첨부된 파일 없음</div>}
+        {scopedFiles.slice().reverse().map(a => <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "3px 0" }}>
+          <a href="#" onClick={(ev) => { ev.preventDefault(); downloadAttachment(a); }} style={{ color: "#3B82F6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📎 {a.name}</a>
           <span style={{ color: "#9ca3af", fontSize: 10 }}>{fmtSize(a.size)}</span>
+          <button style={{ ...S.gh, fontSize: 9, color: "#EF4444", padding: "1px 5px" }} onClick={() => delFile(a)}>✕</button>
         </div>)}
-      </div>
+      </div>}
       {err && <div style={{ fontSize: 11, color: "#EF4444" }}>{err}</div>}
     </div>
   );
 };
 
 /* ═══ S4b: 개인 오늘탭 상단 루틴 고정 체크 (힌트 없음, /selfdev/logs 기록 — 기존과 동일) ═══ */
-const RoutineSection = () => {
+const RoutineSection = ({ onRoutineLog }) => {
+  const [date, setDate] = useState(TODAY);
   const [plan, setPlan] = useState(null);
   const [logs, setLogs] = useState({});
   const [memoDraft, setMemoDraft] = useState({});
   const [err, setErr] = useState("");
+  const isToday = date === TODAY;
   const load = async () => {
     if (!fbUser()) return;
-    try { setErr(""); const [p, l] = await Promise.all([sdFetch("/today"), sdFetch("/logs/" + TODAY)]); setPlan(p); setLogs(l || {}); }
-    catch (e) { setErr((e && e.message) || String(e)); }
+    try { setErr("");
+      const [p, l] = await Promise.all([isToday ? sdFetch("/today") : Promise.resolve(null), sdFetch("/logs/" + date)]);
+      setPlan(p); setLogs(l || {}); setMemoDraft({});
+    } catch (e) { setErr((e && e.message) || String(e)); }
   };
-  useEffect(() => { load(); }, []); /* eslint-disable-line */
-  const items = (plan && plan.date === TODAY && Array.isArray(plan.items) && plan.items.length) ? plan.items : sdToday();
+  useEffect(() => { load(); }, [date]); /* eslint-disable-line */
+  const items = (isToday && plan && plan.date === TODAY && Array.isArray(plan.items) && plan.items.length) ? plan.items : sdToday();
   const doneCnt = items.filter(it => (logs[it.key] || {}).done).length;
+  const labelOf = (key) => (items.find(it => it.key === key) || {}).label || key;
   const saveLog = async (key, patch) => {
     const cur = logs[key] || {};
     const next = { ...cur, ...patch, ts: new Date().toISOString(), synced: false };
     setLogs(p => ({ ...p, [key]: next }));
-    try { await sdFetch("/logs/" + TODAY + "/" + encodeURIComponent(key), { method: "PUT", body: JSON.stringify(next) }); }
+    if (patch.done !== undefined && onRoutineLog) onRoutineLog(date, key, labelOf(key), patch.done);
+    try { await sdFetch("/logs/" + date + "/" + encodeURIComponent(key), { method: "PUT", body: JSON.stringify(next) }); }
     catch (e) { setErr("저장 실패: " + ((e && e.message) || e)); }
   };
   const TierChip = ({ k, cur, t }) => (
-    <button onClick={() => saveLog(k, { tier: t })}
+    <button onClick={() => saveLog(k, { tier: cur === t ? "" : t })}
       style={{ ...S.gh, fontSize: 10, padding: "2px 7px", background: cur === t ? "#EEF2FF" : "#fff", color: cur === t ? "#4338CA" : "#9ca3af", borderColor: cur === t ? "#A5B4FC" : "#e5e7eb", fontWeight: cur === t ? 700 : 400 }}>{t}</button>
   );
   return (
     <div style={{ ...S.card, marginTop: 12, marginBottom: 8 }}>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>📔 오늘 루틴 — {fd(TODAY)} <span style={{ fontSize: 11, color: doneCnt === items.length ? "#10B981" : "#9ca3af", fontWeight: 600 }}>{doneCnt}/{items.length} ✓</span></div>
-      {plan && plan.date === TODAY && plan.note && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", borderRadius: 6, padding: "5px 9px", marginBottom: 7 }}>{plan.note}</div>}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4, flexWrap: "wrap", gap: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>📔 {isToday ? "오늘" : "지난"} 루틴 — {fd(date)} <span style={{ fontSize: 11, color: doneCnt === items.length ? "#10B981" : "#9ca3af", fontWeight: 600 }}>{doneCnt}/{items.length} ✓</span></div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <input type="date" max={TODAY} value={date} onChange={e => setDate(e.target.value || TODAY)} style={{ ...S.fld, fontSize: 11, padding: "2px 6px", width: 140 }} />
+          {!isToday && <button style={{ ...S.gh, fontSize: 10 }} onClick={() => setDate(TODAY)}>오늘</button>}
+        </div>
+      </div>
+      {isToday && plan && plan.date === TODAY && plan.note && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", borderRadius: 6, padding: "5px 9px", marginBottom: 7 }}>{plan.note}</div>}
+      {!isToday && <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 6 }}>지난 날짜 기록 모드 — 체크/tier/메모가 그 날짜로 저장됩니다(다음 브리핑이 일지로 수거).</div>}
       {items.map(it => {
         const lg = logs[it.key] || {};
         return (
@@ -1366,7 +1434,7 @@ const RoutineSection = () => {
           </div>
         );
       })}
-      {plan && plan.date === TODAY && Array.isArray(plan.projects) && plan.projects.length > 0 &&
+      {isToday && plan && plan.date === TODAY && Array.isArray(plan.projects) && plan.projects.length > 0 &&
         <div style={{ fontSize: 11, color: "#6b7280", marginTop: 6 }}>🚧 진행중: {plan.projects.map(p => p.name).filter(Boolean).join(" · ")}</div>}
       {err && <div style={{ fontSize: 11, color: "#EF4444", marginTop: 4 }}>{err}</div>}
     </div>
@@ -1542,6 +1610,23 @@ function App({ onSwitchWs }) {
   const removeHistItem = (matchFn) => {
     setHistory(prev => prev.map(h => h.date === TODAY ? { ...h, items: h.items.filter(it => !matchFn(it)) } : h).filter(h => h.items.length > 0));
   };
+  /* 루틴 체크 → 히스토리 기록(해당 날짜). done=false면 그 날짜의 해당 루틴 항목 제거 (#6/#7) */
+  const setRoutineHist = (date, key, label, done) => {
+    setHistory(prev => {
+      let next = prev.map(h => h.date === date ? { ...h, items: h.items.filter(it => it.routineKey !== key) } : h);
+      if (done) {
+        const item = { type: "done", text: (label || key) + " 루틴", projectName: "📔 루틴", routineKey: key, time: nowTime() };
+        const ex = next.find(h => h.date === date);
+        if (ex) next = next.map(h => h.date === date ? { ...h, items: [...h.items, item] } : h);
+        else next = [...next, { date, items: [item] }];
+      }
+      return next.filter(h => h.items.length > 0);
+    });
+  };
+  /* 완료/해소된 task의 회고를 히스토리 orig.recap에 기록 (#11) */
+  const updateHistRecap = (date, origId, recap) => {
+    setHistory(prev => prev.map(h => h.date === date ? { ...h, items: h.items.map(it => (it.orig && it.orig.id === origId) ? { ...it, orig: { ...it.orig, recap } } : it) } : h));
+  };
 
   const addTask = ({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => {
     const proj = projects.find(p => p.id === project);
@@ -1653,8 +1738,16 @@ function App({ onSwitchWs }) {
 
   const addProj = (name) => {
     const id = "p_" + gid();
-    setProjects(p => [...p, { id, name, order: p.length }]);
+    setProjects(p => [...p, { id, name, order: p.length, kind: "project" }]);
     setProjectInfo(prev => ({ ...prev, [id]: EMPTY_INFO() }));
+  };
+  const editProj = (id, name) => setProjects(p => p.map(pr => pr.id === id ? { ...pr, name } : pr));
+  const delProj = (id) => {
+    tasks.filter(t => t.project === id).forEach(t => { if (t.calEventId) calSync("delete", { eventId: t.calEventId }); });
+    setProjects(p => p.filter(pr => pr.id !== id));
+    setTasks(p => p.filter(t => t.project !== id));
+    setProjectInfo(prev => { const n = { ...prev }; delete n[id]; return n; });
+    setMemos(prev => { const n = { ...prev }; delete n[id]; return n; });
   };
 
   const exportData = () => {
@@ -1729,9 +1822,9 @@ function App({ onSwitchWs }) {
         {TABS_BY_WS[WS.key].map(t => <button key={t.id} style={S.tab(tab === t.id)} onClick={() => setTab(t.id)}>{t.icon} {t.label}</button>)}
       </div>
       <div style={{ marginTop: 8 }}>
-        {tab === "today" && <>{!isWork && <RoutineSection />}<TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
-        {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} issues={issues} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onUpdate={updateTask} onReorder={reorderTask} />}
-        {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} />}
+        {tab === "today" && <>{!isWork && <RoutineSection onRoutineLog={setRoutineHist} />}<TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
+        {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} issues={issues} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
+        {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecap={updateHistRecap} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} />}
       </div>
