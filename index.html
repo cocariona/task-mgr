@@ -245,6 +245,8 @@ const calMakeParams = (task, projects) => {
   const desc = [proj ? `#${proj.name}` : '', task.notes || ''].filter(Boolean).join('\n');
   return { title: WS.calPrefix + task.text, date, desc };
 };
+/* 서브태스크 캘린더 객체 — 제목=서브 task(sub.text) 기준, 메모 맨 앞에 부모 task명(↳ 부모명) */
+const subCalObj = (sub, parent) => ({ ...sub, project: parent ? parent.project : sub.project, notes: "↳ " + (parent ? parent.text : "") + (sub.notes ? "\n" + sub.notes : "") });
 /* 수동 버튼용: 기존 이벤트 있으면 update, 없으면 add */
 const addToCalendar = (task, projects, onResult) => {
   const p = calMakeParams(task, projects);
@@ -1683,7 +1685,16 @@ function App({ onSwitchWs }) {
     }
     setTasks(p => p.map(t => t.id === id ? { ...t, focus: !t.focus } : t));
   };
-  const updateTask = (updated) => setTasks(p => p.map(t => t.id === updated.id ? updated : t));
+  const updateTask = (updated) => {
+    const cur = tasks.find(t => t.id === updated.id);
+    setTasks(p => p.map(t => t.id === updated.id ? updated : t));
+    /* 새로 추가된(날짜 있는) 서브태스크 즉시 캘린더 동기화 — task와 동일 (Q3) */
+    if (cur) { const prevIds = new Set((cur.subtasks || []).map(s => s.id));
+      (updated.subtasks || []).forEach(s => { if (!prevIds.has(s.id) && (s.planDate || s.scheduledDate) && !s.calEventId) {
+        const cp = calMakeParams(subCalObj(s, updated), projects);
+        if (cp) calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(t => t.id === updated.id ? { ...t, subtasks: (t.subtasks || []).map(y => y.id === s.id ? { ...y, calEventId: r.eventId } : y) } : t)); });
+      } }); }
+  };
 
   const handleEdit = (taskOrSub, parentId) => setEditTarget({ task: taskOrSub, parentId: parentId || null });
   const handleEditSave = (updated) => {
@@ -1695,7 +1706,7 @@ function App({ onSwitchWs }) {
       const par = tasks.find(t => t.id === editTarget.parentId);
       const subWrite = (eid) => setTasks(p => p.map(t => t.id === editTarget.parentId ? { ...t, subtasks: (t.subtasks || []).map(s => s.id === updated.id ? { ...s, calEventId: eid } : s) } : t));
       const subDate = updated.planDate || updated.scheduledDate;
-      const cp = subDate ? calMakeParams({ ...updated, project: par?.project }, projects) : null;
+      const cp = subDate ? calMakeParams(subCalObj(updated, par), projects) : null;
       if (cp && updated.calEventId) calSync("update", { ...cp, eventId: updated.calEventId }).then(r => { if (r?.eventId && r.eventId !== updated.calEventId) subWrite(r.eventId); });
       else if (cp) calSync("add", cp).then(r => { if (r?.eventId) subWrite(r.eventId); });
       else if (!subDate && updated.calEventId) { calSync("delete", { eventId: updated.calEventId }); subWrite(""); }
@@ -1836,7 +1847,7 @@ function App({ onSwitchWs }) {
     showT(`📅 ${items.length}건 캘린더 등록 중...`, null);
     let ok = 0;
     for (const it of items) {
-      const cp = it.kind === "task" ? calMakeParams(it.t, projects) : calMakeParams({ ...it.s, project: it.t.project }, projects);
+      const cp = it.kind === "task" ? calMakeParams(it.t, projects) : calMakeParams(subCalObj(it.s, it.t), projects);
       if (!cp) continue;
       const r = await calSync("add", cp);
       if (r?.eventId) {
