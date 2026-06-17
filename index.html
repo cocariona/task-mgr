@@ -6,7 +6,8 @@
   <title>Task Manager - GTD 과제관리</title>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script><!-- @7 고정(2026-06-17): 비고정 CDN이 v8로 자동승급 → v8 React preset이 automatic JSX runtime(import 방출)이라 UMD(비-module) 스크립트서 전체 백지. v7=classic(React.createElement)로 정상. -->
+
   <!-- Firebase (Auth 로그인). compat 빌드 = 빌드툴 없이 전역 firebase 사용.
        파일 저장은 Storage 대신 RTDB(/files, base64) — Storage는 신규 프로젝트에서 유료플랜 필수라 미사용 -->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
