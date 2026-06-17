@@ -470,7 +470,7 @@ const StSel = ({ value, onChange, compact }) => (
   </select>
 );
 /* 드롭다운 정렬: 프로젝트 → 그 외(버킷) → 기타(petc) 맨끝. 업무(kind 없음)는 전부 동일군 → 원순서 유지(안정정렬) */
-const projSortKey = (p) => (p && p.kind === "project") ? 0 : (p && p.id === "petc") ? 2 : 1;
+const projSortKey = (p) => (p && p.kind === "project") ? 0 : (p && (p.id === "petc" || p.id === "proj_etc")) ? 2 : 1;
 const sortProjsForSelect = (projects) => [...(projects || [])].sort((a, b) => projSortKey(a) - projSortKey(b));
 const PrSel = ({ value, onChange, projects }) => (
   <select style={S.sel} value={value} onChange={e => onChange(e.target.value)}>
@@ -710,7 +710,7 @@ const AttachmentSection = ({ attachments, onChange, deferred, onBusy }) => {
 
 /* ─── EditModal (task + subtask 공용) ─── */
 const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
-  const [f, setF] = useState({ ...task });
+  const [f, setF] = useState({ attachments: [], marks: [], recap: "", ...task });
   const u = (k, v) => setF(p => ({ ...p, [k]: v }));
   const pendingUploads = useRef([]); const pendingDeletes = useRef([]);
   const [attBusy, setAttBusy] = useState(false);
@@ -746,7 +746,7 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
               {f.scheduledDate && <button style={{ ...S.gh, fontSize: 10, color: "#EF4444" }} onClick={() => { u("scheduledDate", ""); u("scheduledLabel", ""); }}>✕</button>}
             </div>
           </div>
-          {!isSubtask && isWork && <div>
+          {isWork && <div>
             <div style={S.lbl}>채널 마커 (🧠 지식 · 🎯 예측 · ✍️ 외화)</div>
             <div style={{ display: "flex", gap: 6 }}>
               {MARKERS.map(([k, i]) => { const on = (f.marks || []).includes(k); return (
@@ -755,7 +755,7 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
               ); })}
             </div>
           </div>}
-          {!isSubtask && <AttachmentSection attachments={f.attachments} onChange={v => u("attachments", v)} deferred={{ uploads: pendingUploads, deletes: pendingDeletes }} onBusy={setAttBusy} />}
+          <AttachmentSection attachments={f.attachments || []} onChange={v => u("attachments", v)} deferred={{ uploads: pendingUploads, deletes: pendingDeletes }} onBusy={setAttBusy} />
           <div><div style={S.lbl}>메모 / 맥락</div><textarea style={S.ta} rows={3} value={f.notes || ""} onChange={e => u("notes", e.target.value)} /></div>
           <div><div style={{ ...S.lbl, color: "#7C3AED", fontWeight: 600 }}>🪞 회고 (메모와 별개 — 완료·예측 결과)</div><textarea style={{ ...S.ta, background: "#FAF5FF" }} rows={3} placeholder="이 task의 회고(근거·결과·다음 액션 등). 회고 탭에 모입니다." value={f.recap || ""} onChange={e => u("recap", e.target.value)} /></div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
