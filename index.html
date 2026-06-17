@@ -469,9 +469,12 @@ const StSel = ({ value, onChange, compact }) => (
     {SK.map(k => <option key={k} value={k}>{STATUSES[k].label}</option>)}
   </select>
 );
+/* 드롭다운 정렬: 프로젝트 → 그 외(버킷) → 기타(petc) 맨끝. 업무(kind 없음)는 전부 동일군 → 원순서 유지(안정정렬) */
+const projSortKey = (p) => (p && p.kind === "project") ? 0 : (p && p.id === "petc") ? 2 : 1;
+const sortProjsForSelect = (projects) => [...(projects || [])].sort((a, b) => projSortKey(a) - projSortKey(b));
 const PrSel = ({ value, onChange, projects }) => (
   <select style={S.sel} value={value} onChange={e => onChange(e.target.value)}>
-    {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+    {sortProjsForSelect(projects).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
   </select>
 );
 const StarBtn = ({ on, onClick }) => (
@@ -502,7 +505,7 @@ const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
           {sub.notes && <span onClick={(e) => { e.stopPropagation(); setShowNotes(!showNotes); }} style={{ cursor: "pointer", fontSize: 9, color: showNotes ? "#8B5CF6" : "#c4b5fd", background: showNotes ? "#F3E8FF" : "transparent", padding: "1px 3px", borderRadius: 4, userSelect: "none" }}>📝</span>}
         </div>
         <div style={{ ...S.txt, fontSize: 12.5, textDecoration: isDone ? "line-through" : "none", color: isDone ? "#9ca3af" : "#1a1a1a" }}>{sub.text}</div>
-        {sub.notes && showNotes && <div style={{ ...S.note, fontSize: 11 }}>{sub.notes}</div>}
+        {sub.notes && showNotes && <div style={{ marginTop: 3, fontSize: 11, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 5, padding: "3px 7px", color: "#92400E", whiteSpace: "pre-wrap" }}><span style={{ fontSize: 8, fontWeight: 700, opacity: 0.65, marginRight: 5 }}>📝</span>{sub.notes}</div>}
       </div>
       {h && <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
         <button style={{ ...S.gh, fontSize: 10 }} onClick={onEdit}>✏️</button>
@@ -514,14 +517,16 @@ const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
 
 /* ─── SubAddForm (서브태스크 추가) ─── */
 const SubAddForm = ({ onAdd, onCancel }) => {
-  const [t, setT] = useState(""); const [s, setS] = useState("action"); const [sd, setSd] = useState(""); const [pd, setPd] = useState(TODAY); const r = useRef();
+  const [t, setT] = useState(""); const [s, setS] = useState("action"); const [sd, setSd] = useState(""); const [pd, setPd] = useState(TODAY); const [f, setF] = useState(false); const r = useRef();
   useEffect(() => { r.current?.focus(); }, []);
-  const go = () => { if (!t.trim()) return; onAdd({ text: t.trim(), status: s, focus: false, scheduledDate: sd, scheduledLabel: "", planDate: pd }); };
+  const go = () => { if (!t.trim()) return; onAdd({ text: t.trim(), status: s, focus: f, scheduledDate: sd, scheduledLabel: "", planDate: pd }); };
   return (
     <div className="form-row" style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap", padding: "4px 0" }}>
+      <StarBtn on={f} onClick={() => setF(!f)} />
       <input ref={r} style={{ ...S.inp, fontSize: 12 }} placeholder="하위 할일..." value={t} onChange={e => setT(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} />
       <StSel value={s} onChange={setS} compact />
-      <input type="date" style={{ ...S.fld, width: 120, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} title="📆 언제할지 (선택)" />
+      <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>📆</span><input type="date" style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} title="📆 언제할지 (선택)" /></div>
+      <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span><input type="date" style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={sd} onChange={e => setSd(e.target.value)} title="마감일 (선택)" /></div>
       <button style={S.btn()} onClick={go}>추가</button>
       <button style={S.gh} onClick={onCancel}>취소</button>
     </div>
@@ -540,7 +545,8 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
 
   const handleAddSub = ({ text, status, focus, scheduledDate, scheduledLabel, planDate }) => {
     if (!onUpdate) return;
-    onUpdate({ ...task, subtasks: [...subs, { id: gid(), text, status, focus: focus || false, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: planDate || TODAY, notes: "", createdAt: TODAY }] });
+    const pd = planDate || TODAY;
+    onUpdate({ ...task, subtasks: [...subs, { id: gid(), text, status, focus: focus || pd === TODAY, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: pd, notes: "", createdAt: TODAY }] });
     setAddSub(false); setShowSubs(true);
   };
 
@@ -576,10 +582,10 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
             {task.calEventId && <span style={{ fontSize: 9, color: "#10B981", fontWeight: 600, background: "#ECFDF5", padding: "1px 4px", borderRadius: 4 }} title="캘린더 연동됨">📅✓</span>}
             {(task.attachments || []).length > 0 && <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "1px 4px", borderRadius: 4 }} title="첨부파일">📎{task.attachments.length}</span>}
             {(task.marks || []).map(mk => { const m = MARKERS.find(x => x[0] === mk); return m ? <span key={mk} title={"채널: " + mk} style={{ fontSize: 11 }}>{m[1]}</span> : null; })}
-            {task.notes && <span onClick={(e) => { e.stopPropagation(); setShowNotes(!showNotes); }} style={{ cursor: "pointer", fontSize: 10, color: showNotes ? "#8B5CF6" : "#c4b5fd", background: showNotes ? "#F3E8FF" : "transparent", padding: "1px 4px", borderRadius: 4, userSelect: "none" }}>📝</span>}
+            {task.notes && <span onClick={(e) => { e.stopPropagation(); setShowNotes(!showNotes); }} style={{ cursor: "pointer", fontSize: 10, color: showNotes ? "#92400E" : "#B45309", background: showNotes ? "#FEF3C7" : "#FFFBEB", border: "1px solid #FDE68A", padding: "1px 5px", borderRadius: 4, userSelect: "none" }}>📝 메모</span>}
           </div>
           <div style={S.txt}>{task.text}</div>
-          {task.notes && showNotes && <div style={S.note}>{task.notes}</div>}
+          {task.notes && showNotes && <div style={{ marginTop: 4, fontSize: 12, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "5px 9px", color: "#92400E", whiteSpace: "pre-wrap" }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.65, marginRight: 6 }}>📝 메모</span>{task.notes}</div>}
         </div>
         <div className="task-actions" style={{ display: h ? "flex" : "none", gap: 3, flexShrink: 0, alignItems: "center" }}>
           {(task.planDate || task.scheduledDate) && <button style={{ ...S.gh, fontSize: 10, padding: "2px 5px" }} onClick={() => addToCalendar(task, projects, (ok, msg, eventId) => { if(ok && eventId && onUpdate) onUpdate({...task, calEventId: eventId}); const el = document.getElementById("cal-toast"); if(el){el.textContent=ok?"✅ "+msg:"❌ "+msg;el.style.display="block";setTimeout(()=>el.style.display="none",2000);} })} title={task.calEventId ? "캘린더 동기화" : "캘린더에 추가"}>{task.calEventId ? "📅↻" : "📅+"}</button>}
@@ -768,6 +774,7 @@ const PlanDateSummary = ({ tasks, projects, onEdit }) => {
     const items = [];
     tasks.forEach(t => {
       if (t.status !== "done" && t.planDate) items.push(t);
+      (t.subtasks || []).forEach(s => { if (s.status !== "done" && s.planDate) items.push({ ...s, project: t.project, _parentId: t.id }); });
     });
     return items;
   }, [tasks]);
@@ -782,7 +789,8 @@ const PlanDateSummary = ({ tasks, projects, onEdit }) => {
         <Badge st={t.status} />
         <span style={{ color: "#374151", flex: 1 }}>{t.text}</span>
         {p && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{p.name}</span>}
-        <button style={{ ...S.gh, fontSize: 10, padding: "1px 5px" }} onClick={() => onEdit(t)}>✏️</button>
+        {t._parentId && <span style={{ fontSize: 9, color: "#9ca3af" }}>↳</span>}
+        <button style={{ ...S.gh, fontSize: 10, padding: "1px 5px" }} onClick={() => onEdit(t, t._parentId)}>✏️</button>
       </div>
     );
   };
@@ -936,6 +944,7 @@ const ProjectsView = ({ tasks, projects, issues, onDone, onDel, onFocus, onAdd, 
   const [np, setNp] = useState("");
   const [editId, setEditId] = useState(null);
   const [editName, setEditName] = useState("");
+  const [addKind, setAddKind] = useState("project");
   const tog = id => setOpen(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const dragHandlers = useDragReorder(onReorder);
   const isDefault = (id) => PERSONAL_PROJECTS.some(d => d.id === id);
@@ -989,10 +998,15 @@ const ProjectsView = ({ tasks, projects, issues, onDone, onDel, onFocus, onAdd, 
         <div style={{ fontSize: 11, fontWeight: 700, color: "#9ca3af", margin: "14px 0 6px" }}>🗂 그 외 (약속·집안일·기타)</div>
         {bucketProjs.map(renderProj)}
       </>}
-      <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 16, padding: "8px 0" }}>
-        <input style={{ ...S.inp, maxWidth: 200 }} placeholder={isWork ? "새 과제 추가..." : "새 프로젝트 추가..."} value={np} onChange={e => setNp(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && np.trim()) { onAddProj(np.trim()); setNp(""); }}} />
-        <button style={S.gh} onClick={() => { if (np.trim()) { onAddProj(np.trim()); setNp(""); }}}>+ {isWork ? "과제" : "프로젝트"} 추가</button>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 16, padding: "8px 0", flexWrap: "wrap" }}>
+        {!isWork && <div style={{ display: "flex", gap: 3 }}>
+          {[["project", "📂 프로젝트"], ["bucket", "🗂 그 외"]].map(([k, lbl]) => (
+            <button key={k} onClick={() => setAddKind(k)} style={{ ...S.gh, fontSize: 11, background: addKind === k ? "#EEF2FF" : "#fff", color: addKind === k ? "#4338CA" : "#9ca3af", borderColor: addKind === k ? "#A5B4FC" : "#e5e7eb", fontWeight: addKind === k ? 700 : 400 }}>{lbl}</button>
+          ))}
+        </div>}
+        <input style={{ ...S.inp, maxWidth: 200 }} placeholder={isWork ? "새 과제 추가..." : (addKind === "bucket" ? "새 '그 외' 항목 (예: 여행)..." : "새 프로젝트 추가...")} value={np} onChange={e => setNp(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && np.trim()) { onAddProj(np.trim(), isWork ? "project" : addKind); setNp(""); }}} />
+        <button style={S.gh} onClick={() => { if (np.trim()) { onAddProj(np.trim(), isWork ? "project" : addKind); setNp(""); }}}>+ 추가</button>
       </div>
     </div>
   );
@@ -1259,10 +1273,11 @@ const RecapDoneRow = ({ e, onSaveRecap }) => {
   );
 };
 const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, onUpdateHistRecap }) => {
-  const targets = isWork
+  const targets = (isWork
     ? MARKERS.map(([k, ic]) => ({ kind: "marker", key: k, label: ic + " " + k }))
     : [...SD_ROUTINES.map(r => ({ kind: "routine", key: r, label: r })),
-       ...(projects || []).filter(p => !isBucketProj(p)).map(p => ({ kind: "project", key: p.id, label: p.name }))];
+       ...(projects || []).filter(p => !isBucketProj(p)).map(p => ({ kind: "project", key: p.id, label: p.name }))])
+    .concat([{ kind: "alldone", key: "all", label: "완료" }]);
   const [selKey, setSelKey] = useState(targets[0] ? targets[0].kind + ":" + targets[0].key : "");
   const cur = targets.find(t => (t.kind + ":" + t.key) === selKey) || targets[0] || { kind: "none", key: "", label: "" };
   const recapKey = cur.kind + ":" + cur.key;
@@ -1283,7 +1298,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
     const out = [];
     (history || []).forEach(day => (day.items || []).forEach(it => {
       if (it.type !== "done" || !it.orig) return;
-      const ok = cur.kind === "marker" ? (it.orig.marks || []).includes(cur.key) : cur.kind === "project" ? it.orig.project === cur.key : false;
+      const ok = cur.kind === "alldone" ? true : cur.kind === "marker" ? (it.orig.marks || []).includes(cur.key) : cur.kind === "project" ? it.orig.project === cur.key : false;
       if (ok) out.push({ key: (it.orig.id || it.text) + day.date, origId: it.orig.id, text: it.text, notes: it.orig.notes, recap: it.orig.recap || "", proj: it.projectName || pname(it.orig.project), date: day.date });
     }));
     return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
@@ -1317,6 +1332,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
         {targets.map(t => { const k = t.kind + ":" + t.key; const on = k === (cur.kind + ":" + cur.key);
           const pal = t.kind === "routine" ? { bg: "#EDE9FE", fg: "#6D28D9", bd: "#C4B5FD", dot: "#8B5CF6" }
                     : t.kind === "project" ? { bg: "#ECFDF5", fg: "#047857", bd: "#6EE7B7", dot: "#10B981" }
+                    : t.kind === "alldone" ? { bg: "#F0FDF4", fg: "#15803D", bd: "#86EFAC", dot: "#22C55E" }
                     : { bg: "#EFF6FF", fg: "#1D4ED8", bd: "#93C5FD", dot: "#3B82F6" };
           return (
           <button key={k} onClick={() => setSelKey(k)}
@@ -1325,7 +1341,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
         ); })}
       </div>
 
-      {cur.kind !== "routine" && <div style={S.card}>
+      {(cur.kind === "marker" || cur.kind === "project") && <div style={S.card}>
         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>진행중 ({active.length})</div>
         {active.length === 0 && <div style={{ ...S.emp, padding: 12 }}>없음</div>}
         {active.map(t => { const dl = t.scheduledDate ? deadlineInfo(t.scheduledDate) : null; return (
@@ -1351,7 +1367,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
         {doneHist.map(e => <RecapDoneRow key={e.key} e={e} onSaveRecap={onUpdateHistRecap} />)}
       </div>}
 
-      {!isWork && cur.kind !== "none" && <div style={S.card}>
+      {!isWork && (cur.kind === "routine" || cur.kind === "project") && <div style={S.card}>
         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>✍️ 회고 입력 — {cur.label}</div>
         <textarea style={{ ...S.ta, minHeight: 70 }} placeholder={cur.kind === "routine" ? "이 루틴 회고/노트(문제점·해결법 등)" : "이 프로젝트 회고·다음 액션"} value={txt} onChange={e => setTxt(e.target.value)} />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
@@ -1360,7 +1376,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
         </div>
       </div>}
 
-      {cur.kind !== "none" && <div style={S.card}>
+      {cur.kind !== "none" && cur.kind !== "alldone" && <div style={S.card}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ fontSize: 12, fontWeight: 600 }}>📎 파일 ({scopedFiles.length}) <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 400 }}>{cur.label} 회고 첨부</span></div>
           {canUpload ? <div><input ref={inRef} type="file" style={{ display: "none" }} onChange={pickFile} />{uploading > 0 ? <span style={{ fontSize: 12, color: "#F59E0B" }}>⬆️ {uploading}%</span> : <button style={{ ...S.gh, fontSize: 11 }} onClick={() => inRef.current?.click()}>+ 파일</button>}</div> : <span style={{ fontSize: 11, color: "#9ca3af" }}>로그인 후</span>}
@@ -1656,6 +1672,7 @@ function App({ onSwitchWs }) {
   const handleEditSave = (updated) => {
     if (!editTarget) return;
     if (editTarget.parentId) {
+      if (updated.planDate === TODAY && !updated.focus) updated = { ...updated, focus: true };
       setTasks(p => p.map(t => t.id === editTarget.parentId ? { ...t, subtasks: (t.subtasks || []).map(s => s.id === updated.id ? updated : s) } : t));
     } else {
       const prev = tasks.find(t => t.id === updated.id);
@@ -1737,9 +1754,9 @@ function App({ onSwitchWs }) {
     showT("할일로 복원됨", null);
   };
 
-  const addProj = (name) => {
-    const id = "p_" + gid();
-    setProjects(p => [...p, { id, name, order: p.length, kind: "project" }]);
+  const addProj = (name, kind = "project") => {
+    const id = (kind === "bucket" ? "b_" : "p_") + gid();
+    setProjects(p => [...p, { id, name, order: p.length, kind }]);
     setProjectInfo(prev => ({ ...prev, [id]: EMPTY_INFO() }));
   };
   const editProj = (id, name) => setProjects(p => p.map(pr => pr.id === id ? { ...pr, name } : pr));
@@ -1771,6 +1788,15 @@ function App({ onSwitchWs }) {
     } catch { showT("파일 형식 오류", null); } };
     r.readAsText(file); e.target.value = "";
   };
+
+  /* (#6) 로드 후 미연동(날짜 있고 calEventId 없는) task 자동 캘린더 등록 — 1회·있을 때만(없으면 조용히 skip) */
+  const autoCalDone = useRef(false);
+  useEffect(() => {
+    if (!cloudLoaded || autoCalDone.current) return;
+    autoCalDone.current = true;
+    const pending = tasks.filter(t => t.status !== "done" && (t.planDate || t.scheduledDate) && !t.calEventId);
+    if (pending.length) bulkCalSync();
+  }, [cloudLoaded]); /* eslint-disable-line */
 
   /* 캘린더 일괄 동기화: 날짜 있는 태스크 중 calEventId 없는 것 일괄 등록 */
   const bulkCalSync = async () => {
