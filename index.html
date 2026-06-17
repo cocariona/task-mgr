@@ -1253,22 +1253,44 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
 };
 
 /* ═══ 회고 (통합) — 업무: 마커별(보기+파일) / 개인: 루틴·프로젝트별(보기+입력+파일). 완료=history ═══ */
-const RecapDoneRow = ({ e, onSaveRecap }) => {
+/* 회고 첨부 — recapKey 단위로 파일 종속(업로드·목록·삭제). 회고 UI와 한 카드 안에. */
+const RecapFileBox = ({ recapKey, files, setFiles, canUpload }) => {
+  const inRef = useRef(); const [up, setUp] = useState(0); const [err, setErr] = useState("");
+  const mine = (files || []).filter(a => (a.recapKey || "") === recapKey);
+  const pick = async (e) => { const file = e.target.files?.[0]; e.target.value = ""; if (!file) return; setUp(1);
+    try { const att = await uploadFile(file, p => setUp(Math.max(1, p))); setFiles(prev => [...prev, { ...att, recapKey }]); } catch (ex) { setErr((ex && ex.message) || String(ex)); } setUp(0); };
+  const del = (a) => { if (!window.confirm('"' + a.name + '" 파일을 삭제할까요?')) return; deleteStoredFile(a); setFiles(prev => prev.filter(x => x.id !== a.id)); };
+  return (
+    <div style={{ marginTop: 5, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+      <span style={{ fontSize: 10, color: "#9ca3af" }}>📎</span>
+      {mine.map(a => <span key={a.id} style={{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 11, background: "#F3F4F6", borderRadius: 4, padding: "1px 5px" }}>
+        <a href="#" onClick={(ev) => { ev.preventDefault(); downloadAttachment(a); }} style={{ color: "#3B82F6", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</a>
+        <button style={{ ...S.gh, fontSize: 9, color: "#EF4444", padding: "0 2px", border: "none", background: "none" }} onClick={() => del(a)}>✕</button>
+      </span>)}
+      {canUpload ? (up > 0 ? <span style={{ fontSize: 11, color: "#F59E0B" }}>⬆️ {up}%</span> : <><input ref={inRef} type="file" style={{ display: "none" }} onChange={pick} /><button style={{ ...S.gh, fontSize: 10, padding: "1px 6px" }} onClick={() => inRef.current?.click()}>+ 파일</button></>) : <span style={{ fontSize: 10, color: "#9ca3af" }}>로그인 후 첨부</span>}
+      {err && <span style={{ fontSize: 10, color: "#EF4444" }}>{err}</span>}
+    </div>
+  );
+};
+/* 완료 회고 카드 — 회고 입력 + 그 완료건 전용 파일(task:<id>)이 한 곳에 */
+const RecapCompletionCard = ({ e, onSaveRecap, files, setFiles, canUpload }) => {
   const [draft, setDraft] = useState(e.recap || "");
   useEffect(() => { setDraft(e.recap || ""); }, [e.recap, e.key]);
   return (
-    <div style={{ display: "flex", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
-      <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0, marginTop: 2 }}>{(e.date || "").slice(5)}</span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ color: "#6b7280" }}>{e.text} {e.proj && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{e.proj}</span>}</div>
-        {e.notes && <div style={S.note}>{e.notes}</div>}
-        {e.origId
-          ? <textarea value={draft} onChange={ev => setDraft(ev.target.value)}
-              onBlur={() => { if (draft !== (e.recap || "")) onSaveRecap(e.date, e.origId, draft); }}
-              placeholder="🪞 회고 (근거·결과·다음 액션)" rows={2}
-              style={{ ...S.ta, minHeight: 0, fontSize: 12, marginTop: 4, background: "#FAF5FF", borderColor: "#E9D5FF" }} />
-          : (e.recap ? <div style={{ ...S.note, color: "#7C3AED" }}>🪞 {e.recap}</div> : null)}
+    <div style={{ ...S.card, padding: "8px 10px", marginBottom: 6, borderColor: e.recap ? "#eef0f2" : "#DDD6FE" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+        <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }}>{(e.date || "").slice(5)}</span>
+        <span style={{ flex: 1, fontSize: 13, color: "#374151" }}>{e.text} {e.proj && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{e.proj}</span>}</span>
+        {!e.recap && <span style={{ fontSize: 9, color: "#7C3AED", background: "#F3E8FF", borderRadius: 4, padding: "1px 5px", flexShrink: 0 }}>회고 대기</span>}
       </div>
+      {e.notes && <div style={{ ...S.note, marginLeft: 0 }}>{e.notes}</div>}
+      {e.origId
+        ? <textarea value={draft} onChange={ev => setDraft(ev.target.value)}
+            onBlur={() => { if (draft !== (e.recap || "")) onSaveRecap(e.date, e.origId, draft); }}
+            placeholder="🪞 회고 (근거·결과·다음 액션)" rows={2}
+            style={{ ...S.ta, minHeight: 0, fontSize: 12, marginTop: 4, background: "#FAF5FF", borderColor: "#E9D5FF" }} />
+        : (e.recap ? <div style={{ ...S.note, color: "#7C3AED", marginLeft: 0 }}>🪞 {e.recap}</div> : null)}
+      {e.origId && <RecapFileBox recapKey={"task:" + e.origId} files={files} setFiles={setFiles} canUpload={canUpload} />}
     </div>
   );
 };
@@ -1286,6 +1308,8 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
   const [notes, setNotes] = useState({});
   const [txt, setTxt] = useState("");
   const [err, setErr] = useState("");
+  const [showAllDone, setShowAllDone] = useState(false);
+  useEffect(() => { setShowAllDone(false); }, [selKey]);
   useEffect(() => { (async () => {
     if (isWork || !fbUser()) return;
     try { const [l, n] = await Promise.all([sdFetch("/logs"), sdFetch("/notes")]); setLogsAll(l || {}); setNotes(n || {}); }
@@ -1301,8 +1325,15 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
       const ok = cur.kind === "alldone" ? true : cur.kind === "marker" ? (it.orig.marks || []).includes(cur.key) : cur.kind === "project" ? it.orig.project === cur.key : false;
       if (ok) out.push({ key: (it.orig.id || it.text) + day.date, origId: it.orig.id, text: it.text, notes: it.orig.notes, recap: it.orig.recap || "", proj: it.projectName || pname(it.orig.project), date: day.date });
     }));
-    return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    return out;
   }, [history, cur.kind, cur.key]);
+  /* 회고 대기(미작성) 먼저 → 최근순. 기본=미작성+최근2주만, 이전은 '더 보기'(무한 증가 방지) */
+  const doneView = useMemo(() => {
+    const cut = new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10);
+    const sorted = [...doneHist].sort((a, b) => { const ar = a.recap ? 1 : 0, br = b.recap ? 1 : 0; if (ar !== br) return ar - br; return (b.date || "").localeCompare(a.date || ""); });
+    const shown = showAllDone ? sorted : sorted.filter(e => !e.recap || (e.date || "") >= cut);
+    return { shown, hidden: sorted.length - shown.length, total: sorted.length };
+  }, [doneHist, showAllDone]);
   const routineEntries = useMemo(() => {
     if (cur.kind !== "routine") return [];
     const out = [];
@@ -1319,12 +1350,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
       setTxt(""); setErr("");
     } catch (e) { setErr("저장 실패: " + ((e && e.message) || e)); }
   };
-  const inRef = useRef(); const [uploading, setUploading] = useState(0);
   const canUpload = FB_CONFIGURED && !!fbUser();
-  const scopedFiles = (files || []).filter(a => (a.recapKey || "") === recapKey);
-  const pickFile = async (e) => { const file = e.target.files?.[0]; e.target.value = ""; if (!file || cur.kind === "none") return; setUploading(1);
-    try { const att = await uploadFile(file, p => setUploading(Math.max(1, p))); setFiles(prev => [...prev, { ...att, recapKey }]); } catch (ex) { setErr((ex && ex.message) || String(ex)); } setUploading(0); };
-  const delFile = (a) => { if (!window.confirm('"' + a.name + '" 파일을 삭제할까요?')) return; deleteStoredFile(a); setFiles(prev => prev.filter(x => x.id !== a.id)); };
 
   return (
     <div style={{ marginTop: 12 }}>
@@ -1361,10 +1387,11 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
         </div>)}
       </div>}
 
-      {cur.kind !== "routine" && <div style={S.card}>
-        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>완료·해소 ({doneHist.length})</div>
-        {doneHist.length === 0 && <div style={{ ...S.emp, padding: 12 }}>완료 기록 없음 (task 완료 시 모임)</div>}
-        {doneHist.map(e => <RecapDoneRow key={e.key} e={e} onSaveRecap={onUpdateHistRecap} />)}
+      {cur.kind !== "routine" && cur.kind !== "none" && <div>
+        <div style={{ fontSize: 12, fontWeight: 600, margin: "10px 2px 6px" }}>완료 ({doneView.total}){doneView.total > 0 && <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 400 }}> · 회고 대기 먼저</span>}</div>
+        {doneView.total === 0 && <div style={{ ...S.emp, padding: 12 }}>완료 기록 없음 (task 완료 시 모임)</div>}
+        {doneView.shown.map(e => <RecapCompletionCard key={e.key} e={e} onSaveRecap={onUpdateHistRecap} files={files} setFiles={setFiles} canUpload={canUpload} />)}
+        {doneView.hidden > 0 && <button style={{ ...S.gh, fontSize: 11, width: "100%", padding: "6px" }} onClick={() => setShowAllDone(true)}>이전 완료 {doneView.hidden}건 더 보기</button>}
       </div>}
 
       {!isWork && (cur.kind === "routine" || cur.kind === "project") && <div style={S.card}>
@@ -1374,20 +1401,10 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
           <span style={{ fontSize: 10, color: "#9ca3af" }}>{cur.kind === "routine" ? "→ 해당 루틴 일지(vault) 수거" : "→ 2.Project/" + pname(cur.key) + "/로그.md 수거"}</span>
           <button style={S.btn()} onClick={addNote}>추가</button>
         </div>
+        <RecapFileBox recapKey={recapKey} files={files} setFiles={setFiles} canUpload={canUpload} />
       </div>}
 
-      {cur.kind !== "none" && cur.kind !== "alldone" && <div style={S.card}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontSize: 12, fontWeight: 600 }}>📎 파일 ({scopedFiles.length}) <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 400 }}>{cur.label} 회고 첨부</span></div>
-          {canUpload ? <div><input ref={inRef} type="file" style={{ display: "none" }} onChange={pickFile} />{uploading > 0 ? <span style={{ fontSize: 12, color: "#F59E0B" }}>⬆️ {uploading}%</span> : <button style={{ ...S.gh, fontSize: 11 }} onClick={() => inRef.current?.click()}>+ 파일</button>}</div> : <span style={{ fontSize: 11, color: "#9ca3af" }}>로그인 후</span>}
-        </div>
-        {scopedFiles.length === 0 && <div style={{ ...S.emp, padding: 10, fontSize: 11 }}>이 회고에 첨부된 파일 없음</div>}
-        {scopedFiles.slice().reverse().map(a => <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "3px 0" }}>
-          <a href="#" onClick={(ev) => { ev.preventDefault(); downloadAttachment(a); }} style={{ color: "#3B82F6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📎 {a.name}</a>
-          <span style={{ color: "#9ca3af", fontSize: 10 }}>{fmtSize(a.size)}</span>
-          <button style={{ ...S.gh, fontSize: 9, color: "#EF4444", padding: "1px 5px" }} onClick={() => delFile(a)}>✕</button>
-        </div>)}
-      </div>}
+      {/* (2026-06-18) 공용 파일 카드 제거 — 파일은 회고 단위(RecapFileBox)에 종속: 회고 입력 카드 + 각 완료 카드 안에 */}
       {err && <div style={{ fontSize: 11, color: "#EF4444" }}>{err}</div>}
     </div>
   );
@@ -1674,6 +1691,14 @@ function App({ onSwitchWs }) {
     if (editTarget.parentId) {
       if (updated.planDate === TODAY && !updated.focus) updated = { ...updated, focus: true };
       setTasks(p => p.map(t => t.id === editTarget.parentId ? { ...t, subtasks: (t.subtasks || []).map(s => s.id === updated.id ? updated : s) } : t));
+      /* 서브태스크도 캘린더 동기화(부모 과제 기준) — task와 동일 */
+      const par = tasks.find(t => t.id === editTarget.parentId);
+      const subWrite = (eid) => setTasks(p => p.map(t => t.id === editTarget.parentId ? { ...t, subtasks: (t.subtasks || []).map(s => s.id === updated.id ? { ...s, calEventId: eid } : s) } : t));
+      const subDate = updated.planDate || updated.scheduledDate;
+      const cp = subDate ? calMakeParams({ ...updated, project: par?.project }, projects) : null;
+      if (cp && updated.calEventId) calSync("update", { ...cp, eventId: updated.calEventId }).then(r => { if (r?.eventId && r.eventId !== updated.calEventId) subWrite(r.eventId); });
+      else if (cp) calSync("add", cp).then(r => { if (r?.eventId) subWrite(r.eventId); });
+      else if (!subDate && updated.calEventId) { calSync("delete", { eventId: updated.calEventId }); subWrite(""); }
     } else {
       const prev = tasks.find(t => t.id === updated.id);
       /* planDate가 오늘이면 자동 별표 */
@@ -1721,6 +1746,7 @@ function App({ onSwitchWs }) {
     setTasks(p => p.filter(t => t.id !== id));
     /* 캘린더 자동 삭제 */
     if (task.calEventId) calSync("delete", { eventId: task.calEventId });
+    (task.subtasks || []).forEach(s => { if (s.calEventId) calSync("delete", { eventId: s.calEventId }); });
     const subCount = (task.subtasks || []).length;
     addHistItem({ type: "done", text: task.text, projectName: proj?.name || "", project: task.project, orig: snap, subCount, time: nowTime() });
     showT(`"${task.text}" 완료`, () => {
@@ -1736,6 +1762,7 @@ function App({ onSwitchWs }) {
     setTasks(p => p.filter(t => t.id !== id));
     /* 캘린더 자동 삭제 */
     if (task.calEventId) calSync("delete", { eventId: task.calEventId });
+    (task.subtasks || []).forEach(s => { if (s.calEventId) calSync("delete", { eventId: s.calEventId }); });
     addHistItem({ type: "deleted", text: task.text, projectName: proj?.name || "", time: nowTime() });
     showT(`"${task.text}" 삭제됨`, () => { setTasks(p => [...p, task]); removeHistItem(it => it.type === "deleted" && it.text === task.text); hideT(); });
   };
@@ -1794,26 +1821,31 @@ function App({ onSwitchWs }) {
   useEffect(() => {
     if (!cloudLoaded || autoCalDone.current) return;
     autoCalDone.current = true;
-    const pending = tasks.filter(t => t.status !== "done" && (t.planDate || t.scheduledDate) && !t.calEventId);
+    const pending = tasks.filter(t => (t.status !== "done" && (t.planDate || t.scheduledDate) && !t.calEventId) || (t.subtasks || []).some(s => s.status !== "done" && (s.planDate || s.scheduledDate) && !s.calEventId));
     if (pending.length) bulkCalSync();
   }, [cloudLoaded]); /* eslint-disable-line */
 
   /* 캘린더 일괄 동기화: 날짜 있는 태스크 중 calEventId 없는 것 일괄 등록 */
   const bulkCalSync = async () => {
-    const unsyncedTasks = tasks.filter(t => t.status !== "done" && (t.planDate || t.scheduledDate) && !t.calEventId);
-    if (!unsyncedTasks.length) { showT("모든 태스크가 이미 동기화됨", null); return; }
-    showT(`📅 ${unsyncedTasks.length}건 캘린더 등록 중...`, null);
+    const items = [];
+    tasks.forEach(t => {
+      if (t.status !== "done" && (t.planDate || t.scheduledDate) && !t.calEventId) items.push({ kind: "task", t });
+      (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.planDate || s.scheduledDate) && !s.calEventId) items.push({ kind: "sub", t, s }); });
+    });
+    if (!items.length) { showT("모든 태스크가 이미 동기화됨", null); return; }
+    showT(`📅 ${items.length}건 캘린더 등록 중...`, null);
     let ok = 0;
-    for (const t of unsyncedTasks) {
-      const cp = calMakeParams(t, projects);
+    for (const it of items) {
+      const cp = it.kind === "task" ? calMakeParams(it.t, projects) : calMakeParams({ ...it.s, project: it.t.project }, projects);
       if (!cp) continue;
       const r = await calSync("add", cp);
       if (r?.eventId) {
-        setTasks(p => p.map(x => x.id === t.id ? { ...x, calEventId: r.eventId } : x));
+        if (it.kind === "task") setTasks(p => p.map(x => x.id === it.t.id ? { ...x, calEventId: r.eventId } : x));
+        else setTasks(p => p.map(x => x.id === it.t.id ? { ...x, subtasks: (x.subtasks || []).map(y => y.id === it.s.id ? { ...y, calEventId: r.eventId } : y) } : x));
         ok++;
       }
     }
-    showT(`📅 ${ok}/${unsyncedTasks.length}건 캘린더 등록 완료`, null);
+    showT(`📅 ${ok}/${items.length}건 캘린더 등록 완료`, null);
   };
 
   const allFocused = useMemo(() => {
