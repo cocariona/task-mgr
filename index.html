@@ -486,7 +486,7 @@ const StarBtn = ({ on, onClick }) => (
 );
 
 /* ─── SubRow (서브태스크 행) ─── */
-const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
+const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit, onCal }) => {
   const [h, setH] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const isDone = sub.status === "done";
@@ -510,6 +510,7 @@ const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
         {sub.notes && showNotes && <div style={{ marginTop: 3, fontSize: 11, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 5, padding: "3px 7px", color: "#92400E", whiteSpace: "pre-wrap" }}><span style={{ fontSize: 8, fontWeight: 700, opacity: 0.65, marginRight: 5 }}>📝</span>{sub.notes}</div>}
       </div>
       {h && <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
+        {(sub.planDate || sub.scheduledDate) && onCal && <button style={{ ...S.gh, fontSize: 10 }} onClick={onCal} title={sub.calEventId ? "캘린더 동기화" : "캘린더에 추가"}>{sub.calEventId ? "📅↻" : "📅+"}</button>}
         <button style={{ ...S.gh, fontSize: 10 }} onClick={onEdit}>✏️</button>
         <button style={{ ...S.gh, color: "#EF4444", fontSize: 10 }} onClick={onDel}>✕</button>
       </div>}
@@ -605,6 +606,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
               onToggleDone={() => onUpdate && onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, status: x.status === "done" ? "action" : "done" } : x) })}
               onDel={() => onUpdate && onUpdate({ ...task, subtasks: subs.filter(x => x.id !== s.id) })}
               onEdit={() => onEdit(s, task.id)}
+              onCal={() => addToCalendar(subCalObj(s, task), projects, (ok, msg, eventId) => { if (ok && eventId && onUpdate) onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, calEventId: eventId } : x) }); const el = document.getElementById("cal-toast"); if (el) { el.textContent = ok ? "✅ " + msg : "❌ " + msg; el.style.display = "block"; setTimeout(() => el.style.display = "none", 2000); } })}
             />
           ))}
         </div>
@@ -757,7 +759,7 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
               ); })}
             </div>
           </div>}
-          <AttachmentSection attachments={f.attachments || []} onChange={v => u("attachments", v)} deferred={{ uploads: pendingUploads, deletes: pendingDeletes }} onBusy={setAttBusy} />
+          {/* (2026-06-18) 첨부 제거 — 파일은 회고에 종속(회고탭 RecapFileBox). task 편집엔 불필요 */}
           <div><div style={S.lbl}>메모 / 맥락</div><textarea style={S.ta} rows={3} value={f.notes || ""} onChange={e => u("notes", e.target.value)} /></div>
           <div><div style={{ ...S.lbl, color: "#7C3AED", fontWeight: 600 }}>🪞 회고 (메모와 별개 — 완료·예측 결과)</div><textarea style={{ ...S.ta, background: "#FAF5FF" }} rows={3} placeholder="이 task의 회고(근거·결과·다음 액션 등). 회고 탭에 모입니다." value={f.recap || ""} onChange={e => u("recap", e.target.value)} /></div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
@@ -890,7 +892,8 @@ const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onU
           onToggleFocus={() => toggleSubInParent(item.parent.id, item.data.id, "focus")}
           onToggleDone={() => toggleSubInParent(item.parent.id, item.data.id, "done")}
           onDel={() => onUpdate && onUpdate({ ...item.parent, subtasks: (item.parent.subtasks || []).filter(s => s.id !== item.data.id) })}
-          onEdit={() => onEdit(item.data, item.parent.id)} />
+          onEdit={() => onEdit(item.data, item.parent.id)}
+          onCal={() => addToCalendar(subCalObj(item.data, item.parent), projects, (ok, msg, eventId) => { if (ok && eventId && onUpdate) onUpdate({ ...item.parent, subtasks: (item.parent.subtasks || []).map(s => s.id === item.data.id ? { ...s, calEventId: eventId } : s) }); const el = document.getElementById("cal-toast"); if (el) { el.textContent = ok ? "✅ " + msg : "❌ " + msg; el.style.display = "block"; setTimeout(() => el.style.display = "none", 2000); } })} />
       </div>
     );
   };
