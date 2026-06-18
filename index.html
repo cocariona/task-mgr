@@ -1182,12 +1182,13 @@ const HistRow = ({ item, date, idx, onRestore }) => {
       onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}>
       <span style={{ fontSize: 12, flexShrink: 0 }}>{t.icon}</span>
       <span style={{ color: "#9ca3af", fontSize: 11, flexShrink: 0 }}>#{item.projectName}</span>
+      {item.isSub && <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }} title={item.parentText ? "↳ " + item.parentText : "하위 할일"}>↳</span>}
       <span style={{ flex: 1 }}>{item.text}</span>
       {item.type === "status" && item.from && <span style={{ fontSize: 10, color: "#9ca3af" }}>{STATUSES[item.from]?.label || item.from}→{STATUSES[item.to]?.label || item.to}</span>}
       {item.detail && <span style={{ fontSize: 10, color: "#8B5CF6" }}>{item.detail}</span>}
       {item.subCount > 0 && <span style={{ fontSize: 10, color: "#9ca3af" }}>+{item.subCount} sub</span>}
       {item.time && <span style={{ fontSize: 10, color: "#c0c0c0", flexShrink: 0 }}>{item.time}</span>}
-      {h && item.type === "done" && !item.routineKey && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
+      {h && item.type === "done" && !item.routineKey && !item.isSub && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
     </div>
   );
 };
@@ -1285,7 +1286,7 @@ const RecapCompletionCard = ({ e, onSaveRecap, files, setFiles, canUpload }) => 
     <div style={{ ...S.card, padding: "8px 10px", marginBottom: 6, borderColor: e.recap ? "#eef0f2" : "#DDD6FE" }}>
       <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
         <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }}>{(e.date || "").slice(5)}</span>
-        <span style={{ flex: 1, fontSize: 13, color: "#374151" }}>{e.text} {e.proj && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{e.proj}</span>}</span>
+        <span style={{ flex: 1, fontSize: 13, color: "#374151" }}>{e.text} {e.sub && e.parent && <span style={{ fontSize: 10, color: "#9ca3af" }} title="하위 할일">↳ {e.parent}</span>} {e.proj && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{e.proj}</span>}</span>
         {!e.recap && <span style={{ fontSize: 9, color: "#7C3AED", background: "#F3E8FF", borderRadius: 4, padding: "1px 5px", flexShrink: 0 }}>회고 대기</span>}
       </div>
       {e.notes && <div style={{ ...S.note, marginLeft: 0 }}>{e.notes}</div>}
@@ -1328,7 +1329,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
     (history || []).forEach(day => (day.items || []).forEach(it => {
       if (it.type !== "done" || !it.orig) return;
       const ok = cur.kind === "alldone" ? true : cur.kind === "marker" ? (it.orig.marks || []).includes(cur.key) : cur.kind === "project" ? it.orig.project === cur.key : false;
-      if (ok) out.push({ key: (it.orig.id || it.text) + day.date, origId: it.orig.id, text: it.text, notes: it.orig.notes, recap: it.orig.recap || "", proj: it.projectName || pname(it.orig.project), date: day.date });
+      if (ok) out.push({ key: (it.orig.id || it.text) + day.date, origId: it.orig.id, text: it.text, notes: it.orig.notes, recap: it.orig.recap || "", proj: it.projectName || pname(it.orig.project), date: day.date, sub: it.isSub, parent: it.parentText });
     }));
     return out;
   }, [history, cur.kind, cur.key]);
@@ -1649,6 +1650,27 @@ function App({ onSwitchWs }) {
   const removeHistItem = (matchFn) => {
     setHistory(prev => prev.map(h => h.date === TODAY ? { ...h, items: h.items.filter(it => !matchFn(it)) } : h).filter(h => h.items.length > 0));
   };
+  /* 서브태스크 완료 done 항목 제거 — 모든 날짜 검색(완료 취소·서브 삭제 시; 익일 취소도 처리) */
+  const removeHistDoneSub = (subId) => {
+    setHistory(prev => prev.map(h => ({ ...h, items: (h.items || []).filter(it => !(it.type === "done" && it.isSub && it.orig?.id === subId)) })).filter(h => h.items.length > 0));
+  };
+  /* 서브태스크 완료/취소를 history에 라우팅 — 부모 task의 subtasks 상태 diff (백로그 #2: 완료 서브 회고탭 표출) */
+  const syncSubDoneHist = (prevTask, nextTask) => {
+    if (!nextTask) return;
+    const proj = projects.find(p => p.id === nextTask.project);
+    const prevSubs = prevTask?.subtasks || [];
+    const nextSubs = nextTask.subtasks || [];
+    const prevById = new Map(prevSubs.map(s => [s.id, s]));
+    const nextById = new Map(nextSubs.map(s => [s.id, s]));
+    nextSubs.forEach(s => {
+      const old = prevById.get(s.id);
+      if (s.status === "done" && (!old || old.status !== "done"))
+        addHistItem({ type: "done", text: s.text, projectName: proj?.name || "", project: nextTask.project, orig: { ...s, project: nextTask.project }, isSub: true, subParent: nextTask.id, parentText: nextTask.text, time: nowTime() });
+    });
+    prevSubs.forEach(s => {
+      if (s.status === "done") { const nw = nextById.get(s.id); if (!nw || nw.status !== "done") removeHistDoneSub(s.id); }
+    });
+  };
   /* 루틴 체크 → 히스토리 기록(해당 날짜). done=false면 그 날짜의 해당 루틴 항목 제거 (#6/#7) */
   const setRoutineHist = (date, key, label, done) => {
     setHistory(prev => {
@@ -1691,6 +1713,7 @@ function App({ onSwitchWs }) {
   const updateTask = (updated) => {
     const cur = tasks.find(t => t.id === updated.id);
     setTasks(p => p.map(t => t.id === updated.id ? updated : t));
+    syncSubDoneHist(cur, updated);
     /* 새로 추가된(날짜 있는) 서브태스크 즉시 캘린더 동기화 — task와 동일 (Q3) */
     if (cur) { const prevIds = new Set((cur.subtasks || []).map(s => s.id));
       (updated.subtasks || []).forEach(s => { if (!prevIds.has(s.id) && (s.planDate || s.scheduledDate) && !s.calEventId) {
@@ -1707,6 +1730,7 @@ function App({ onSwitchWs }) {
       setTasks(p => p.map(t => t.id === editTarget.parentId ? { ...t, subtasks: (t.subtasks || []).map(s => s.id === updated.id ? updated : s) } : t));
       /* 서브태스크도 캘린더 동기화(부모 과제 기준) — task와 동일 */
       const par = tasks.find(t => t.id === editTarget.parentId);
+      if (par) syncSubDoneHist(par, { ...par, subtasks: (par.subtasks || []).map(s => s.id === updated.id ? updated : s) });
       const subWrite = (eid) => setTasks(p => p.map(t => t.id === editTarget.parentId ? { ...t, subtasks: (t.subtasks || []).map(s => s.id === updated.id ? { ...s, calEventId: eid } : s) } : t));
       const subDate = updated.planDate || updated.scheduledDate;
       const cp = subDate ? calMakeParams(subCalObj(updated, par), projects) : null;
