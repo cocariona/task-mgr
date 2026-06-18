@@ -1797,12 +1797,21 @@ function App({ onSwitchWs }) {
   const delTask = (id) => {
     const task = tasks.find(t => t.id === id); if (!task) return;
     const proj = projects.find(p => p.id === task.project);
+    /* 자식 done 히스토리 고아 정리: 삭제 전 이 부모의 서브 done 항목 스냅샷 후 제거(undo 시 verbatim 복원) */
+    const orphanSubDone = [];
+    (history || []).forEach(h => (h.items || []).forEach(it => { if (it.type === "done" && it.isSub && it.subParent === id) orphanSubDone.push({ date: h.date, item: it }); }));
     setTasks(p => p.filter(t => t.id !== id));
+    if (orphanSubDone.length) setHistory(prev => prev.map(h => ({ ...h, items: (h.items || []).filter(it => !(it.type === "done" && it.isSub && it.subParent === id)) })).filter(h => h.items.length > 0));
     /* 캘린더 자동 삭제 */
     if (task.calEventId) calSync("delete", { eventId: task.calEventId });
     (task.subtasks || []).forEach(s => { if (s.calEventId) calSync("delete", { eventId: s.calEventId }); });
     addHistItem({ type: "deleted", text: task.text, projectName: proj?.name || "", time: nowTime() });
-    showT(`"${task.text}" 삭제됨`, () => { setTasks(p => [...p, task]); removeHistItem(it => it.type === "deleted" && it.text === task.text); hideT(); });
+    showT(`"${task.text}" 삭제됨`, () => {
+      setTasks(p => [...p, task]);
+      if (orphanSubDone.length) setHistory(prev => { let next = [...prev]; orphanSubDone.forEach(({ date, item }) => { const ex = next.find(h => h.date === date); if (ex) next = next.map(h => h.date === date ? { ...h, items: [...h.items, item] } : h); else next = [...next, { date, items: [item] }]; }); return next; });
+      removeHistItem(it => it.type === "deleted" && it.text === task.text);
+      hideT();
+    });
   };
 
   const restoreHist = (date, idx) => {
