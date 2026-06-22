@@ -1152,6 +1152,8 @@ const sdToday = () => [
 ];
 /* (cleanup 2026-06-16) SD_CAP_TYPES·SD_FB_TARGETS·SELFDEV_CFG + RecordStreamView 제거 — S4에서 RoutineSection(오늘탭)+RecapView(회고탭)로 대체. sdToday(위)·SD_ROUTINES(아래)는 라이브 → 유지. */
 const SD_ROUTINES = ["운동", "영어", "보컬", "글쓰기"];
+/* B: 회고탭 루틴명 → 반복 할일 recurringId 매핑 (PERSONAL_ROUTINES와 일치). 회고가 tasks/history.orig에서 루틴 활동을 읽음 */
+const SD_ROUTINE_RID = { "운동": "rt_workout", "영어": "rt_english", "보컬": "rt_vocal", "글쓰기": "rt_writing" };
 /* (cleanup 2026-06-16) RoutineMemosView·FilesView 제거 — 회고 탭(RecapView)이 일지/노트/파일을 통합 제공. */
 
 /* ═══ 히스토리 뷰 (일일 활동 로그) ═══ */
@@ -1371,10 +1373,17 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
   const routineEntries = useMemo(() => {
     if (cur.kind !== "routine") return [];
     const out = [];
+    /* B: 루틴=daily 반복 할일 → 진행중(tasks)·완료(history.orig) 인스턴스의 note/done */
+    const rid = SD_ROUTINE_RID[cur.key];
+    if (rid) {
+      tasks.forEach(t => { if (t.recurringId === rid && (t.notes || t.status === "done")) out.push({ key: "t" + t.id, date: t.recurringPeriod || t.planDate || "", text: t.notes || "✓ 예정", src: t.status === "done" ? "done" : "" }); });
+      (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && it.orig && it.orig.recurringId === rid) out.push({ key: "h" + (it.orig.id || "") + day.date, date: it.orig.recurringPeriod || day.date, text: it.orig.notes || "✓ 완료", src: "done" }); }));
+    }
+    /* 과거(B 전) /selfdev/logs·notes 보존 표시 */
     Object.entries(logsAll).forEach(([date, day]) => { const r = day && day[cur.key]; if (r && (r.memo || r.done || r.tier)) out.push({ key: "l" + date, date, text: r.memo || (r.done ? "✓ 완료" : "기록"), src: [r.done ? "done" : "", r.tier ? "tier=" + r.tier : ""].filter(Boolean).join("·") }); });
     Object.entries(notes).forEach(([id, n]) => { if (n && n.routine === cur.key) out.push({ key: "n" + id, date: n.date || "", text: n.text, src: "노트" }); });
     return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  }, [logsAll, notes, cur.kind, cur.key]);
+  }, [logsAll, notes, tasks, history, cur.kind, cur.key]);
 
   const addNote = async () => {
     if (!txt.trim() || isWork) return;
