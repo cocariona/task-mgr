@@ -242,7 +242,8 @@ const calMakeParams = (task, projects) => {
   const date = task.planDate || task.scheduledDate;
   if (!date) return null;
   const proj = projects?.find(p => p.id === task.project);
-  const desc = [proj ? `#${proj.name}` : '', task.notes || ''].filter(Boolean).join('\n');
+  const cleanNotes = (task.notes || '').replace(/\[recurring:[^\]]*\]\s*/g, '').trim(); /* 기계용 태그는 캘린더로 안 보냄 */
+  const desc = [proj ? `#${proj.name}` : '', cleanNotes].filter(Boolean).join('\n');
   return { title: WS.calPrefix + task.text, date, desc };
 };
 /* 서브태스크 캘린더 객체 — 제목=서브 task(sub.text) 기준, 메모 맨 앞에 부모 task명(↳ 부모명) */
@@ -261,30 +262,47 @@ const DAYS_KO = ["일", "월", "화", "수", "목", "금", "토"];
 const getTodayDow = () => new Date().getDay(); /* 0=일 ~ 6=토 */
 const getWeekId = () => { const d = new Date(); const jan1 = new Date(d.getFullYear(),0,1); return `${d.getFullYear()}-W${Math.ceil(((d-jan1)/86400000+jan1.getDay()+1)/7)}`; };
 const getMonthId = () => { const d = new Date(); return `${d.getFullYear()}-M${d.getMonth()+1}`; };
-const generateRecurringTasks = (recurrings, tasks, projects) => {
+const generateRecurringTasks = (recurrings, tasks, projects, history) => {
   const dow = getTodayDow();
   const weekId = getWeekId();
   const today = new Date();
   const todayDom = today.getDate();
   const monthId = getMonthId();
   const lastDom = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  /* 완료(done)되어 tasks[]에서 빠진 인스턴스도 history.orig에 full 스냅샷 보존됨
+     → dedup(중복 재생성 방지)·carry-forward(note 상속)에 반드시 포함 (B) */
+  const histInstances = [];
+  (history || []).forEach(h => (h.items || []).forEach(it => { if (it.orig && it.orig.recurringId) histInstances.push(it.orig); }));
+  const allInstances = [...tasks, ...histInstances];
   const newTasks = [];
   recurrings.forEach(r => {
     const type = r.type || "weekly";
-    let tag;
-    if (type === "weekly") {
+    let period;
+    if (type === "daily") {
+      period = TODAY;
+    } else if (type === "weekly") {
       if (r.dow !== dow) return;
-      tag = `[recurring:${r.id}:${weekId}]`;
+      period = weekId;
     } else if (type === "monthly") {
       if (r.lastDay) { if (todayDom !== lastDom) return; }
       else { if (todayDom !== (r.dom || 1)) return; }
-      tag = `[recurring:${r.id}:${monthId}]`;
+      period = monthId;
     } else return;
-    if (tasks.some(t => t.notes?.includes(tag))) return;
+    /* 이번 기간 인스턴스가 이미 있으면 skip (신규=recurringId+period / 구=notes 태그 호환), 완료분 포함 */
+    const legacyTag = `[recurring:${r.id}:${period}]`;
+    if (allInstances.some(t => (t.recurringId === r.id && t.recurringPeriod === period) || t.notes?.includes(legacyTag))) return;
+    /* carry-forward(B): 같은 루틴의 가장 최근 인스턴스 note 상속 — daily 누적 입력 (완료분 포함) */
+    let carried = "";
+    if (type === "daily") {
+      const prev = allInstances.filter(t => t.recurringId === r.id)
+        .sort((a, b) => (b.recurringPeriod || "").localeCompare(a.recurringPeriod || ""))[0];
+      if (prev && prev.notes) carried = prev.notes;
+    }
     newTasks.push({
       id: gid(), text: r.text, status: "action", project: r.project || "proj_etc",
       scheduledDate: "", scheduledLabel: "", planDate: TODAY,
-      createdAt: TODAY, notes: tag, focus: true, subtasks: [], calEventId: ""
+      createdAt: TODAY, notes: carried, focus: true, subtasks: [], calEventId: "",
+      recurringId: r.id, recurringPeriod: period
     });
   });
   return newTasks;
@@ -297,14 +315,22 @@ const WORKSPACES = {
 };
 let WS = WORKSPACES[(() => { try { return localStorage.getItem("tm-workspace") === "personal" ? "personal" : "work"; } catch { return "work"; } })()];
 const PERSONAL_PROJECTS = [
-  { id: "p_invest", name: "투자원칙 정립", order: 0, kind: "project" },
-  { id: "p_workcap", name: "업무역량 시스템", order: 1, kind: "project" },
-  { id: "appt", name: "약속", order: 2, kind: "bucket" },
-  { id: "p_house", name: "집안일", order: 3, kind: "bucket" },
-  { id: "petc", name: "기타", order: 4, kind: "bucket" },
+  { id: "p_routine", name: "🔁 루틴", order: 0, kind: "project" },
+  { id: "p_invest", name: "투자원칙 정립", order: 1, kind: "project" },
+  { id: "p_workcap", name: "업무역량 시스템", order: 2, kind: "project" },
+  { id: "appt", name: "약속", order: 3, kind: "bucket" },
+  { id: "p_house", name: "집안일", order: 4, kind: "bucket" },
+  { id: "petc", name: "기타", order: 5, kind: "bucket" },
 ];
 const PERSONAL_BUCKET_IDS = ["appt", "p_house", "petc"];
 const isBucketProj = (p) => p && (p.kind === "bucket" || PERSONAL_BUCKET_IDS.includes(p.id));
+/* B(2026-06-22): 개인 루틴 4종 = 매일 반복 할일(daily). 안정 id로 시드·중복방지. cloudLoaded 후 recurrings에 없으면 주입(아래 recurDone). */
+const PERSONAL_ROUTINES = [
+  { id: "rt_workout", type: "daily", text: "🏋️ 운동", project: "p_routine" },
+  { id: "rt_english", type: "daily", text: "🇬🇧 영어", project: "p_routine" },
+  { id: "rt_vocal",   type: "daily", text: "🎤 보컬", project: "p_routine" },
+  { id: "rt_writing", type: "daily", text: "✍️ 글쓰기", project: "p_routine" },
+];
 
 /* ─── localStorage (이중 백업, 워크스페이스별 키) ─── */
 const loadSaved = () => {
@@ -1205,7 +1231,9 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
   const [rType, setRType] = useState("weekly"); const [dom, setDom] = useState(1); const [lastDay, setLastDay] = useState(false);
   const addR = () => {
     if (!nt.trim()) return;
-    if (rType === "weekly") {
+    if (rType === "daily") {
+      setRecurrings(p => [...p, { id: gid(), type: "daily", text: nt.trim(), project: np }]);
+    } else if (rType === "weekly") {
       setRecurrings(p => [...p, { id: gid(), type: "weekly", dow: parseInt(nd), text: nt.trim(), project: np }]);
     } else {
       setRecurrings(p => [...p, { id: gid(), type: "monthly", dom: lastDay ? 0 : parseInt(dom), lastDay, text: nt.trim(), project: np }]);
@@ -1224,7 +1252,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
         {recurrings.map(r => (
           <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", fontSize: 13, borderBottom: "1px solid #f3f4f6" }}>
             <span style={{ background: "#EEF2FF", color: "#4338CA", fontWeight: 700, fontSize: 12, padding: "2px 8px", borderRadius: 6, flexShrink: 0 }}>
-              {(r.type || "weekly") === "weekly" ? `매주 ${DAYS_KO[r.dow]}` : r.lastDay ? "매월 마지막일" : `매월 ${r.dom}일`}
+              {(r.type || "weekly") === "daily" ? "매일" : (r.type || "weekly") === "weekly" ? `매주 ${DAYS_KO[r.dow]}` : r.lastDay ? "매월 마지막일" : `매월 ${r.dom}일`}
             </span>
             <span style={{ flex: 1 }}>{r.text}</span>
             <span style={{ fontSize: 10, color: "#9ca3af" }}>#{projects.find(p => p.id === r.project)?.name}</span>
@@ -1234,9 +1262,9 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
         <div style={S.div} />
         <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
           <select style={{ ...S.sel, fontSize: 12 }} value={rType} onChange={e => setRType(e.target.value)}>
-            <option value="weekly">매주</option><option value="monthly">매월</option>
+            <option value="daily">매일</option><option value="weekly">매주</option><option value="monthly">매월</option>
           </select>
-          {rType === "weekly" ? (
+          {rType === "daily" ? null : rType === "weekly" ? (
             <select style={{ ...S.sel, fontSize: 12 }} value={nd} onChange={e => setNd(e.target.value)}>
               {DAYS_KO.map((d, i) => <option key={i} value={i}>{d}요일</option>)}
             </select>
@@ -1585,7 +1613,14 @@ function App({ onSwitchWs }) {
   useEffect(() => {
     if (!cloudLoaded || recurDone.current) return;
     recurDone.current = true;
-    const newTasks = generateRecurringTasks(recurrings, tasks, projects);
+    /* B: 개인 루틴 4종(daily)이 recurrings에 없으면 시드 후 같은 패스에서 생성 (한 번만) */
+    let eff = recurrings;
+    if (!isWork) {
+      const have = new Set(recurrings.map(r => r.id));
+      const missing = PERSONAL_ROUTINES.filter(r => !have.has(r.id));
+      if (missing.length) { eff = [...recurrings, ...missing]; setRecurrings(eff); }
+    }
+    const newTasks = generateRecurringTasks(eff, tasks, projects, history);
     if (newTasks.length > 0) {
       setTasks(p => [...p, ...newTasks]);
       const now = new Date(); const hm = `${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
@@ -1928,7 +1963,8 @@ function App({ onSwitchWs }) {
         {TABS_BY_WS[WS.key].map(t => <button key={t.id} style={S.tab(tab === t.id)} onClick={() => setTab(t.id)}>{t.icon} {t.label}</button>)}
       </div>
       <div style={{ marginTop: 8 }}>
-        {tab === "today" && <>{!isWork && <RoutineSection onRoutineLog={setRoutineHist} />}<TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
+        {/* B(2026-06-22): 전용 RoutineSection 폐지 — 개인 루틴은 매일 daily 반복 할일로 TodayView에 표시(🔁 루틴 프로젝트). RoutineSection 컴포넌트·setRoutineHist는 데드코드(④ 정리). */}
+        {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} issues={issues} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
         {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecap={updateHistRecap} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
