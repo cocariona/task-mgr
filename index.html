@@ -315,21 +315,27 @@ const WORKSPACES = {
 };
 let WS = WORKSPACES[(() => { try { return localStorage.getItem("tm-workspace") === "personal" ? "personal" : "work"; } catch { return "work"; } })()];
 const PERSONAL_PROJECTS = [
-  { id: "p_routine", name: "🔁 루틴", order: 0, kind: "project" },
-  { id: "p_invest", name: "투자원칙 정립", order: 1, kind: "project" },
-  { id: "p_workcap", name: "업무역량 시스템", order: 2, kind: "project" },
-  { id: "appt", name: "약속", order: 3, kind: "bucket" },
-  { id: "p_house", name: "집안일", order: 4, kind: "bucket" },
-  { id: "petc", name: "기타", order: 5, kind: "bucket" },
+  /* B2(2026-06-23): 루틴 영역 4종 = 각각 별도 프로젝트(kind:routine). 옛 단일 🔁 루틴(p_routine) 폐지 — 드롭다운·회고·일지 영역별. vault 1.Routine/<영역>과 1:1. /sweep은 recurringId로 매핑(앱 그룹핑 무관). */
+  { id: "rt_workout", name: "운동", order: 0, kind: "routine" },
+  { id: "rt_english", name: "영어", order: 1, kind: "routine" },
+  { id: "rt_vocal",   name: "보컬", order: 2, kind: "routine" },
+  { id: "rt_writing", name: "글쓰기", order: 3, kind: "routine" },
+  { id: "p_invest", name: "투자원칙 정립", order: 4, kind: "project" },
+  { id: "p_workcap", name: "업무역량 시스템", order: 5, kind: "project" },
+  { id: "appt", name: "약속", order: 6, kind: "bucket" },
+  { id: "p_house", name: "집안일", order: 7, kind: "bucket" },
+  { id: "petc", name: "기타", order: 8, kind: "bucket" },
 ];
 const PERSONAL_BUCKET_IDS = ["appt", "p_house", "petc"];
+const ROUTINE_PROJ_IDS = ["rt_workout", "rt_english", "rt_vocal", "rt_writing"];
 const isBucketProj = (p) => p && (p.kind === "bucket" || PERSONAL_BUCKET_IDS.includes(p.id));
-/* B(2026-06-22): 개인 루틴 4종 = 매일 반복 할일(daily). 안정 id로 시드·중복방지. cloudLoaded 후 recurrings에 없으면 주입(아래 recurDone). */
+const isRoutineProj = (p) => p && (p.kind === "routine" || ROUTINE_PROJ_IDS.includes(p.id));
+/* B2: 루틴 4종 = 매일 daily 반복 할일, 각자 영역 프로젝트(project=id) 소속. recurringId로 /sweep이 영역 일지 매핑. 메모=task.notes(전날 상속·캘린더 동기). */
 const PERSONAL_ROUTINES = [
-  { id: "rt_workout", type: "daily", text: "🏋️ 운동", project: "p_routine" },
-  { id: "rt_english", type: "daily", text: "🇬🇧 영어", project: "p_routine" },
-  { id: "rt_vocal",   type: "daily", text: "🎤 보컬", project: "p_routine" },
-  { id: "rt_writing", type: "daily", text: "✍️ 글쓰기", project: "p_routine" },
+  { id: "rt_workout", type: "daily", text: "🏋️ 운동", project: "rt_workout" },
+  { id: "rt_english", type: "daily", text: "🇬🇧 영어", project: "rt_english" },
+  { id: "rt_vocal",   type: "daily", text: "🎤 보컬", project: "rt_vocal" },
+  { id: "rt_writing", type: "daily", text: "✍️ 글쓰기", project: "rt_writing" },
 ];
 
 /* ─── localStorage (이중 백업, 워크스페이스별 키) ─── */
@@ -498,7 +504,7 @@ const StSel = ({ value, onChange, compact }) => (
   </select>
 );
 /* 드롭다운 정렬: 프로젝트 → 그 외(버킷) → 기타(petc) 맨끝. 업무(kind 없음)는 전부 동일군 → 원순서 유지(안정정렬) */
-const projSortKey = (p) => (p && p.kind === "project") ? 0 : (p && (p.id === "petc" || p.id === "proj_etc")) ? 2 : 1;
+const projSortKey = (p) => (p && p.kind === "routine") ? 0 : (p && p.kind === "project") ? 1 : (p && (p.id === "petc" || p.id === "proj_etc")) ? 3 : 2;
 const sortProjsForSelect = (projects) => [...(projects || [])].sort((a, b) => projSortKey(a) - projSortKey(b));
 const PrSel = ({ value, onChange, projects }) => (
   <select style={S.sel} value={value} onChange={e => onChange(e.target.value)}>
@@ -882,11 +888,12 @@ const ScheduleAlerts = ({ tasks, projects, onEdit }) => {
 const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onReorder }) => {
   const dragHandlers = useDragReorder(onReorder);
   const { focusedTasks, focusedSubs } = useMemo(() => {
-    const ft = tasks.filter(t => t.status !== "done" && (t.focus || t.planDate === TODAY));
+    const pk = (t) => projSortKey(projects.find(p => p.id === t.project)); /* 루틴>프로젝트>버킷>기타 */
+    const ft = tasks.filter(t => t.status !== "done" && (t.focus || t.planDate === TODAY)).sort((a, b) => pk(a) - pk(b));
     const fs = [];
     tasks.forEach(t => { (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.focus || s.planDate === TODAY)) fs.push({ sub: s, parent: t }); }); });
     return { focusedTasks: ft, focusedSubs: fs };
-  }, [tasks]);
+  }, [tasks, projects]);
   const totalFocused = focusedTasks.length + focusedSubs.length;
   const unfocusedActions = tasks.filter(t => t.status === "action" && !t.focus && t.planDate !== TODAY);
   const waitingAll = tasks.filter(t => t.status === "waiting" && !t.focus && t.planDate !== TODAY);
@@ -1326,7 +1333,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
   const targets = (isWork
     ? MARKERS.map(([k, ic]) => ({ kind: "marker", key: k, label: ic + " " + k }))
     : [...SD_ROUTINES.map(r => ({ kind: "routine", key: r, label: r })),
-       ...(projects || []).filter(p => !isBucketProj(p)).map(p => ({ kind: "project", key: p.id, label: p.name }))])
+       ...(projects || []).filter(p => !isBucketProj(p) && !isRoutineProj(p)).map(p => ({ kind: "project", key: p.id, label: p.name }))])
     .concat([{ kind: "alldone", key: "all", label: "완료" }]);
   const [selKey, setSelKey] = useState(targets[0] ? targets[0].kind + ":" + targets[0].key : "");
   const cur = targets.find(t => (t.kind + ":" + t.key) === selKey) || targets[0] || { kind: "none", key: "", label: "" };
@@ -1378,10 +1385,9 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
   }, [logsAll, notes, tasks, history, cur.kind, cur.key]);
 
   const addNote = async () => {
-    if (!txt.trim() || isWork) return;
+    if (!txt.trim() || isWork || cur.kind !== "project") return; /* B2: 루틴 회고입력 폐지(고아 /selfdev/notes) — 루틴 메모=task.notes. 프로젝트만 /inbox 수거 */
     try {
-      if (cur.kind === "routine") { const item = { routine: cur.key, text: txt.trim(), date: TODAY, ts: new Date().toISOString(), synced: false }; const r = await sdFetch("/notes", { method: "POST", body: JSON.stringify(item) }); setNotes(p => ({ ...p, [r.name]: item })); }
-      else if (cur.kind === "project") { const item = { type: "프로젝트", target: pname(cur.key), text: txt.trim(), date: TODAY, ts: new Date().toISOString(), synced: false }; await sdFetch("/inbox", { method: "POST", body: JSON.stringify(item) }); }
+      const item = { type: "프로젝트", target: pname(cur.key), text: txt.trim(), date: TODAY, ts: new Date().toISOString(), synced: false }; await sdFetch("/inbox", { method: "POST", body: JSON.stringify(item) });
       setTxt(""); setErr("");
     } catch (e) { setErr("저장 실패: " + ((e && e.message) || e)); }
   };
@@ -1429,15 +1435,16 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
         {doneView.hidden > 0 && <button style={{ ...S.gh, fontSize: 11, width: "100%", padding: "6px" }} onClick={() => setShowAllDone(true)}>이전 완료 {doneView.hidden}건 더 보기</button>}
       </div>}
 
-      {!isWork && (cur.kind === "routine" || cur.kind === "project") && <div style={S.card}>
+      {!isWork && cur.kind === "project" && <div style={S.card}>
         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>✍️ 회고 입력 — {cur.label}</div>
-        <textarea style={{ ...S.ta, minHeight: 70 }} placeholder={cur.kind === "routine" ? "이 루틴 회고/노트(문제점·해결법 등)" : "이 프로젝트 회고·다음 액션"} value={txt} onChange={e => setTxt(e.target.value)} />
+        <textarea style={{ ...S.ta, minHeight: 70 }} placeholder="이 프로젝트 회고·다음 액션" value={txt} onChange={e => setTxt(e.target.value)} />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
-          <span style={{ fontSize: 10, color: "#9ca3af" }}>{cur.kind === "routine" ? "→ 해당 루틴 일지(vault) 수거" : "→ 2.Project/" + pname(cur.key) + "/로그.md 수거"}</span>
+          <span style={{ fontSize: 10, color: "#9ca3af" }}>→ 2.Project/{pname(cur.key)}/로그.md 수거</span>
           <button style={S.btn()} onClick={addNote}>추가</button>
         </div>
         <RecapFileBox recapKey={recapKey} files={files} setFiles={setFiles} canUpload={canUpload} />
       </div>}
+      {!isWork && cur.kind === "routine" && <div style={{ ...S.card, fontSize: 11, color: "#6b7280", lineHeight: 1.6 }}>📝 <b>루틴 메모 = 회고</b> — 오늘탭에서 그 루틴 task의 메모 한 줄로 기록하세요(전날 상속·캘린더 동기). 주1 <b>/sweep</b>이 영역 일지로 수거합니다. 위 목록은 지난 기록 보기.</div>}
 
       {/* (2026-06-18) 공용 파일 카드 제거 — 파일은 회고 단위(RecapFileBox)에 종속: 회고 입력 카드 + 각 완료 카드 안에 */}
       {err && <div style={{ fontSize: 11, color: "#EF4444" }}>{err}</div>}
@@ -1537,7 +1544,7 @@ function App({ onSwitchWs }) {
     setProjects(prev => {
       const byId = Object.fromEntries(prev.map(p => [p.id, p]));
       const canonical = PERSONAL_PROJECTS.map(p => byId[p.id] || p);
-      const extra = prev.filter(p => !PERSONAL_PROJECTS.some(c => c.id === p.id));
+      const extra = prev.filter(p => !PERSONAL_PROJECTS.some(c => c.id === p.id) && p.id !== "p_routine"); /* B2: 옛 🔁 루틴 프로젝트 마이그레이션 제거 */
       const merged = [...canonical, ...extra];
       const same = merged.length === prev.length && merged.every((p, i) => p.id === prev[i]?.id);
       return same ? prev : merged;
