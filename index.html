@@ -1140,17 +1140,9 @@ const recFetch = (base) => async (path, opt) => {
   if (!r.ok) throw new Error("HTTP " + r.status);
   return r.json();
 };
-const sdFetch = recFetch("selfdev"); /* 개인 회귀: 기존 selfdev URL·동작 동일 (RoutineSection·RecapView 사용) */
+const sdFetch = recFetch("selfdev"); /* RecapView가 과거 /selfdev 기록(logs·notes)을 표시 */
 
-/* 개인(루틴) 레코드 설정 */
-/* 고정 4루틴 — 브리핑 plan 없어도 항상 표시(힌트 없음, 기본 tier=보통은 방법론[Track2]) */
-const sdToday = () => [
-  { key: "운동", label: "🏋️ 운동" },
-  { key: "영어", label: "🇬🇧 영어" },
-  { key: "보컬", label: "🎤 보컬" },
-  { key: "글쓰기", label: "✍️ 글쓰기" },
-];
-/* (cleanup 2026-06-16) SD_CAP_TYPES·SD_FB_TARGETS·SELFDEV_CFG + RecordStreamView 제거 — S4에서 RoutineSection(오늘탭)+RecapView(회고탭)로 대체. sdToday(위)·SD_ROUTINES(아래)는 라이브 → 유지. */
+/* (cleanup 2026-06-23 ④-b) RoutineSection·sdToday·setRoutineHist·RecordStreamView·SD_CAP_TYPES·SD_FB_TARGETS·SELFDEV_CFG 제거 — 루틴=daily 반복 할일(TodayView). SD_ROUTINES·SD_ROUTINE_RID은 RecapView 라이브 → 유지. */
 const SD_ROUTINES = ["운동", "영어", "보컬", "글쓰기"];
 /* B: 회고탭 루틴명 → 반복 할일 recurringId 매핑 (PERSONAL_ROUTINES와 일치). 회고가 tasks/history.orig에서 루틴 활동을 읽음 */
 const SD_ROUTINE_RID = { "운동": "rt_workout", "영어": "rt_english", "보컬": "rt_vocal", "글쓰기": "rt_writing" };
@@ -1453,70 +1445,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
   );
 };
 
-/* ═══ S4b: 개인 오늘탭 상단 루틴 고정 체크 (힌트 없음, /selfdev/logs 기록 — 기존과 동일) ═══ */
-const RoutineSection = ({ onRoutineLog }) => {
-  const [date, setDate] = useState(TODAY);
-  const [plan, setPlan] = useState(null);
-  const [logs, setLogs] = useState({});
-  const [memoDraft, setMemoDraft] = useState({});
-  const [err, setErr] = useState("");
-  const isToday = date === TODAY;
-  const load = async () => {
-    if (!fbUser()) return;
-    try { setErr("");
-      const [p, l] = await Promise.all([isToday ? sdFetch("/today") : Promise.resolve(null), sdFetch("/logs/" + date)]);
-      setPlan(p); setLogs(l || {}); setMemoDraft({});
-    } catch (e) { setErr((e && e.message) || String(e)); }
-  };
-  useEffect(() => { load(); }, [date]); /* eslint-disable-line */
-  const items = (isToday && plan && plan.date === TODAY && Array.isArray(plan.items) && plan.items.length) ? plan.items : sdToday();
-  const doneCnt = items.filter(it => (logs[it.key] || {}).done).length;
-  const labelOf = (key) => (items.find(it => it.key === key) || {}).label || key;
-  const saveLog = async (key, patch) => {
-    const cur = logs[key] || {};
-    const next = { ...cur, ...patch, ts: new Date().toISOString(), synced: false };
-    setLogs(p => ({ ...p, [key]: next }));
-    if (patch.done !== undefined && onRoutineLog) onRoutineLog(date, key, labelOf(key), patch.done);
-    try { await sdFetch("/logs/" + date + "/" + encodeURIComponent(key), { method: "PUT", body: JSON.stringify(next) }); }
-    catch (e) { setErr("저장 실패: " + ((e && e.message) || e)); }
-  };
-  const TierChip = ({ k, cur, t }) => (
-    <button onClick={() => saveLog(k, { tier: cur === t ? "" : t })}
-      style={{ ...S.gh, fontSize: 10, padding: "2px 7px", background: cur === t ? "#EEF2FF" : "#fff", color: cur === t ? "#4338CA" : "#9ca3af", borderColor: cur === t ? "#A5B4FC" : "#e5e7eb", fontWeight: cur === t ? 700 : 400 }}>{t}</button>
-  );
-  return (
-    <div style={{ ...S.card, marginTop: 12, marginBottom: 8 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4, flexWrap: "wrap", gap: 6 }}>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>📔 {isToday ? "오늘" : "지난"} 루틴 — {fd(date)} <span style={{ fontSize: 11, color: doneCnt === items.length ? "#10B981" : "#9ca3af", fontWeight: 600 }}>{doneCnt}/{items.length} ✓</span></div>
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <input type="date" max={TODAY} value={date} onChange={e => setDate(e.target.value || TODAY)} style={{ ...S.fld, fontSize: 11, padding: "2px 6px", width: 140 }} />
-          {!isToday && <button style={{ ...S.gh, fontSize: 10 }} onClick={() => setDate(TODAY)}>오늘</button>}
-        </div>
-      </div>
-      {isToday && plan && plan.date === TODAY && plan.note && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", borderRadius: 6, padding: "5px 9px", marginBottom: 7 }}>{plan.note}</div>}
-      {!isToday && <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 6 }}>지난 날짜 기록 모드 — 체크/tier/메모가 그 날짜로 저장됩니다(다음 브리핑이 일지로 수거).</div>}
-      {items.map(it => {
-        const lg = logs[it.key] || {};
-        return (
-          <div key={it.key} style={{ borderBottom: "1px solid #f3f4f6", padding: "6px 2px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <button onClick={() => saveLog(it.key, { done: !lg.done })}
-              style={{ width: 20, height: 20, borderRadius: "50%", border: "2px solid " + (lg.done ? "#10B981" : "#d1d5db"), background: lg.done ? "#10B981" : "transparent", color: "#fff", fontSize: 12, lineHeight: "16px", cursor: "pointer", flexShrink: 0 }}>{lg.done ? "✓" : ""}</button>
-            <span style={{ fontSize: 13.5, fontWeight: 600 }}>{it.label}</span>
-            <span style={{ display: "flex", gap: 3 }}>{["최소", "보통", "최대"].map(t => <TierChip key={t} k={it.key} cur={lg.tier} t={t} />)}</span>
-            <input style={{ ...S.inp, fontSize: 12, padding: "3px 8px", flex: 1, minWidth: 110 }} placeholder="메모(선택)"
-              value={memoDraft[it.key] !== undefined ? memoDraft[it.key] : (lg.memo || "")}
-              onChange={e => setMemoDraft(p => ({ ...p, [it.key]: e.target.value }))}
-              onBlur={e => { if (e.target.value !== (lg.memo || "")) saveLog(it.key, { memo: e.target.value }); }}
-              onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }} />
-          </div>
-        );
-      })}
-      {isToday && plan && plan.date === TODAY && Array.isArray(plan.projects) && plan.projects.length > 0 &&
-        <div style={{ fontSize: 11, color: "#6b7280", marginTop: 6 }}>🚧 진행중: {plan.projects.map(p => p.name).filter(Boolean).join(" · ")}</div>}
-      {err && <div style={{ fontSize: 11, color: "#EF4444", marginTop: 4 }}>{err}</div>}
-    </div>
-  );
-};
+/* RoutineSection 제거(2026-06-23 ④-b) — 루틴=daily 반복 할일(TodayView) 통합, 전용 섹션 폐지. */
 
 /* ═══════ 메인 앱 ═══════ */
 function App({ onSwitchWs }) {
@@ -1715,19 +1644,7 @@ function App({ onSwitchWs }) {
       if (s.status === "done") { const nw = nextById.get(s.id); if (!nw || nw.status !== "done") removeHistDoneSub(s.id); }
     });
   };
-  /* 루틴 체크 → 히스토리 기록(해당 날짜). done=false면 그 날짜의 해당 루틴 항목 제거 (#6/#7) */
-  const setRoutineHist = (date, key, label, done) => {
-    setHistory(prev => {
-      let next = prev.map(h => h.date === date ? { ...h, items: h.items.filter(it => it.routineKey !== key) } : h);
-      if (done) {
-        const item = { type: "done", text: (label || key) + " 루틴", projectName: "📔 루틴", routineKey: key, time: nowTime() };
-        const ex = next.find(h => h.date === date);
-        if (ex) next = next.map(h => h.date === date ? { ...h, items: [...h.items, item] } : h);
-        else next = [...next, { date, items: [item] }];
-      }
-      return next.filter(h => h.items.length > 0);
-    });
-  };
+  /* (2026-06-23 ④-b) setRoutineHist 제거 — 루틴=daily 반복 할일, RoutineSection 폐지. */
   /* 완료/해소된 task의 회고를 히스토리 orig.recap에 기록 (#11) */
   const updateHistRecap = (date, origId, recap) => {
     setHistory(prev => prev.map(h => h.date === date ? { ...h, items: h.items.map(it => (it.orig && it.orig.id === origId) ? { ...it, orig: { ...it.orig, recap } } : it) } : h));
@@ -1972,7 +1889,7 @@ function App({ onSwitchWs }) {
         {TABS_BY_WS[WS.key].map(t => <button key={t.id} style={S.tab(tab === t.id)} onClick={() => setTab(t.id)}>{t.icon} {t.label}</button>)}
       </div>
       <div style={{ marginTop: 8 }}>
-        {/* B(2026-06-22): 전용 RoutineSection 폐지 — 개인 루틴은 매일 daily 반복 할일로 TodayView에 표시(🔁 루틴 프로젝트). RoutineSection 컴포넌트·setRoutineHist는 데드코드(④ 정리). */}
+        {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
         {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} issues={issues} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
         {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecap={updateHistRecap} />}
