@@ -72,7 +72,6 @@ const TABS_BY_WS = {
   work: [
     { id: "today", label: "오늘", icon: "⭐" },
     { id: "projects", label: "과제별", icon: "📁" },
-    { id: "channels", label: "회고", icon: "🔎" },
     { id: "memos", label: "과제 맥락", icon: "📝" },
     { id: "history", label: "히스토리", icon: "📜" },
   ],
@@ -398,6 +397,10 @@ const INIT_PROJECTS = [
   { id: "itrc", name: "ITRC", order: 7 },
   { id: "proj_general", name: "과제 일반 업무", order: 8 },
   { id: "proj_etc", name: "기타 업무", order: 9 },
+  /* develop 버킷(2026-06-26): 마커 🧠🎯✍️ 폐지 → 지식·교훈·글감 캡처 채널(예측 폐지). vault 종착=연동스펙 ⑦. */
+  { id: "bk_knowledge", name: "🧠 지식", order: 10, kind: "bucket" },
+  { id: "bk_lesson", name: "📒 교훈", order: 11, kind: "bucket" },
+  { id: "bk_writing", name: "✍️ 글감", order: 12, kind: "bucket" },
 ];
 
 const INIT_TASKS = [
@@ -616,7 +619,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
             {showProj && p && <span style={{ fontSize: 11, color: "#9ca3af" }}>#{p.name}</span>}
             {task.calEventId && <span style={{ fontSize: 9, color: "#10B981", fontWeight: 600, background: "#ECFDF5", padding: "1px 4px", borderRadius: 4 }} title="캘린더 연동됨">📅✓</span>}
             {(task.attachments || []).length > 0 && <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "1px 4px", borderRadius: 4 }} title="첨부파일">📎{task.attachments.length}</span>}
-            {(task.marks || []).map(mk => { const m = MARKERS.find(x => x[0] === mk); return m ? <span key={mk} title={"채널: " + mk} style={{ fontSize: 11 }}>{m[1]}</span> : null; })}
+            {/* (2026-06-26) 마커 표시 폐지 — 채널=프로젝트 버킷 */}
             {task.notes && <span onClick={(e) => { e.stopPropagation(); setShowNotes(!showNotes); }} style={{ cursor: "pointer", fontSize: 10, color: showNotes ? "#92400E" : "#B45309", background: showNotes ? "#FEF3C7" : "#FFFBEB", border: "1px solid #FDE68A", padding: "1px 5px", borderRadius: 4, userSelect: "none" }}>📝 메모</span>}
           </div>
           <div style={S.txt}>{task.text}</div>
@@ -782,18 +785,10 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
               {f.scheduledDate && <button style={{ ...S.gh, fontSize: 10, color: "#EF4444" }} onClick={() => { u("scheduledDate", ""); u("scheduledLabel", ""); }}>✕</button>}
             </div>
           </div>
-          {isWork && <div>
-            <div style={S.lbl}>채널 마커 (🧠 지식 · 🎯 예측 · ✍️ 외화)</div>
-            <div style={{ display: "flex", gap: 6 }}>
-              {MARKERS.map(([k, i]) => { const on = (f.marks || []).includes(k); return (
-                <button key={k} onClick={() => u("marks", on ? (f.marks || []).filter(x => x !== k) : [...(f.marks || []), k])}
-                  style={{ ...S.gh, fontSize: 11, background: on ? "#EEF2FF" : "#fff", color: on ? "#4338CA" : "#9ca3af", borderColor: on ? "#A5B4FC" : "#e5e7eb", fontWeight: on ? 700 : 400 }}>{i} {k}</button>
-              ); })}
-            </div>
-          </div>}
+          {/* (2026-06-26) 채널 마커(🧠🎯✍️) 폐지 → 지식·교훈·글감 버킷(프로젝트)으로 대체. 예측 폐지. */}
           {/* (2026-06-18) 첨부 제거 — 파일은 회고에 종속(회고탭 RecapFileBox). task 편집엔 불필요 */}
           <div><div style={S.lbl}>메모 / 맥락</div><textarea style={S.ta} rows={3} value={f.notes || ""} onChange={e => u("notes", e.target.value)} /></div>
-          <div><div style={{ ...S.lbl, color: "#7C3AED", fontWeight: 600 }}>🪞 회고 (메모와 별개 — 완료·예측 결과)</div><textarea style={{ ...S.ta, background: "#FAF5FF" }} rows={3} placeholder="이 task의 회고(근거·결과·다음 액션 등). 회고 탭에 모입니다." value={f.recap || ""} onChange={e => u("recap", e.target.value)} /></div>
+          <div><div style={{ ...S.lbl, color: "#7C3AED", fontWeight: 600 }}>🪞 회고 (메모와 별개 — 완료 결과·교훈)</div><textarea style={{ ...S.ta, background: "#FAF5FF" }} rows={3} placeholder="이 task의 회고(근거·결과·다음 액션·교훈 등). 주1 정제가 수거." value={f.recap || ""} onChange={e => u("recap", e.target.value)} /></div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <button style={S.gh} onClick={cancel}>취소</button>
             <button style={{ ...S.btn(), opacity: attBusy ? 0.4 : 1, cursor: attBusy ? "wait" : "pointer" }} onClick={commit} title={attBusy ? "파일 업로드 완료 후 저장할 수 있습니다" : ""}>저장</button>
@@ -1548,6 +1543,23 @@ function App({ onSwitchWs }) {
       const merged = [...canonical, ...extra];
       const same = merged.length === prev.length && merged.every((p, i) => p.id === prev[i]?.id);
       return same ? prev : merged;
+    });
+  }, [cloudLoaded]); /* eslint-disable-line */
+
+  /* 업무 develop 버킷 보강(2026-06-26): 마커 폐지 → 지식·교훈·글감 버킷 없으면 추가(기존 데이터 보존) */
+  const workBucketDone = useRef(false);
+  useEffect(() => {
+    if (!isWork || !cloudLoaded || workBucketDone.current) return;
+    workBucketDone.current = true;
+    const WORK_BUCKETS = [
+      { id: "bk_knowledge", name: "🧠 지식", order: 10, kind: "bucket" },
+      { id: "bk_lesson", name: "📒 교훈", order: 11, kind: "bucket" },
+      { id: "bk_writing", name: "✍️ 글감", order: 12, kind: "bucket" },
+    ];
+    setProjects(prev => {
+      const have = new Set(prev.map(p => p.id));
+      const missing = WORK_BUCKETS.filter(b => !have.has(b.id));
+      return missing.length ? [...prev, ...missing] : prev;
     });
   }, [cloudLoaded]); /* eslint-disable-line */
 
