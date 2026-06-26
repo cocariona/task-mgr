@@ -431,28 +431,7 @@ const INIT_TASKS = [
   { id: gid(), text: "이슈관리, 정리 메모해두기", status: "someday", project: "proj_etc", scheduledDate: "", scheduledLabel: "", planDate: "",  createdAt: TODAY, notes: "", focus: false, subtasks: [] },
 ];
 
-const INIT_ISSUES = [
-  {
-    id: gid(), project: "rag", title: "RAG 과제 모델 변경 및 지표 정리", status: "open",
-    direction: "모델 llama3.1 70b → gpt-oss-120b 변경. RFP 규정(사용량 top10 모델)에 맞춰 변경 근거 리서치 후 다른 지표도 함께 변경 검토.",
-    entries: [
-      { id: gid(), date: TODAY, content: "정주님 요청: 2048/2048 or 2048/128 산식 변경 필요 (256→128/tps). H200 레퍼런스 찾아야 함.", type: "action" },
-      { id: gid(), date: TODAY, content: "nvidia h200 지표 확인중 (gemini 답변 및 Signal65 리포트 참고)", type: "note" },
-      { id: gid(), date: TODAY, content: "성진님 협의: 모델 변경 시 RFP 다른 항목도 변경해야 하는지 검토 필요. 우리만 변경하는 논리가 맞는지 + fde팀 atom-max 두장 llama 테스트 필요 여부 논의", type: "decision" },
-      { id: gid(), date: TODAY, content: "사전 미팅 f/u: 기술적 답변 f/u (재상님)", type: "action" },
-      { id: gid(), date: TODAY, content: "fde팀 공유 필요: 모델 변경 배경 설명 + llama 3.1 70b 기준 atom-max 두장 달성 가능 여부 재체크.", type: "note" },
-    ],
-  },
-];
-
-/* (과제정보 관련 상수 — 호환용 유지) */
-
-const EMPTY_INFO = () => ({ number: "", program: "", title: "", ministryAgency: "", period: "", isSubProject: false, subNumber: "", parentTitle: "", leadOrg: "", partners: "", agencyContact: "", researcher: "", docs: [] });
-const INFO_PROJECT_IDS = new Set(["rag", "accel", "dokpamo", "hakchuin", "optcode", "compiler", "gpu", "itrc"]);
-const INIT_PROJECT_INFO = {
-  rag: { ...EMPTY_INFO() }, accel: { ...EMPTY_INFO() }, dokpamo: { ...EMPTY_INFO() }, hakchuin: { ...EMPTY_INFO() },
-  optcode: { ...EMPTY_INFO() }, compiler: { ...EMPTY_INFO() }, gpu: { ...EMPTY_INFO() }, itrc: { ...EMPTY_INFO() },
-};
+/* (2026-06-26) INIT_ISSUES·EMPTY_INFO·INFO_PROJECT_IDS·INIT_PROJECT_INFO 제거 — issues/projectInfo 폐기. projectInfo=전부 빈값 / issues=`Desktop\과제 이슈.md`로 이전(회사 claude 이관). */
 
 /* ─── 스타일 ─── */
 const S = {
@@ -972,7 +951,7 @@ const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onU
 };
 
 /* ═══ 과제별 뷰 ═══ */
-const ProjectsView = ({ tasks, projects, issues, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, onReorder, isWork }) => {
+const ProjectsView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, onReorder, isWork }) => {
   const [open, setOpen] = useState(new Set(projects.filter(p => tasks.some(t => t.project === p.id && t.status !== "done")).map(p => p.id)));
   const [np, setNp] = useState("");
   const [editId, setEditId] = useState(null);
@@ -989,7 +968,6 @@ const ProjectsView = ({ tasks, projects, issues, onDone, onDel, onFocus, onAdd, 
   };
   const renderProj = (p) => {
     const pt = tasks.filter(t => t.project === p.id && t.status !== "done");
-    const pi = issues.filter(i => i.project === p.id && i.status === "open");
     const fc = pt.filter(t => t.focus).length;
     const o = open.has(p.id);
     const canDel = isWork || !isDefault(p.id);
@@ -1005,7 +983,6 @@ const ProjectsView = ({ tasks, projects, issues, onDone, onDel, onFocus, onAdd, 
               : <span style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</span>}
             <span style={S.cnt(pt.length)}>{pt.length}</span>
             {fc > 0 && <span style={{ fontSize: 11, color: "#F59E0B" }}>⭐{fc}</span>}
-            {pi.length > 0 && <span style={{ fontSize: 11, color: "#EF4444" }}>💬 {pi.length}</span>}
           </div>
           {editId !== p.id && <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
             <button style={{ ...S.gh, fontSize: 10, padding: "1px 5px" }} onClick={e => startEdit(e, p)} title="이름 수정">✏️</button>
@@ -1027,8 +1004,8 @@ const ProjectsView = ({ tasks, projects, issues, onDone, onDel, onFocus, onAdd, 
     <div style={{ marginTop: 12 }}>
       {!isWork && bucketProjs.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#6366F1", margin: "2px 0 6px" }}>📂 프로젝트</div>}
       {mainProjs.map(renderProj)}
-      {!isWork && bucketProjs.length > 0 && <>
-        <div style={{ fontSize: 11, fontWeight: 700, color: "#9ca3af", margin: "14px 0 6px" }}>🗂 그 외 (약속·집안일·기타)</div>
+      {bucketProjs.length > 0 && <>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#9ca3af", margin: "14px 0 6px" }}>{isWork ? "📂 develop 버킷 (지식·교훈·글감)" : "🗂 그 외 (약속·집안일·기타)"}</div>
         {bucketProjs.map(renderProj)}
       </>}
       <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 16, padding: "8px 0", flexWrap: "wrap" }}>
@@ -1132,7 +1109,7 @@ const MemosView = ({ projects, memos, setMemos }) => {
 };
 
 /* 과제정보·이슈 편집 뷰(InfoView/InfoField/SubField/DocList/IssueCard) 제거 — S1 (렌더 경로 없던 죽은 코드).
-   issues·projectInfo 데이터·blob·export/import는 보존(S3에서 대칭 구조로 재노출). */
+   issues·projectInfo 2026-06-26 폐기(projectInfo=빈값 / issues→Desktop\과제 이슈.md). */
 
 /* ═══ 레코드 스트림 (개인 /selfdev · 업무 /worklog 공통 — 항목단위 기록·캡처, Claude가 비동기 수거) ═══ */
 const recFetch = (base) => async (path, opt) => {
@@ -1456,8 +1433,7 @@ function App({ onSwitchWs }) {
   const [tab, setTab] = useState("today");
   const [tasks, setTasks] = useState(saved?.tasks || (isWork ? INIT_TASKS : []));
   const [projects, setProjects] = useState(saved?.projects || (isWork ? INIT_PROJECTS : PERSONAL_PROJECTS));
-  const [issues, setIssues] = useState(saved?.issues || (isWork ? INIT_ISSUES : []));
-  const [projectInfo, setProjectInfo] = useState(saved?.projectInfo || (isWork ? INIT_PROJECT_INFO : {}));
+  /* (2026-06-26) issues·projectInfo state 제거 (폐기) */
   const [memos, setMemos] = useState(saved?.memos || {});
   const [files, setFiles] = useState(saved?.files || []); /* 단독 업로드 파일 메타 (bytes=RTDB /files) */
   const [history, setHistory] = useState(saved?.history || []);
@@ -1498,8 +1474,6 @@ function App({ onSwitchWs }) {
           const m = migrateData(cloudData);
           setTasks(m.tasks || []);
           setProjects(m.projects || INIT_PROJECTS);
-          setIssues(m.issues || []);
-          setProjectInfo(m.projectInfo || INIT_PROJECT_INFO);
           setMemos(m.memos || {});
           setFiles(m.files || []);
           setHistory(m.history || []);
@@ -1607,10 +1581,10 @@ function App({ onSwitchWs }) {
   const firstSaveSkip = useRef(true);
   useEffect(() => {
     if (firstSaveSkip.current) { firstSaveSkip.current = false; return; }
-    const data = { tasks, projects, issues, projectInfo, history, recurrings, memos, files, savedAt: new Date().toISOString() };
+    const data = { tasks, projects, history, recurrings, memos, files, savedAt: new Date().toISOString() };
     saveToStorage(data);
     if (cloudLoadedRef.current) cloudSave(data);
-  }, [tasks, projects, issues, projectInfo, history, recurrings, memos, files]);
+  }, [tasks, projects, history, recurrings, memos, files]);
 
   const showT = (msg, undo) => setToast({ msg, undo });
   const hideT = () => setToast(null);
@@ -1811,19 +1785,17 @@ function App({ onSwitchWs }) {
   const addProj = (name, kind = "project") => {
     const id = (kind === "bucket" ? "b_" : "p_") + gid();
     setProjects(p => [...p, { id, name, order: p.length, kind }]);
-    setProjectInfo(prev => ({ ...prev, [id]: EMPTY_INFO() }));
   };
   const editProj = (id, name) => setProjects(p => p.map(pr => pr.id === id ? { ...pr, name } : pr));
   const delProj = (id) => {
     tasks.filter(t => t.project === id).forEach(t => { if (t.calEventId) calSync("delete", { eventId: t.calEventId }); });
     setProjects(p => p.filter(pr => pr.id !== id));
     setTasks(p => p.filter(t => t.project !== id));
-    setProjectInfo(prev => { const n = { ...prev }; delete n[id]; return n; });
     setMemos(prev => { const n = { ...prev }; delete n[id]; return n; });
   };
 
   const exportData = () => {
-    const data = JSON.stringify({ tasks, projects, issues, projectInfo, history, recurrings, memos, files, exportedAt: new Date().toISOString() }, null, 2);
+    const data = JSON.stringify({ tasks, projects, history, recurrings, memos, files, exportedAt: new Date().toISOString() }, null, 2);
     const blob = new Blob([data], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `task-manager-${TODAY}.json`; a.click(); URL.revokeObjectURL(url);
@@ -1834,8 +1806,7 @@ function App({ onSwitchWs }) {
     r.onload = (ev) => { try {
       const d = migrateData(JSON.parse(ev.target.result)); /* 옛 백업도 필드 기본값/상태 변환 적용 */
       if (d.tasks) setTasks(d.tasks); if (d.projects) setProjects(d.projects);
-      if (d.issues) setIssues(d.issues); if (d.history) setHistory(d.history);
-      if (d.projectInfo) setProjectInfo(d.projectInfo);
+      if (d.history) setHistory(d.history);
       if (d.recurrings) setRecurrings(d.recurrings); if (d.memos) setMemos(d.memos);
       if (d.files) setFiles(d.files);
       showT("데이터를 불러왔습니다", null);
@@ -1910,7 +1881,7 @@ function App({ onSwitchWs }) {
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
         {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
-        {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} issues={issues} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
+        {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
         {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecap={updateHistRecap} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} />}
