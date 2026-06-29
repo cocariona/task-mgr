@@ -1,0 +1,94 @@
+/**
+ * Google Apps Script — Task Manager 캘린더 자동 동기화 (+ 역방향 list)
+ *
+ * ⚠️ 이 파일은 개인 GAS의 백업/참조본입니다. 실제 실행 코드는 사용자 구글 계정
+ *    (script.google.com)에 있으며 index.html 의 GAS_URL 로 호출됩니다.
+ *    저장소의 company-calendar-gas.gs 는 무관한(미사용) 옛 회사용 읽기 피드입니다.
+ *
+ * 동기 방향:
+ *  - push : task-mgr → 캘린더 (action = add / update / delete). add/update 는 eventId 와
+ *           updated(이벤트 lastUpdated, ms)를 반환 → 앱이 task.calUpdated 에 기록.
+ *  - pull : 캘린더 → task-mgr (action = list). 앱(calPull)이 calEventId 매칭 후
+ *           event.updated > task.calUpdated 일 때만 날짜 반영 = 최종수정 우선(에코 방지).
+ *  - update 는 all-day 날짜 변경을 위해 "삭제 후 재생성" → eventId 가 바뀜(앱이 새 id 재저장).
+ *    캘린더에서 직접 옮기면 eventId 는 유지되고 updated 만 증가 → pull 이 잡음.
+ *
+ * 재배포(URL 유지): 코드 교체·저장 → 배포 > 배포 관리 > 기존 배포 ✏️ 수정 > 버전 "새 버전" > 배포.
+ *  (새 배포를 만들면 URL 이 바뀌어 GAS_URL 을 고쳐야 하므로 기존 배포를 갱신할 것.)
+ */
+
+function doGet(e) {
+  var action = e.parameter.action || "add";
+  var callback = e.parameter.callback || "";
+  var cal = CalendarApp.getDefaultCalendar();
+
+  function respond(obj) {
+    if (callback) {
+      return ContentService.createTextOutput(callback + "(" + JSON.stringify(obj) + ")")
+        .setMimeType(ContentService.MimeType.JAVASCRIPT);
+    }
+    return ContentService.createTextOutput(JSON.stringify(obj))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  try {
+    if (action === "add") {
+      var title = e.parameter.title || "";
+      var dateStr = e.parameter.date || "";
+      var desc = e.parameter.desc || "";
+      var date = new Date(dateStr + "T00:00:00");
+      var ev = cal.createAllDayEvent(title, date, { description: desc });
+      return respond({ success: true, eventId: ev.getId(), updated: ev.getLastUpdated().getTime() });
+    }
+
+    if (action === "update") {
+      var eventId = e.parameter.eventId || "";
+      var title = e.parameter.title || "";
+      var dateStr = e.parameter.date || "";
+      var desc = e.parameter.desc || "";
+
+      // 기존 이벤트 삭제 후 재생성 (all-day 이벤트 날짜 변경을 위해)
+      try {
+        var oldEv = cal.getEventById(eventId);
+        if (oldEv) oldEv.deleteEvent();
+      } catch(err) {
+        // 기존 이벤트를 못 찾아도 새로 생성
+      }
+      var date = new Date(dateStr + "T00:00:00");
+      var newEv = cal.createAllDayEvent(title, date, { description: desc });
+      return respond({ success: true, eventId: newEv.getId(), updated: newEv.getLastUpdated().getTime() });
+    }
+
+    if (action === "delete") {
+      var eventId = e.parameter.eventId || "";
+      try {
+        var ev = cal.getEventById(eventId);
+        if (ev) ev.deleteEvent();
+      } catch(err) {
+        // 이미 삭제된 경우 무시
+      }
+      return respond({ success: true });
+    }
+
+    if (action === "list") {
+      var fwd  = Math.min(Number(e.parameter.days || 120), 365);
+      var back = Math.min(Number(e.parameter.back || 14), 90);
+      var start = new Date(); start.setHours(0,0,0,0); start.setDate(start.getDate() - back);
+      var end = new Date(); end.setDate(end.getDate() + fwd);
+      var events = cal.getEvents(start, end).map(function (ev) {
+        return {
+          id: ev.getId(),
+          title: ev.getTitle(),
+          start: Utilities.formatDate(ev.getStartTime(), "Asia/Seoul", "yyyy-MM-dd"),
+          allDay: ev.isAllDayEvent(),
+          updated: ev.getLastUpdated().getTime()
+        };
+      });
+      return respond({ success: true, events: events });
+    }
+
+    return respond({ success: false, error: "unknown action: " + action });
+  } catch(err) {
+    return respond({ success: false, error: err.toString() });
+  }
+}

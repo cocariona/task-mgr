@@ -255,7 +255,7 @@ const addToCalendar = (task, projects, onResult) => {
   if (!p) { onResult(false, "날짜가 없습니다"); return; }
   const act = task.calEventId ? "update" : "add";
   const params = task.calEventId ? { ...p, eventId: task.calEventId } : p;
-  calSync(act, params).then(r => onResult(r?.success, r?.success ? "캘린더 반영됨 ✅" : "캘린더 연동 실패", r?.eventId));
+  calSync(act, params).then(r => onResult(r?.success, r?.success ? "캘린더 반영됨 ✅" : "캘린더 연동 실패", r?.eventId, r?.updated));
 };
 
 /* ─── 반복 태스크 ─── */
@@ -302,7 +302,7 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
     newTasks.push({
       id: gid(), text: r.text, status: "action", project: r.project || "proj_etc",
       scheduledDate: "", scheduledLabel: "", planDate: TODAY,
-      createdAt: TODAY, notes: carried, focus: true, subtasks: [], calEventId: "",
+      createdAt: TODAY, notes: carried, focus: true, subtasks: [], calEventId: "", calUpdated: 0,
       recurringId: r.id, recurringPeriod: period
     });
   });
@@ -370,12 +370,14 @@ const migrateData = (data) => {
     /* planDate 필드 없으면 추가 (기존 데이터 호환) */
     if (t.planDate === undefined) t = { ...t, planDate: "" };
     if (t.calEventId === undefined) t = { ...t, calEventId: "" };
+    if (t.calUpdated === undefined) t = { ...t, calUpdated: 0 };
     if (t.attachments === undefined) t = { ...t, attachments: [] };
     if (t.marks === undefined) t = { ...t, marks: [] };
     if (t.recap === undefined) t = { ...t, recap: "" };
     if (t.subtasks?.length) t = { ...t, subtasks: t.subtasks.map(s => {
       let ns = s.status === "scheduled" ? { ...s, status: "action" } : { ...s };
       if (ns.planDate === undefined) ns = { ...ns, planDate: "" };
+      if (ns.calUpdated === undefined) ns = { ...ns, calUpdated: 0 };
       return ns;
     })};
     return t;
@@ -625,7 +627,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
               onToggleDone={() => onUpdate && onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, status: x.status === "done" ? "action" : "done" } : x) })}
               onDel={() => onUpdate && onUpdate({ ...task, subtasks: subs.filter(x => x.id !== s.id) })}
               onEdit={() => onEdit(s, task.id)}
-              onCal={() => addToCalendar(subCalObj(s, task), projects, (ok, msg, eventId) => { if (ok && eventId && onUpdate) onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, calEventId: eventId } : x) }); const el = document.getElementById("cal-toast"); if (el) { el.textContent = ok ? "✅ " + msg : "❌ " + msg; el.style.display = "block"; setTimeout(() => el.style.display = "none", 2000); } })}
+              onCal={() => addToCalendar(subCalObj(s, task), projects, (ok, msg, eventId, updated) => { if (ok && eventId && onUpdate) onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, calEventId: eventId, calUpdated: updated || Date.now() } : x) }); const el = document.getElementById("cal-toast"); if (el) { el.textContent = ok ? "✅ " + msg : "❌ " + msg; el.style.display = "block"; setTimeout(() => el.style.display = "none", 2000); } })}
             />
           ))}
         </div>
@@ -905,7 +907,7 @@ const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onU
           onToggleDone={() => toggleSubInParent(item.parent.id, item.data.id, "done")}
           onDel={() => onUpdate && onUpdate({ ...item.parent, subtasks: (item.parent.subtasks || []).filter(s => s.id !== item.data.id) })}
           onEdit={() => onEdit(item.data, item.parent.id)}
-          onCal={() => addToCalendar(subCalObj(item.data, item.parent), projects, (ok, msg, eventId) => { if (ok && eventId && onUpdate) onUpdate({ ...item.parent, subtasks: (item.parent.subtasks || []).map(s => s.id === item.data.id ? { ...s, calEventId: eventId } : s) }); const el = document.getElementById("cal-toast"); if (el) { el.textContent = ok ? "✅ " + msg : "❌ " + msg; el.style.display = "block"; setTimeout(() => el.style.display = "none", 2000); } })} />
+          onCal={() => addToCalendar(subCalObj(item.data, item.parent), projects, (ok, msg, eventId, updated) => { if (ok && eventId && onUpdate) onUpdate({ ...item.parent, subtasks: (item.parent.subtasks || []).map(s => s.id === item.data.id ? { ...s, calEventId: eventId, calUpdated: updated || Date.now() } : s) }); const el = document.getElementById("cal-toast"); if (el) { el.textContent = ok ? "✅ " + msg : "❌ " + msg; el.style.display = "block"; setTimeout(() => el.style.display = "none", 2000); } })} />
       </div>
     );
   };
@@ -1654,12 +1656,12 @@ function App({ onSwitchWs }) {
     const tid = gid();
     const pd = planDate || TODAY;
     const autoFocus = focus || (pd === TODAY);
-    const newTask = { id: tid, text, status, project, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: pd, createdAt: TODAY, notes: "", focus: autoFocus, subtasks: [], calEventId: "" };
+    const newTask = { id: tid, text, status, project, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: pd, createdAt: TODAY, notes: "", focus: autoFocus, subtasks: [], calEventId: "", calUpdated: 0 };
     setTasks(p => [...p, newTask]);
     addHistItem({ type: "added", text, projectName: proj?.name || "", project, time: nowTime() });
     /* 캘린더 자동 동기화 */
     const cp = calMakeParams(newTask, projects);
-    if (cp) calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(t => t.id === tid ? { ...t, calEventId: r.eventId } : t)); });
+    if (cp) calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(t => t.id === tid ? { ...t, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : t)); });
   };
 
   const toggleFocus = (id) => {
@@ -1678,7 +1680,7 @@ function App({ onSwitchWs }) {
     if (cur) { const prevIds = new Set((cur.subtasks || []).map(s => s.id));
       (updated.subtasks || []).forEach(s => { if (!prevIds.has(s.id) && (s.planDate || s.scheduledDate) && !s.calEventId) {
         const cp = calMakeParams(subCalObj(s, updated), projects);
-        if (cp) calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(t => t.id === updated.id ? { ...t, subtasks: (t.subtasks || []).map(y => y.id === s.id ? { ...y, calEventId: r.eventId } : y) } : t)); });
+        if (cp) calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(t => t.id === updated.id ? { ...t, subtasks: (t.subtasks || []).map(y => y.id === s.id ? { ...y, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : y) } : t)); });
       } }); }
   };
 
@@ -1691,12 +1693,12 @@ function App({ onSwitchWs }) {
       /* 서브태스크도 캘린더 동기화(부모 과제 기준) — task와 동일 */
       const par = tasks.find(t => t.id === editTarget.parentId);
       if (par) syncSubDoneHist(par, { ...par, subtasks: (par.subtasks || []).map(s => s.id === updated.id ? updated : s) });
-      const subWrite = (eid) => setTasks(p => p.map(t => t.id === editTarget.parentId ? { ...t, subtasks: (t.subtasks || []).map(s => s.id === updated.id ? { ...s, calEventId: eid } : s) } : t));
+      const subWrite = (eid, upd) => setTasks(p => p.map(t => t.id === editTarget.parentId ? { ...t, subtasks: (t.subtasks || []).map(s => s.id === updated.id ? { ...s, calEventId: eid, calUpdated: upd } : s) } : t));
       const subDate = updated.planDate || updated.scheduledDate;
       const cp = subDate ? calMakeParams(subCalObj(updated, par), projects) : null;
-      if (cp && updated.calEventId) calSync("update", { ...cp, eventId: updated.calEventId }).then(r => { if (r?.eventId && r.eventId !== updated.calEventId) subWrite(r.eventId); });
-      else if (cp) calSync("add", cp).then(r => { if (r?.eventId) subWrite(r.eventId); });
-      else if (!subDate && updated.calEventId) { calSync("delete", { eventId: updated.calEventId }); subWrite(""); }
+      if (cp && updated.calEventId) calSync("update", { ...cp, eventId: updated.calEventId }).then(r => { if (r?.eventId) subWrite(r.eventId, r.updated || Date.now()); });
+      else if (cp) calSync("add", cp).then(r => { if (r?.eventId) subWrite(r.eventId, r.updated || Date.now()); });
+      else if (!subDate && updated.calEventId) { calSync("delete", { eventId: updated.calEventId }); subWrite("", 0); }
     } else {
       const prev = tasks.find(t => t.id === updated.id);
       /* planDate가 오늘이면 자동 별표 */
@@ -1726,13 +1728,13 @@ function App({ onSwitchWs }) {
       if (calChanged && hasDate) {
         const cp = calMakeParams(updated, projects);
         if (updated.calEventId) {
-          calSync("update", { ...cp, eventId: updated.calEventId }).then(r => { if (r?.eventId && r.eventId !== updated.calEventId) setTasks(p => p.map(t => t.id === updated.id ? { ...t, calEventId: r.eventId } : t)); });
+          calSync("update", { ...cp, eventId: updated.calEventId }).then(r => { if (r?.eventId) setTasks(p => p.map(t => t.id === updated.id ? { ...t, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : t)); });
         } else if (cp) {
-          calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(t => t.id === updated.id ? { ...t, calEventId: r.eventId } : t)); });
+          calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(t => t.id === updated.id ? { ...t, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : t)); });
         }
       } else if (calChanged && !hasDate && updated.calEventId) {
         calSync("delete", { eventId: updated.calEventId });
-        setTasks(p => p.map(t => t.id === updated.id ? { ...t, calEventId: "" } : t));
+        setTasks(p => p.map(t => t.id === updated.id ? { ...t, calEventId: "", calUpdated: 0 } : t));
       }
     }
   };
@@ -1778,7 +1780,7 @@ function App({ onSwitchWs }) {
     setHistory(prev => {
       const day = prev.find(h => h.date === date); if (!day?.items[idx]) return prev;
       const item = day.items[idx];
-      const restored = item.orig || { id: gid(), text: item.text, status: "action", project: projects.find(p => p.name === item.projectName)?.id || projects[0]?.id, scheduledDate: "", scheduledLabel: "", planDate: "",  createdAt: TODAY, notes: "", focus: false, subtasks: [] };
+      const restored = item.orig || { id: gid(), text: item.text, status: "action", project: projects.find(p => p.name === item.projectName)?.id || projects[0]?.id, scheduledDate: "", scheduledLabel: "", planDate: "",  createdAt: TODAY, notes: "", focus: false, subtasks: [], calEventId: "", calUpdated: 0 };
               if (!restored.planDate) restored.planDate = TODAY;
       setTasks(p => [...p, restored]);
       const ni = day.items.filter((_, i) => i !== idx);
@@ -1829,6 +1831,47 @@ function App({ onSwitchWs }) {
     if (pending.length) bulkCalSync();
   }, [cloudLoaded]); /* eslint-disable-line */
 
+  /* 캘린더 → task-mgr 역방향 동기(pull): calEventId 매칭 이벤트의 날짜를 task에 반영.
+     최종수정 우선 — event.updated > task.calUpdated 일 때만 갱신(자기 push 에코·되돌림 방지). 날짜만(설명·제목 무시).
+     write(calSync add/update) 호출 안 함 → 캘린더로 되쏘는 루프 없음. */
+  const calPull = async (silent) => {
+    const r = await calSync("list", { days: 120, back: 14 });
+    if (!r?.success || !Array.isArray(r.events)) { if (!silent) showT("캘린더 가져오기 실패", null); return; }
+    const byId = {}; r.events.forEach(e => { if (e && e.id) byId[e.id] = e; });
+    const pick = (o) => (o.scheduledDate && !o.planDate) ? "scheduledDate" : "planDate"; /* push의 planDate||scheduledDate 와 round-trip 일치 */
+    let changed = 0;
+    const merged = tasks.map(t => {
+      let nt = t;
+      const ev = t.calEventId && byId[t.calEventId];
+      if (ev && ev.start && ev.updated > (t.calUpdated || 0)) {
+        const f = pick(t); nt = { ...nt, [f]: ev.start, calUpdated: ev.updated }; changed++;
+      }
+      if (nt.subtasks?.length) {
+        let sc = false;
+        const ns = nt.subtasks.map(s => {
+          const se = s.calEventId && byId[s.calEventId];
+          if (se && se.start && se.updated > (s.calUpdated || 0)) {
+            const f = pick(s); sc = true; changed++;
+            return { ...s, [f]: se.start, calUpdated: se.updated };
+          }
+          return s;
+        });
+        if (sc) nt = { ...nt, subtasks: ns };
+      }
+      return nt;
+    });
+    if (changed) setTasks(merged);
+    if (!silent) showT(changed ? `📅 캘린더에서 ${changed}건 반영됨` : "캘린더 변경 없음", null);
+  };
+
+  /* 로드 후 1회 자동 pull(silent) — 캘린더에서 옮긴 일정 날짜 반영 */
+  const calPullDone = useRef(false);
+  useEffect(() => {
+    if (!cloudLoaded || calPullDone.current) return;
+    calPullDone.current = true;
+    calPull(true);
+  }, [cloudLoaded]); /* eslint-disable-line */
+
   /* 캘린더 일괄 동기화: 날짜 있는 태스크 중 calEventId 없는 것 일괄 등록 */
   const bulkCalSync = async () => {
     const items = [];
@@ -1844,8 +1887,8 @@ function App({ onSwitchWs }) {
       if (!cp) continue;
       const r = await calSync("add", cp);
       if (r?.eventId) {
-        if (it.kind === "task") setTasks(p => p.map(x => x.id === it.t.id ? { ...x, calEventId: r.eventId } : x));
-        else setTasks(p => p.map(x => x.id === it.t.id ? { ...x, subtasks: (x.subtasks || []).map(y => y.id === it.s.id ? { ...y, calEventId: r.eventId } : y) } : x));
+        if (it.kind === "task") setTasks(p => p.map(x => x.id === it.t.id ? { ...x, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : x));
+        else setTasks(p => p.map(x => x.id === it.t.id ? { ...x, subtasks: (x.subtasks || []).map(y => y.id === it.s.id ? { ...y, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : y) } : x));
         ok++;
       }
     }
@@ -1875,6 +1918,7 @@ function App({ onSwitchWs }) {
           <span id="sync-status" style={{ fontSize: 10, color: "#9ca3af" }}>☁️</span>
           <span style={{ fontSize: 10, color: "#10B981" }}>● 자동 저장</span>
           <button style={S.gh} onClick={bulkCalSync} title="캘린더 미연동 태스크 일괄 등록">📅 일괄동기화</button>
+          <button style={S.gh} onClick={() => calPull(false)} title="캘린더에서 변경된 날짜 가져오기">📅 가져오기</button>
           <button style={S.gh} onClick={exportData}>📤 백업</button>
           <button style={S.gh} onClick={() => fileRef.current?.click()}>📂 불러오기</button>
           <input ref={fileRef} type="file" accept=".json" style={{ display: "none" }} onChange={importData} />
