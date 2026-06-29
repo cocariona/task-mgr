@@ -65,16 +65,18 @@ const STATUSES = {
   done: { label: "완료", color: "#10B981", bg: "#ECFDF5", icon: "✅" },
 };
 const SK = Object.keys(STATUSES).filter(k => k !== "done");
-/* 업무 채널 마커 (S3) — 🧠 지식 / 🎯 예측 / ✍️ 외화 */
-const MARKERS = [["지식", "🧠"], ["예측", "🎯"], ["외화", "✍️"]];
+/* 업무 채널 마커(🧠🎯✍️) 폐지(2026-06-26) → develop 버킷(지식·교훈·글감, kind:bucket)으로 대체. MARKERS 상수 제거(2026-06-28, 회고탭 재구성으로 마지막 참조 소멸). 예측은 폐지. */
 
 const TABS_BY_WS = {
   work: [
     { id: "today", label: "오늘", icon: "⭐" },
     { id: "projects", label: "과제별", icon: "📁" },
+    /* 회고 탭 복원(2026-06-28): 6/26 제거는 소유자 정정(번복) — 업무도 내가 남긴 회고 확인 + 지난 task 회고 CRUD 필요.
+       마커 폐지에 맞춰 RecapView 업무 타깃 = 마커별 → 프로젝트·develop 버킷·완료별로 재구성. ⚠️ vault 연동스펙 canon 갱신 [개선:B]. */
+    { id: "channels", label: "회고", icon: "🔎" },
     { id: "history", label: "히스토리", icon: "📜" },
   ],
-  /* 과제 맥락 탭 제거(2026-06-26) → 로컬 `Desktop\과제 맥락.md`로 이전(계정경계·기밀, 개인 Firebase서 분리). memos 데이터는 /data에 백업 잔존(미표시). */
+  /* 과제 맥락(memos) 탭은 계속 제거 유지(2026-06-26) → 로컬 `Desktop\과제 맥락.md`(계정경계·기밀). memos 데이터는 /data에 백업 잔존(미표시). 회고(recap)와 별개. */
   personal: [
     { id: "today", label: "오늘", icon: "⭐" },
     { id: "projects", label: "유형별", icon: "📁" },
@@ -329,6 +331,9 @@ const PERSONAL_BUCKET_IDS = ["appt", "p_house", "petc"];
 const ROUTINE_PROJ_IDS = ["rt_workout", "rt_english", "rt_vocal", "rt_writing"];
 const isBucketProj = (p) => p && (p.kind === "bucket" || PERSONAL_BUCKET_IDS.includes(p.id));
 const isRoutineProj = (p) => p && (p.kind === "routine" || ROUTINE_PROJ_IDS.includes(p.id));
+/* 지난 미완료 daily 루틴 인스턴스 = '오늘'·'미수행' 목록서 제외(2026-06-28). 루틴은 매일 새 인스턴스가 생성돼
+   오늘 것만 의미가 있고, 어제 미완료분은 계속 쌓이므로 nagging 대상서 뺀다(데이터는 보존, 과제별·회고에선 보임). */
+const isStaleRoutine = (t) => !!(t && t.recurringId && t.planDate && t.planDate < TODAY);
 /* B2: 루틴 4종 = 매일 daily 반복 할일, 각자 영역 프로젝트(project=id) 소속. recurringId로 /sweep이 영역 일지 매핑. 메모=task.notes(전날 상속·캘린더 동기). */
 const PERSONAL_ROUTINES = [
   { id: "rt_workout", type: "daily", text: "🏋️ 운동", project: "rt_workout" },
@@ -789,7 +794,7 @@ const PlanDateSummary = ({ tasks, projects, onEdit }) => {
     return items;
   }, [tasks]);
   const weekPlan = planned.filter(t => { const d = diffDays(t.planDate); return d !== null && d > 0 && d <= 7; }).sort((a, b) => a.planDate.localeCompare(b.planDate));
-  const overduePlan = planned.filter(t => { const d = diffDays(t.planDate); return d !== null && d < 0; }).sort((a, b) => a.planDate.localeCompare(b.planDate));
+  const overduePlan = planned.filter(t => { const d = diffDays(t.planDate); return d !== null && d < 0 && !isStaleRoutine(t); }).sort((a, b) => a.planDate.localeCompare(b.planDate));
   const [weekOpen, setWeekOpen] = useState(false);
   if (!weekPlan.length && !overduePlan.length) return null;
   const PlanItem = ({ t }) => {
@@ -863,7 +868,7 @@ const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onU
   const dragHandlers = useDragReorder(onReorder);
   const { focusedTasks, focusedSubs } = useMemo(() => {
     const pk = (t) => projSortKey(projects.find(p => p.id === t.project)); /* 루틴>프로젝트>버킷>기타 */
-    const ft = tasks.filter(t => t.status !== "done" && (t.focus || t.planDate === TODAY)).sort((a, b) => pk(a) - pk(b));
+    const ft = tasks.filter(t => t.status !== "done" && (t.focus || t.planDate === TODAY) && !isStaleRoutine(t)).sort((a, b) => pk(a) - pk(b));
     const fs = [];
     tasks.forEach(t => { (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.focus || s.planDate === TODAY)) fs.push({ sub: s, parent: t }); }); });
     return { focusedTasks: ft, focusedSubs: fs };
@@ -1303,7 +1308,8 @@ const RecapCompletionCard = ({ e, onSaveRecap, files, setFiles, canUpload }) => 
 };
 const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, onUpdateHistRecap }) => {
   const targets = (isWork
-    ? MARKERS.map(([k, ic]) => ({ kind: "marker", key: k, label: ic + " " + k }))
+    /* 업무(2026-06-28): 마커 폐지 → 프로젝트 + develop 버킷(지식·교훈·글감) 전부를 회고 타깃으로. 완료(alldone)는 .concat로 공통 추가. */
+    ? (projects || []).map(p => ({ kind: "project", key: p.id, label: p.name }))
     : [...SD_ROUTINES.map(r => ({ kind: "routine", key: r, label: r })),
        ...(projects || []).filter(p => !isBucketProj(p) && !isRoutineProj(p)).map(p => ({ kind: "project", key: p.id, label: p.name }))])
     .concat([{ kind: "alldone", key: "all", label: "완료" }]);
@@ -1323,13 +1329,12 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
     catch (e) { setErr((e && e.message) || String(e)); }
   })(); }, []); /* eslint-disable-line */
 
-  const active = useMemo(() => cur.kind === "marker" ? tasks.filter(t => t.status !== "done" && (t.marks || []).includes(cur.key))
-    : cur.kind === "project" ? tasks.filter(t => t.status !== "done" && t.project === cur.key) : [], [tasks, cur.kind, cur.key]);
+  const active = useMemo(() => cur.kind === "project" ? tasks.filter(t => t.status !== "done" && t.project === cur.key) : [], [tasks, cur.kind, cur.key]);
   const doneHist = useMemo(() => {
     const out = [];
     (history || []).forEach(day => (day.items || []).forEach(it => {
       if (it.type !== "done" || !it.orig) return;
-      const ok = cur.kind === "alldone" ? true : cur.kind === "marker" ? (it.orig.marks || []).includes(cur.key) : cur.kind === "project" ? it.orig.project === cur.key : false;
+      const ok = cur.kind === "alldone" ? true : cur.kind === "project" ? it.orig.project === cur.key : false;
       if (ok) out.push({ key: (it.orig.id || it.text) + day.date, origId: it.orig.id, text: it.text, notes: it.orig.notes, recap: it.orig.recap || "", proj: it.projectName || pname(it.orig.project), date: day.date, sub: it.isSub, parent: it.parentText });
     }));
     return out;
@@ -1380,13 +1385,13 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
         ); })}
       </div>
 
-      {(cur.kind === "marker" || cur.kind === "project") && <div style={S.card}>
+      {cur.kind === "project" && <div style={S.card}>
         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>진행중 ({active.length})</div>
         {active.length === 0 && <div style={{ ...S.emp, padding: 12 }}>없음</div>}
         {active.map(t => { const dl = t.scheduledDate ? deadlineInfo(t.scheduledDate) : null; return (
           <div key={t.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
             {dl && <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>}
-            <div style={{ flex: 1, minWidth: 0 }}><div>{t.text} {(t.marks || []).map(mk => { const m = MARKERS.find(x => x[0] === mk); return m ? <span key={mk}>{m[1]}</span> : null; })} {isWork && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{pname(t.project)}</span>}</div>{t.notes && <div style={S.note}>{t.notes}</div>}{t.recap && <div style={{ ...S.note, color: "#7C3AED" }}>🪞 {t.recap}</div>}</div>
+            <div style={{ flex: 1, minWidth: 0 }}><div>{t.text} {isWork && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{pname(t.project)}</span>}</div>{t.notes && <div style={S.note}>{t.notes}</div>}{t.recap && <div style={{ ...S.note, color: "#7C3AED" }}>🪞 {t.recap}</div>}</div>
             <button style={{ ...S.gh, fontSize: 10 }} onClick={() => onEdit(t)}>✏️</button>
           </div>); })}
       </div>}
@@ -1496,7 +1501,8 @@ function App({ onSwitchWs }) {
   useEffect(() => {
     if (!cloudLoaded || overdueStarred.current) return;
     overdueStarred.current = true;
-    const isOver = (x) => x.status !== "done" && x.planDate && x.planDate < TODAY && !x.focus;
+    /* planDate 도래(<=오늘) 시 자동 별표 — 그날이 되면 '오늘 할 일'에 ★로 올라온다(2026-06-28: <를 <=로). 루틴은 생성 시 이미 focus=true라 !x.focus로 자연 제외. */
+    const isOver = (x) => x.status !== "done" && x.planDate && x.planDate <= TODAY && !x.focus;
     setTasks(p => p.map(t => {
       let nt = isOver(t) ? { ...t, focus: true } : t;
       const subs = nt.subtasks || [];
@@ -1849,7 +1855,7 @@ function App({ onSwitchWs }) {
   const allFocused = useMemo(() => {
     let c = 0;
     tasks.forEach(t => {
-      if (t.status !== "done" && (t.focus || t.planDate === TODAY)) c++;
+      if (t.status !== "done" && (t.focus || t.planDate === TODAY) && !isStaleRoutine(t)) c++;
       (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.focus || s.planDate === TODAY)) c++; });
     });
     return c;
