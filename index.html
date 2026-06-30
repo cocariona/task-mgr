@@ -868,9 +868,16 @@ const ScheduleAlerts = ({ tasks, projects, onEdit }) => {
 };
 
 /* ═══ 오늘 뷰 (서브태스크 집중 포함) ═══ */
-const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onReorder, onPlanToday }) => {
+const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onReorder, onPlanToday, onClearToday }) => {
   const dragHandlers = useDragReorder(onReorder);
   const [dragOverToday, setDragOverToday] = useState(false);
+  const [dragOverRest, setDragOverRest] = useState(false);
+  /* '오늘 할 일'에서 전체 현황으로 끌어다 놓으면 수행날짜 비움(오늘에서 내림) */
+  const restDropProps = {
+    onDragOver: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (!dragOverRest) setDragOverRest(true); },
+    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOverRest(false); },
+    onDrop: (e) => { e.preventDefault(); setDragOverRest(false); const id = e.dataTransfer.getData("text/task-id"); if (id && onClearToday) onClearToday(id); },
+  };
   /* 아래(전체 현황)의 할일을 '오늘 할 일'로 끌어다 놓으면 수행날짜가 오늘로(2026-06-30) */
   const todayDropProps = {
     onDragOver: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (!dragOverToday) setDragOverToday(true); },
@@ -951,9 +958,9 @@ const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onU
       ) : (
         <div style={{ ...S.emp, marginTop: 16, outline: dragOverToday ? "2px dashed #F59E0B" : "none", borderRadius: 8 }} {...todayDropProps}>아래 할일을 여기로 끌어다 놓거나, 할일의 수행날짜(📆)를 오늘로 설정하세요</div>
       )}
-      <div style={{ marginTop: 20 }}>
-        <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setShowRest(!showRest)}>
-          {showRest ? "▼" : "▶"} 전체 현황
+      <div style={{ marginTop: 20 }} {...restDropProps}>
+        <div style={{ ...S.secT, cursor: "pointer", userSelect: "none", outline: dragOverRest ? "2px dashed #9ca3af" : "none", borderRadius: 6, padding: dragOverRest ? "4px 6px" : 0 }} onClick={() => setShowRest(!showRest)} title="여기로 끌어다 놓으면 오늘에서 내림(수행날짜 비움)">
+          {showRest ? "▼" : "▶"} 전체 현황 <span style={{ fontSize: 10, color: "#c4c4c4", fontWeight: 400 }}>{dragOverRest ? "· 놓으면 오늘에서 내림" : ""}</span>
           <span style={S.cnt(unfocusedActions.length + waitingAll.length)}>{unfocusedActions.length + waitingAll.length}</span>
         </div>
         {showRest && (
@@ -1328,7 +1335,26 @@ const RecapCompletionCard = ({ e, onSaveRecap, files, setFiles, canUpload }) => 
     </div>
   );
 };
-const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, onUpdateHistRecap }) => {
+/* 진행중 할일 회고 행 — 회고탭 '진행중'에서도 인라인 회고 입력(2026-07-01, 완료 전에도 회고탭서 작성) */
+const ActiveRecapRow = ({ t, isWork, pname, onEdit, onSaveRecap }) => {
+  const [draft, setDraft] = useState(t.recap || "");
+  useEffect(() => { setDraft(t.recap || ""); }, [t.recap, t.id]);
+  const dl = t.scheduledDate ? deadlineInfo(t.scheduledDate) : null;
+  return (
+    <div style={{ padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13 }}>
+        {dl && <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>}
+        <div style={{ flex: 1, minWidth: 0 }}>{t.text} {isWork && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{pname(t.project)}</span>}{t.notes && <div style={S.note}><span style={{ fontSize: 8, fontWeight: 700, opacity: 0.6, marginRight: 4 }}>📝</span>{t.notes}</div>}</div>
+        <button style={{ ...S.gh, fontSize: 10 }} onClick={() => onEdit(t)}>✏️</button>
+      </div>
+      <textarea value={draft} onChange={e => setDraft(e.target.value)}
+        onBlur={() => { if (draft !== (t.recap || "")) onSaveRecap(t.id, draft); }}
+        placeholder="🪞 회고 (결과·교훈·다음에 반영할 것)" rows={2}
+        style={{ ...S.ta, minHeight: 0, fontSize: 12, marginTop: 4, background: "#FAF5FF", borderColor: "#E9D5FF" }} />
+    </div>
+  );
+};
+const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, onUpdateHistRecap, onUpdateTaskRecap }) => {
   const targets = (isWork
     /* 업무(2026-06-28): 마커 폐지 → 프로젝트 + develop 버킷(지식·교훈·글감) 전부를 회고 타깃으로. 완료(alldone)는 .concat로 공통 추가. */
     ? (projects || []).map(p => ({ kind: "project", key: p.id, label: p.name }))
@@ -1411,12 +1437,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
       {cur.kind === "project" && <div style={S.card}>
         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>진행중 ({active.length})</div>
         {active.length === 0 && <div style={{ ...S.emp, padding: 12 }}>없음</div>}
-        {active.map(t => { const dl = t.scheduledDate ? deadlineInfo(t.scheduledDate) : null; return (
-          <div key={t.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
-            {dl && <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>}
-            <div style={{ flex: 1, minWidth: 0 }}><div>{t.text} {isWork && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{pname(t.project)}</span>}</div>{t.notes && <div style={S.note}>{t.notes}</div>}{t.recap && <div style={{ ...S.note, color: "#7C3AED" }}>🪞 {t.recap}</div>}</div>
-            <button style={{ ...S.gh, fontSize: 10 }} onClick={() => onEdit(t)}>✏️</button>
-          </div>); })}
+        {active.map(t => <ActiveRecapRow key={t.id} t={t} isWork={isWork} pname={pname} onEdit={onEdit} onSaveRecap={onUpdateTaskRecap} />)}
       </div>}
 
       {cur.kind === "routine" && <div style={S.card}>
@@ -1527,6 +1548,23 @@ function App({ onSwitchWs }) {
 
   /* (폐지 2026-06-30) 수행날짜 도래 시 자동 별표(#1) 제거 — 별=집중 업무(날짜 무관)로 의미 전환.
      '오늘 할 일'은 수행날짜<=오늘로 자동 표출(TodayView onToday)이라 별로 끌어올릴 필요 없음. */
+
+  /* 지난 미처리 자동 이월(2026-07-01): 미완료 + 수행날짜 지난(비반복) 할일 → 수행날짜 오늘로 + 캘린더 갱신.
+     → '지난 계획 미처리'가 항상 비어 사실상 사라짐(다 오늘 할 일로). 미래 예약·반복/루틴은 안 건드림. */
+  const rollFwdDone = useRef(false);
+  useEffect(() => {
+    if (!cloudLoaded || rollFwdDone.current) return;
+    rollFwdDone.current = true;
+    const isStaleP = (t) => t.status !== "done" && !t.recurringId && t.planDate && t.planDate < TODAY;
+    const stale = tasks.filter(isStaleP);
+    if (!stale.length) return;
+    setTasks(p => p.map(t => isStaleP(t) ? { ...t, planDate: TODAY } : t));
+    stale.forEach(t => { /* 캘린더는 매번 갱신(사용자 요청) — 연동된 것만 update */
+      if (!t.calEventId) return;
+      const cp = calMakeParams({ ...t, planDate: TODAY }, projects);
+      if (cp) calSync("update", { ...cp, eventId: t.calEventId }).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === t.id ? { ...x, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : x)); });
+    });
+  }, [cloudLoaded]); /* eslint-disable-line */
 
   /* S4a: 개인 프로젝트 5종 보강(기존 데이터에 신규 추가, 정본 순서·id 보존) */
   const personalProjDone = useRef(false);
@@ -1691,6 +1729,8 @@ function App({ onSwitchWs }) {
   const updateHistRecap = (date, origId, recap) => {
     setHistory(prev => prev.map(h => h.date === date ? { ...h, items: h.items.map(it => (it.orig && it.orig.id === origId) ? { ...it, orig: { ...it.orig, recap } } : it) } : h));
   };
+  /* 진행중 할일 회고 인라인 저장(회고탭 진행중 카드, 2026-07-01) */
+  const updateTaskRecap = (id, recap) => setTasks(p => p.map(t => t.id === id ? { ...t, recap } : t));
 
   const addTask = ({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => {
     const proj = projects.find(p => p.id === project);
@@ -1728,6 +1768,20 @@ function App({ onSwitchWs }) {
         const params = updated.calEventId ? { ...cp, eventId: updated.calEventId } : cp;
         calSync(act, params).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === id ? { ...x, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : x)); });
       }
+    }
+  };
+  /* '오늘 할 일'에서 내리기(전체 현황으로 드래그) → 수행날짜 비움. 캘린더는 마감일 있으면 그 날짜로, 없으면 삭제(2026-07-01). */
+  const clearToday = (id) => {
+    const t = tasks.find(x => x.id === id);
+    if (!t || !t.planDate) return;
+    const updated = { ...t, planDate: "" };
+    setTasks(p => p.map(x => x.id === id ? updated : x));
+    const proj = projects.find(p => p.id === t.project);
+    addHistItem({ type: "edited", text: t.text, projectName: proj?.name || "", detail: "📆 오늘에서 내림", time: nowTime() });
+    if (!t.recurringId && t.calEventId) {
+      const cp = calMakeParams(updated, projects);
+      if (cp) calSync("update", { ...cp, eventId: t.calEventId }).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === id ? { ...x, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : x)); });
+      else { calSync("delete", { eventId: t.calEventId }); setTasks(p => p.map(x => x.id === id ? { ...x, calEventId: "", calUpdated: 0 } : x)); }
     }
   };
   const updateTask = (updated) => {
@@ -1987,9 +2041,9 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
+        {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
-        {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecap={updateHistRecap} />}
+        {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecap={updateHistRecap} onUpdateTaskRecap={updateTaskRecap} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} />}
       </div>
