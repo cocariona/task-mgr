@@ -774,8 +774,9 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
           </div>
           {/* (2026-06-26) 채널 마커(🧠🎯✍️) 폐지 → 지식·교훈·글감 버킷(프로젝트)으로 대체. 예측 폐지. */}
           {/* (2026-06-18) 첨부 제거 — 파일은 회고에 종속(회고탭 RecapFileBox). task 편집엔 불필요 */}
-          <div><div style={S.lbl}>메모 / 맥락</div><textarea style={S.ta} rows={3} value={f.notes || ""} onChange={e => u("notes", e.target.value)} /></div>
-          <div><div style={{ ...S.lbl, color: "#7C3AED", fontWeight: 600 }}>🪞 회고 (메모와 별개 — 완료 결과·교훈)</div><textarea style={{ ...S.ta, background: "#FAF5FF" }} rows={3} placeholder="이 task의 회고(근거·결과·다음 액션·교훈 등). 주1 정제가 수거." value={f.recap || ""} onChange={e => u("recap", e.target.value)} /></div>
+          <div><div style={S.lbl}>📝 메모 / 맥락 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(진행·참고 — 지금 이 일을 하기 위한 것)</span></div><textarea style={S.ta} rows={3} value={f.notes || ""} onChange={e => u("notes", e.target.value)} /></div>
+          {/* 🪞 회고(완료 결과·교훈)는 회고 탭 전용으로 분리(2026-07-01) — 편집창에선 메모(진행/맥락)만. f.recap은 그대로 보존. */}
+          <div style={{ fontSize: 10, color: "#9ca3af" }}>🪞 회고(완료 결과·교훈)는 <b>회고 탭</b>에서 적습니다 — 메모와 분리.</div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <button style={S.gh} onClick={cancel}>취소</button>
             <button style={{ ...S.btn(), opacity: attBusy ? 0.4 : 1, cursor: attBusy ? "wait" : "pointer" }} onClick={commit} title={attBusy ? "파일 업로드 완료 후 저장할 수 있습니다" : ""}>저장</button>
@@ -1192,19 +1193,28 @@ const HistoryView = ({ history, onRestore }) => {
 };
 const HistRow = ({ item, date, idx, onRestore }) => {
   const [h, setH] = useState(false);
+  const [open, setOpen] = useState(false);
   const t = HTYPE[item.type] || HTYPE.done;
+  const orig = item.orig || {};
+  const hasCtx = item.type === "done" && (orig.notes || orig.recap); /* 완료 할일의 맥락(메모)·회고를 히스토리서도 조회(2026-07-01) */
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 4px", fontSize: 13, borderRadius: 4, background: h ? "#f8fafc" : "transparent" }}
-      onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}>
-      <span style={{ fontSize: 12, flexShrink: 0 }}>{t.icon}</span>
-      <span style={{ color: "#9ca3af", fontSize: 11, flexShrink: 0 }}>#{item.projectName}</span>
-      {item.isSub && <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }} title={item.parentText ? "↳ " + item.parentText : "하위 할일"}>↳</span>}
-      <span style={{ flex: 1 }}>{item.text}</span>
-      {item.type === "status" && item.from && <span style={{ fontSize: 10, color: "#9ca3af" }}>{STATUSES[item.from]?.label || item.from}→{STATUSES[item.to]?.label || item.to}</span>}
-      {item.detail && <span style={{ fontSize: 10, color: "#8B5CF6" }}>{item.detail}</span>}
-      {item.subCount > 0 && <span style={{ fontSize: 10, color: "#9ca3af" }}>+{item.subCount} sub</span>}
-      {item.time && <span style={{ fontSize: 10, color: "#c0c0c0", flexShrink: 0 }}>{item.time}</span>}
-      {h && item.type === "done" && !item.routineKey && !item.isSub && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
+    <div onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 4px", fontSize: 13, borderRadius: 4, background: h ? "#f8fafc" : "transparent" }}>
+        <span style={{ fontSize: 12, flexShrink: 0 }}>{t.icon}</span>
+        <span style={{ color: "#9ca3af", fontSize: 11, flexShrink: 0 }}>#{item.projectName}</span>
+        {item.isSub && <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }} title={item.parentText ? "↳ " + item.parentText : "하위 할일"}>↳</span>}
+        <span style={{ flex: 1 }}>{item.text}</span>
+        {hasCtx && <span onClick={() => setOpen(!open)} title="메모·회고 보기" style={{ cursor: "pointer", fontSize: 10, color: open ? "#92400E" : "#B45309", background: open ? "#FEF3C7" : "#FFFBEB", border: "1px solid #FDE68A", padding: "1px 5px", borderRadius: 4, userSelect: "none", flexShrink: 0 }}>{orig.notes ? "📝" : ""}{orig.recap ? "🪞" : ""}</span>}
+        {item.type === "status" && item.from && <span style={{ fontSize: 10, color: "#9ca3af" }}>{STATUSES[item.from]?.label || item.from}→{STATUSES[item.to]?.label || item.to}</span>}
+        {item.detail && <span style={{ fontSize: 10, color: "#8B5CF6" }}>{item.detail}</span>}
+        {item.subCount > 0 && <span style={{ fontSize: 10, color: "#9ca3af" }}>+{item.subCount} sub</span>}
+        {item.time && <span style={{ fontSize: 10, color: "#c0c0c0", flexShrink: 0 }}>{item.time}</span>}
+        {h && item.type === "done" && !item.routineKey && !item.isSub && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
+      </div>
+      {hasCtx && open && <div style={{ marginLeft: 28, marginBottom: 6 }}>
+        {orig.notes && <div style={{ ...S.note, marginTop: 2 }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.6, marginRight: 5 }}>📝 메모</span>{orig.notes}</div>}
+        {orig.recap && <div style={{ ...S.note, color: "#7C3AED", marginTop: 2 }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.6, marginRight: 5 }}>🪞 회고</span>{orig.recap}</div>}
+      </div>}
     </div>
   );
 };
