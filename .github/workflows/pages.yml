@@ -1,0 +1,44 @@
+name: Build & Deploy Pages (JSX 사전컴파일)
+
+# index.html(JSX)을 push마다 사전 컴파일해 babel 없는 빠른 버전으로 Pages 배포.
+# ⚠ 사용 전 1회: 레포 Settings → Pages → Build and deployment → Source = "GitHub Actions" 로 변경.
+#   (그 전까지는 기존 branch 배포가 유지되어 사이트는 정상.)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm init -y && npm install @babel/core @babel/preset-react
+      - run: node build.js
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
