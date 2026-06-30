@@ -1547,6 +1547,24 @@ function App({ onSwitchWs }) {
     setTasks(prev => { let ch = false; const n = prev.map(t => (t.project === "p_routine" && t.recurringId && RID.has(t.recurringId)) ? (ch = true, { ...t, project: t.recurringId }) : t); return ch ? n : prev; });
   }, [cloudLoaded]); /* eslint-disable-line */
 
+  /* 동명 과제 병합(2026-06-30): 띄어쓰기만 다른 중복 과제(예: '투자 원칙 정립' vs 정본 '투자원칙 정립')의 할일을
+     정본(PERSONAL_PROJECTS) id로 옮기고 중복 과제 제거. 정본 id로 합치는 것만(임의 병합 방지). */
+  const dupMergeDone = useRef(false);
+  useEffect(() => {
+    if (isWork || !cloudLoaded || dupMergeDone.current) return;
+    dupMergeDone.current = true;
+    const norm = (s) => (s || "").replace(/\s+/g, "");
+    const canonByName = {};
+    PERSONAL_PROJECTS.forEach(c => { canonByName[norm(c.name)] = c.id; });
+    const ids = new Set(projects.map(p => p.id));
+    const remap = {};
+    projects.forEach(p => { const cid = canonByName[norm(p.name)]; if (cid && p.id !== cid && ids.has(cid)) remap[p.id] = cid; });
+    if (Object.keys(remap).length) {
+      setTasks(prev => prev.map(t => remap[t.project] ? { ...t, project: remap[t.project] } : t));
+      setProjects(prev => prev.filter(p => !remap[p.id]));
+    }
+  }, [cloudLoaded]); /* eslint-disable-line */
+
   /* 업무 develop 버킷 보강(2026-06-26): 마커 폐지 → 지식·교훈·글감 버킷 없으면 추가(기존 데이터 보존) */
   const workBucketDone = useRef(false);
   useEffect(() => {
