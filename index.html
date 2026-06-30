@@ -1325,7 +1325,8 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
   const [txt, setTxt] = useState("");
   const [err, setErr] = useState("");
   const [showAllDone, setShowAllDone] = useState(false);
-  useEffect(() => { setShowAllDone(false); }, [selKey]);
+  const [doneOpen, setDoneOpen] = useState(false); /* '회고 완료'(이미 작성) 카드 접기/펼치기 — 기본 접힘(2026-06-30) */
+  useEffect(() => { setShowAllDone(false); setDoneOpen(false); }, [selKey]);
   useEffect(() => { (async () => {
     if (isWork || !fbUser()) return;
     try { const [l, n] = await Promise.all([sdFetch("/logs"), sdFetch("/notes")]); setLogsAll(l || {}); setNotes(n || {}); }
@@ -1347,7 +1348,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
     const cut = new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10);
     const sorted = [...doneHist].sort((a, b) => { const ar = a.recap ? 1 : 0, br = b.recap ? 1 : 0; if (ar !== br) return ar - br; return (b.date || "").localeCompare(a.date || ""); });
     const shown = showAllDone ? sorted : sorted.filter(e => !e.recap || (e.date || "") >= cut);
-    return { shown, hidden: sorted.length - shown.length, total: sorted.length };
+    return { shown, hidden: sorted.length - shown.length, total: sorted.length, pending: shown.filter(e => !e.recap), recapped: shown.filter(e => e.recap) };
   }, [doneHist, showAllDone]);
   const routineEntries = useMemo(() => {
     if (cur.kind !== "routine") return [];
@@ -1409,9 +1410,15 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
       </div>}
 
       {cur.kind !== "routine" && cur.kind !== "none" && <div>
-        <div style={{ fontSize: 12, fontWeight: 600, margin: "10px 2px 6px" }}>완료 ({doneView.total}){doneView.total > 0 && <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 400 }}> · 회고 대기 먼저</span>}</div>
+        <div style={{ fontSize: 12, fontWeight: 600, margin: "10px 2px 6px" }}>완료 ({doneView.total}){doneView.pending.length > 0 && <span style={{ fontSize: 10, color: "#7C3AED", fontWeight: 600 }}> · 회고 대기 {doneView.pending.length}</span>}</div>
         {doneView.total === 0 && <div style={{ ...S.emp, padding: 12 }}>완료 기록 없음 (task 완료 시 모임)</div>}
-        {doneView.shown.map(e => <RecapCompletionCard key={e.key} e={e} onSaveRecap={onUpdateHistRecap} files={files} setFiles={setFiles} canUpload={canUpload} />)}
+        {doneView.pending.map(e => <RecapCompletionCard key={e.key} e={e} onSaveRecap={onUpdateHistRecap} files={files} setFiles={setFiles} canUpload={canUpload} />)}
+        {doneView.recapped.length > 0 && <>
+          <div onClick={() => setDoneOpen(!doneOpen)} style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, cursor: "pointer", userSelect: "none", padding: "6px 2px", display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ fontSize: 10 }}>{doneOpen ? "▼" : "▶"}</span> ✅ 회고 완료 {doneView.recapped.length}건 {doneOpen ? "접기" : "펼치기"}
+          </div>
+          {doneOpen && doneView.recapped.map(e => <RecapCompletionCard key={e.key} e={e} onSaveRecap={onUpdateHistRecap} files={files} setFiles={setFiles} canUpload={canUpload} />)}
+        </>}
         {doneView.hidden > 0 && <button style={{ ...S.gh, fontSize: 11, width: "100%", padding: "6px" }} onClick={() => setShowAllDone(true)}>이전 완료 {doneView.hidden}건 더 보기</button>}
       </div>}
 
