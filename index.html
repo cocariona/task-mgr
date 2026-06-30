@@ -738,13 +738,14 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
   const [f, setF] = useState({ attachments: [], marks: [], recap: "", ...task });
   const u = (k, v) => setF(p => ({ ...p, [k]: v }));
   const pendingUploads = useRef([]); const pendingDeletes = useRef([]);
+  const overlayDown = useRef(false); /* 바깥클릭 닫기는 '오버레이에서 시작한 클릭'만 — textarea 드래그가 오버레이에서 끝나도 안 닫히게(2026-06-29) */
   const [attBusy, setAttBusy] = useState(false);
   /* 취소/바깥클릭: 이번 모달에서 올린 파일은 롤백 삭제(고아 방지), 삭제 예약은 폐기(파일 보존) */
   const cancel = () => { pendingUploads.current.forEach(deleteStoredFile); onClose(); };
   /* 저장: 삭제 예약을 이때 실행(취소했을 때 깨진 링크가 남지 않게) */
   const commit = () => { if (attBusy) return; pendingDeletes.current.forEach(deleteStoredFile); onSave(f); onClose(); };
   return (
-    <div style={S.mod} onClick={cancel}>
+    <div style={S.mod} onMouseDown={e => { overlayDown.current = e.target === e.currentTarget; }} onClick={e => { if (e.target === e.currentTarget && overlayDown.current) cancel(); }}>
       <div className="modal-content" style={S.modC} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>{isSubtask ? "하위 할일 수정" : "할 일 수정"}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1572,11 +1573,8 @@ function App({ onSwitchWs }) {
         if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, ...items] } : h);
         return [...prev, { date: TODAY, items }];
       });
-      /* 반복 태스크 캘린더 자동 등록 */
-      newTasks.forEach(t => {
-        const cp = calMakeParams(t, projects);
-        if (cp) calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === t.id ? { ...x, calEventId: r.eventId } : x)); });
-      });
+      /* 반복/루틴 캘린더 자동등록 폐지(2026-06-30, 소유자 결정): 반복·루틴은 네이티브 고정 캘린더 일정으로 관리 →
+         task-mgr가 매 인스턴스마다 이벤트를 또 만들면 고정일정 위에 매일 중복 생성됨. recurringId는 캘린더 미동기. */
     }
   }, [cloudLoaded, recurrings, tasks, projects]); /* eslint-disable-line */
 
@@ -1677,7 +1675,7 @@ function App({ onSwitchWs }) {
     setTasks(p => p.map(t => t.id === updated.id ? updated : t));
     syncSubDoneHist(cur, updated);
     /* 새로 추가된(날짜 있는) 서브태스크 즉시 캘린더 동기화 — task와 동일 (Q3) */
-    if (cur) { const prevIds = new Set((cur.subtasks || []).map(s => s.id));
+    if (cur && !updated.recurringId) { const prevIds = new Set((cur.subtasks || []).map(s => s.id));
       (updated.subtasks || []).forEach(s => { if (!prevIds.has(s.id) && (s.planDate || s.scheduledDate) && !s.calEventId) {
         const cp = calMakeParams(subCalObj(s, updated), projects);
         if (cp) calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(t => t.id === updated.id ? { ...t, subtasks: (t.subtasks || []).map(y => y.id === s.id ? { ...y, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : y) } : t)); });
@@ -1723,7 +1721,7 @@ function App({ onSwitchWs }) {
         }
       }
       /* 캘린더 자동 동기화 (날짜/제목/메모/과제 변경 시) */
-      const calChanged = prev.text !== updated.text || prev.planDate !== updated.planDate || prev.scheduledDate !== updated.scheduledDate || prev.notes !== updated.notes || prev.project !== updated.project;
+      const calChanged = !updated.recurringId && (prev.text !== updated.text || prev.planDate !== updated.planDate || prev.scheduledDate !== updated.scheduledDate || prev.notes !== updated.notes || prev.project !== updated.project); /* 반복/루틴=캘린더 미동기(2026-06-30) */
       const hasDate = updated.planDate || updated.scheduledDate;
       if (calChanged && hasDate) {
         const cp = calMakeParams(updated, projects);
@@ -1822,14 +1820,9 @@ function App({ onSwitchWs }) {
     r.readAsText(file); e.target.value = "";
   };
 
-  /* (#6) 로드 후 미연동(날짜 있고 calEventId 없는) task 자동 캘린더 등록 — 1회·있을 때만(없으면 조용히 skip) */
-  const autoCalDone = useRef(false);
-  useEffect(() => {
-    if (!cloudLoaded || autoCalDone.current) return;
-    autoCalDone.current = true;
-    const pending = tasks.filter(t => (t.status !== "done" && (t.planDate || t.scheduledDate) && !t.calEventId) || (t.subtasks || []).some(s => s.status !== "done" && (s.planDate || s.scheduledDate) && !s.calEventId));
-    if (pending.length) bulkCalSync();
-  }, [cloudLoaded]); /* eslint-disable-line */
+  /* 로드 후 자동 캘린더 catch-up 폐지(2026-06-30): calSync(JSONP)는 add가 서버에선 성공해도 응답이 유실되면
+     calEventId가 안 박혀, 매 로드마다 같은 task를 또 add → 캘린더 중복 다발의 주범이었음.
+     동기화는 생성/편집 즉시 + 수동 '📅 일괄동기화' 버튼으로만(아래 bulkCalSync). */
 
   /* 캘린더 → task-mgr 역방향 동기(pull): calEventId 매칭 이벤트의 날짜를 task에 반영.
      최종수정 우선 — event.updated > task.calUpdated 일 때만 갱신(자기 push 에코·되돌림 방지). 날짜만(설명·제목 무시).
@@ -1842,6 +1835,7 @@ function App({ onSwitchWs }) {
     let changed = 0;
     const merged = tasks.map(t => {
       let nt = t;
+      if (t.recurringId) return nt; /* 반복/루틴=캘린더 미관리, pull 제외(2026-06-30) */
       const ev = t.calEventId && byId[t.calEventId];
       if (ev && ev.start && ev.updated > (t.calUpdated || 0)) {
         const f = pick(t); nt = { ...nt, [f]: ev.start, calUpdated: ev.updated }; changed++;
@@ -1872,20 +1866,23 @@ function App({ onSwitchWs }) {
     calPull(true);
   }, [cloudLoaded]); /* eslint-disable-line */
 
-  /* 캘린더 일괄 동기화: 날짜 있는 태스크 중 calEventId 없는 것 일괄 등록 */
+  /* 캘린더 일괄 동기화(수동 버튼): 날짜 있는 task를 캘린더에 반영 — calEventId 있으면 update, 없으면 add.
+     반복/루틴(recurringId)은 네이티브 고정 캘린더라 제외(2026-06-30). 날짜 바꾼 task도 update로 잡힘(#1). */
   const bulkCalSync = async () => {
     const items = [];
     tasks.forEach(t => {
-      if (t.status !== "done" && (t.planDate || t.scheduledDate) && !t.calEventId) items.push({ kind: "task", t });
-      (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.planDate || s.scheduledDate) && !s.calEventId) items.push({ kind: "sub", t, s }); });
+      if (t.recurringId) return;
+      if (t.status !== "done" && (t.planDate || t.scheduledDate)) items.push({ kind: "task", t });
+      (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.planDate || s.scheduledDate)) items.push({ kind: "sub", t, s }); });
     });
-    if (!items.length) { showT("모든 태스크가 이미 동기화됨", null); return; }
-    showT(`📅 ${items.length}건 캘린더 등록 중...`, null);
+    if (!items.length) { showT("동기화할 일정 task가 없습니다", null); return; }
+    showT(`📅 ${items.length}건 캘린더 동기화 중...`, null);
     let ok = 0;
     for (const it of items) {
       const cp = it.kind === "task" ? calMakeParams(it.t, projects) : calMakeParams(subCalObj(it.s, it.t), projects);
       if (!cp) continue;
-      const r = await calSync("add", cp);
+      const eid = it.kind === "task" ? it.t.calEventId : it.s.calEventId;
+      const r = await calSync(eid ? "update" : "add", eid ? { ...cp, eventId: eid } : cp);
       if (r?.eventId) {
         if (it.kind === "task") setTasks(p => p.map(x => x.id === it.t.id ? { ...x, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : x));
         else setTasks(p => p.map(x => x.id === it.t.id ? { ...x, subtasks: (x.subtasks || []).map(y => y.id === it.s.id ? { ...y, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : y) } : x));
