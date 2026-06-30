@@ -302,7 +302,7 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
     newTasks.push({
       id: gid(), text: r.text, status: "action", project: r.project || "proj_etc",
       scheduledDate: "", scheduledLabel: "", planDate: TODAY,
-      createdAt: TODAY, notes: carried, focus: true, subtasks: [], calEventId: "", calUpdated: 0,
+      createdAt: TODAY, notes: carried, focus: false, subtasks: [], calEventId: "", calUpdated: 0, /* focus=집중(기본 꺼짐, 2026-06-30) — 루틴은 수행날짜=오늘로 '오늘 할 일'에 표출 */
       recurringId: r.id, recurringPeriod: period
     });
   });
