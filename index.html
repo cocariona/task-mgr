@@ -501,7 +501,7 @@ const PrSel = ({ value, onChange, projects }) => (
   </select>
 );
 const StarBtn = ({ on, onClick }) => (
-  <button style={S.star(on)} onClick={e => { e.stopPropagation(); onClick(); }} title={on ? "오늘 집중 해제" : "오늘 집중 표시"}>
+  <button style={S.star(on)} onClick={e => { e.stopPropagation(); onClick(); }} title={on ? "집중 업무 해제" : "집중 업무 표시"}>
     {on ? "★" : "☆"}
   </button>
 );
@@ -570,7 +570,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
   const handleAddSub = ({ text, status, focus, scheduledDate, scheduledLabel, planDate }) => {
     if (!onUpdate) return;
     const pd = planDate || TODAY;
-    onUpdate({ ...task, subtasks: [...subs, { id: gid(), text, status, focus: focus || pd === TODAY, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: pd, notes: "", createdAt: TODAY }] });
+    onUpdate({ ...task, subtasks: [...subs, { id: gid(), text, status, focus, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: pd, notes: "", createdAt: TODAY }] }); /* 별=집중(날짜와 분리, 2026-06-30) */
     setAddSub(false); setShowSubs(true);
   };
 
@@ -579,7 +579,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
   const clearIndicator = (el) => { el.classList.remove("drop-indicator-before", "drop-indicator-after"); };
   const dragProps = dh.onDragStart ? {
     draggable: true,
-    onDragStart: (e) => { dh.onDragStart(task.id); e.dataTransfer.effectAllowed = "move"; e.currentTarget.style.opacity = "0.35"; e.currentTarget.style.transform = "scale(0.98)"; },
+    onDragStart: (e) => { dh.onDragStart(task.id); e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/task-id", task.id); } catch {} e.currentTarget.style.opacity = "0.35"; e.currentTarget.style.transform = "scale(0.98)"; },
     onDragEnd: (e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = ""; dh.onDragEnd?.(); },
     onDragOver: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; const rect = e.currentTarget.getBoundingClientRect(); const midY = rect.top + rect.height / 2; clearIndicator(e.currentTarget); e.currentTarget.classList.add(e.clientY < midY ? "drop-indicator-before" : "drop-indicator-after"); e.currentTarget.dataset.dropPos = e.clientY < midY ? "before" : "after"; },
     onDragEnter: (e) => { e.preventDefault(); },
@@ -753,7 +753,7 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
           <div className="modal-row" style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 100 }}><div style={S.lbl}>상태</div><StSel value={f.status} onChange={v => u("status", v)} /></div>
             {!isSubtask && <div style={{ flex: 1, minWidth: 100 }}><div style={S.lbl}>과제</div><PrSel value={f.project} onChange={v => u("project", v)} projects={projects} /></div>}
-            <button style={{ ...S.star(f.focus), border: "1px solid #e5e7eb", borderRadius: 5, width: 32, height: 32 }} onClick={() => u("focus", !f.focus)} title="오늘 집중">
+            <button style={{ ...S.star(f.focus), border: "1px solid #e5e7eb", borderRadius: 5, width: 32, height: 32 }} onClick={() => u("focus", !f.focus)} title="집중 업무">
               {f.focus ? "★" : "☆"}
             </button>
           </div>
@@ -867,19 +867,28 @@ const ScheduleAlerts = ({ tasks, projects, onEdit }) => {
 };
 
 /* ═══ 오늘 뷰 (서브태스크 집중 포함) ═══ */
-const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onReorder }) => {
+const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onReorder, onPlanToday }) => {
   const dragHandlers = useDragReorder(onReorder);
+  const [dragOverToday, setDragOverToday] = useState(false);
+  /* 아래(전체 현황)의 할일을 '오늘 할 일'로 끌어다 놓으면 수행날짜가 오늘로(2026-06-30) */
+  const todayDropProps = {
+    onDragOver: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (!dragOverToday) setDragOverToday(true); },
+    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOverToday(false); },
+    onDrop: (e) => { e.preventDefault(); setDragOverToday(false); const id = e.dataTransfer.getData("text/task-id"); if (id && onPlanToday) onPlanToday(id); },
+  };
+  /* 오늘 할 일 = 수행날짜가 오늘이거나 지난(미완료) — 별(집중)과 무관(2026-06-30). 지난 미완료 루틴은 제외. */
+  const onToday = (t) => !!(t.planDate && t.planDate <= TODAY && !isStaleRoutine(t));
   const { focusedTasks, focusedSubs } = useMemo(() => {
     const pk = (t) => projSortKey(projects.find(p => p.id === t.project)); /* 루틴>프로젝트>버킷>기타 */
-    const ft = tasks.filter(t => t.status !== "done" && (t.focus || t.planDate === TODAY) && !isStaleRoutine(t)).sort((a, b) => pk(a) - pk(b));
+    const ft = tasks.filter(t => t.status !== "done" && onToday(t)).sort((a, b) => pk(a) - pk(b));
     const fs = [];
-    tasks.forEach(t => { (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.focus || s.planDate === TODAY)) fs.push({ sub: s, parent: t }); }); });
+    tasks.forEach(t => { (t.subtasks || []).forEach(s => { if (s.status !== "done" && s.planDate && s.planDate <= TODAY) fs.push({ sub: s, parent: t }); }); });
     return { focusedTasks: ft, focusedSubs: fs };
   }, [tasks, projects]);
   const totalFocused = focusedTasks.length + focusedSubs.length;
-  const unfocusedActions = tasks.filter(t => t.status === "action" && !t.focus && t.planDate !== TODAY);
-  const waitingAll = tasks.filter(t => t.status === "waiting" && !t.focus && t.planDate !== TODAY);
-  const later = tasks.filter(t => t.status === "someday" && !t.focus && t.planDate !== TODAY);
+  const unfocusedActions = tasks.filter(t => t.status === "action" && !onToday(t) && !isStaleRoutine(t));
+  const waitingAll = tasks.filter(t => t.status === "waiting" && !onToday(t) && !isStaleRoutine(t));
+  const later = tasks.filter(t => t.status === "someday" && !onToday(t) && !isStaleRoutine(t));
   const [showRest, setShowRest] = useState(false);
 
   /* 집중 그룹: 일반 task + 서브태스크 통합 */
@@ -927,9 +936,9 @@ const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onU
       <AddForm projects={projects} onAdd={onAdd} />
       {totalFocused > 0 ? (
         <div style={{ marginTop: 16 }}>
-          <div style={S.focusBanner}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#92400E", marginBottom: 4 }}>⭐ 오늘 할 일 ({totalFocused})</div>
-            <div style={{ fontSize: 11, color: "#A16207" }}>⭐ 집중 표시 또는 📆 오늘 계획된 항목</div>
+          <div style={{ ...S.focusBanner, outline: dragOverToday ? "2px dashed #F59E0B" : "none" }} {...todayDropProps}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#92400E", marginBottom: 4 }}>📆 오늘 할 일 ({totalFocused})</div>
+            <div style={{ fontSize: 11, color: "#A16207" }}>수행날짜가 오늘이거나 지난 항목 · 아래 할일을 여기로 끌어다 놓으면 오늘로</div>
           </div>
           {focusGroups.map(g => (
             <div key={g.k} style={{ marginBottom: 8 }}>
@@ -939,7 +948,7 @@ const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onU
           ))}
         </div>
       ) : (
-        <div style={{ ...S.emp, marginTop: 16 }}>⭐ 집중 표시를 누르거나 📆 오늘 계획을 설정하세요</div>
+        <div style={{ ...S.emp, marginTop: 16, outline: dragOverToday ? "2px dashed #F59E0B" : "none", borderRadius: 8 }} {...todayDropProps}>아래 할일을 여기로 끌어다 놓거나, 할일의 수행날짜(📆)를 오늘로 설정하세요</div>
       )}
       <div style={{ marginTop: 20 }}>
         <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setShowRest(!showRest)}>
@@ -1506,20 +1515,8 @@ function App({ onSwitchWs }) {
     return () => { cancelled = true; window.removeEventListener("online", onOnline); };
   }, []); /* eslint-disable-line */
 
-  /* 지난 계획 미처리 자동 별표 — planDate가 지났는데 미완료면 전부 ★ (cloudLoaded 후 1회) */
-  const overdueStarred = useRef(false);
-  useEffect(() => {
-    if (!cloudLoaded || overdueStarred.current) return;
-    overdueStarred.current = true;
-    /* planDate 도래(<=오늘) 시 자동 별표 — 그날이 되면 '오늘 할 일'에 ★로 올라온다(2026-06-28: <를 <=로). 루틴은 생성 시 이미 focus=true라 !x.focus로 자연 제외. */
-    const isOver = (x) => x.status !== "done" && x.planDate && x.planDate <= TODAY && !x.focus;
-    setTasks(p => p.map(t => {
-      let nt = isOver(t) ? { ...t, focus: true } : t;
-      const subs = nt.subtasks || [];
-      if (subs.some(isOver)) nt = { ...nt, subtasks: subs.map(s => isOver(s) ? { ...s, focus: true } : s) };
-      return nt;
-    }));
-  }, [cloudLoaded]); /* eslint-disable-line */
+  /* (폐지 2026-06-30) 수행날짜 도래 시 자동 별표(#1) 제거 — 별=집중 업무(날짜 무관)로 의미 전환.
+     '오늘 할 일'은 수행날짜<=오늘로 자동 표출(TodayView onToday)이라 별로 끌어올릴 필요 없음. */
 
   /* S4a: 개인 프로젝트 5종 보강(기존 데이터에 신규 추가, 정본 순서·id 보존) */
   const personalProjDone = useRef(false);
@@ -1689,7 +1686,7 @@ function App({ onSwitchWs }) {
     const proj = projects.find(p => p.id === project);
     const tid = gid();
     const pd = planDate || TODAY;
-    const autoFocus = focus || (pd === TODAY);
+    const autoFocus = focus; /* 별=집중(날짜와 분리, 2026-06-30) — 오늘 표출은 수행날짜로 */
     const newTask = { id: tid, text, status, project, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: pd, createdAt: TODAY, notes: "", focus: autoFocus, subtasks: [], calEventId: "", calUpdated: 0 };
     setTasks(p => [...p, newTask]);
     addHistItem({ type: "added", text, projectName: proj?.name || "", project, time: nowTime() });
@@ -1705,6 +1702,23 @@ function App({ onSwitchWs }) {
       addHistItem({ type: "edited", text: task.text, projectName: proj?.name || "", detail: !task.focus ? "⭐ 집중 설정" : "⭐ 집중 해제", time: nowTime() });
     }
     setTasks(p => p.map(t => t.id === id ? { ...t, focus: !t.focus } : t));
+  };
+  /* '오늘 할 일'로 드래그 → 수행날짜를 오늘로(2026-06-30). 캘린더도 동기(반복/루틴 제외). */
+  const planToday = (id) => {
+    const t = tasks.find(x => x.id === id);
+    if (!t || t.planDate === TODAY) return;
+    const updated = { ...t, planDate: TODAY };
+    setTasks(p => p.map(x => x.id === id ? updated : x));
+    const proj = projects.find(p => p.id === t.project);
+    addHistItem({ type: "edited", text: t.text, projectName: proj?.name || "", detail: "📆 오늘로", time: nowTime() });
+    if (!updated.recurringId) {
+      const cp = calMakeParams(updated, projects);
+      if (cp) {
+        const act = updated.calEventId ? "update" : "add";
+        const params = updated.calEventId ? { ...cp, eventId: updated.calEventId } : cp;
+        calSync(act, params).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === id ? { ...x, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : x)); });
+      }
+    }
   };
   const updateTask = (updated) => {
     const cur = tasks.find(t => t.id === updated.id);
@@ -1722,7 +1736,7 @@ function App({ onSwitchWs }) {
   const handleEditSave = (updated) => {
     if (!editTarget) return;
     if (editTarget.parentId) {
-      if (updated.planDate === TODAY && !updated.focus) updated = { ...updated, focus: true };
+      /* (폐지 2026-06-30) 수행날짜=오늘 자동별표 제거 — 별=집중 업무(날짜 무관) */
       setTasks(p => p.map(t => t.id === editTarget.parentId ? { ...t, subtasks: (t.subtasks || []).map(s => s.id === updated.id ? updated : s) } : t));
       /* 서브태스크도 캘린더 동기화(부모 과제 기준) — task와 동일 */
       const par = tasks.find(t => t.id === editTarget.parentId);
@@ -1736,7 +1750,7 @@ function App({ onSwitchWs }) {
     } else {
       const prev = tasks.find(t => t.id === updated.id);
       /* planDate가 오늘이면 자동 별표 */
-      if (updated.planDate === TODAY && !updated.focus) updated = { ...updated, focus: true };
+      /* (폐지 2026-06-30) 수행날짜=오늘 자동별표 제거 — 별=집중 업무(날짜 무관) */
       setTasks(p => p.map(t => t.id === updated.id ? updated : t));
       if (!prev) return;
       const proj = projects.find(p => p.id === updated.project);
@@ -1963,7 +1977,7 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
+        {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
         {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecap={updateHistRecap} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
