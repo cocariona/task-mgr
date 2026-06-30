@@ -1536,6 +1536,17 @@ function App({ onSwitchWs }) {
     });
   }, [cloudLoaded]); /* eslint-disable-line */
 
+  /* 루틴 과제 교정(2026-06-30): B2 이전 데이터의 반복설정·루틴 인스턴스가 폐기된 'p_routine'에 묶여,
+     루틴 할일 편집창의 '과제' 드롭다운이 실제값을 못 찾아 첫 항목(운동)으로 잘못 표시됐음 → 각 영역 과제(recurringId)로 remap. */
+  const routineProjFixDone = useRef(false);
+  useEffect(() => {
+    if (isWork || !cloudLoaded || routineProjFixDone.current) return;
+    routineProjFixDone.current = true;
+    const RID = new Set(ROUTINE_PROJ_IDS); /* rt_workout·rt_english·rt_vocal·rt_writing */
+    setRecurrings(prev => { let ch = false; const n = prev.map(r => (r.project === "p_routine" && RID.has(r.id)) ? (ch = true, { ...r, project: r.id }) : r); return ch ? n : prev; });
+    setTasks(prev => { let ch = false; const n = prev.map(t => (t.project === "p_routine" && t.recurringId && RID.has(t.recurringId)) ? (ch = true, { ...t, project: t.recurringId }) : t); return ch ? n : prev; });
+  }, [cloudLoaded]); /* eslint-disable-line */
+
   /* 업무 develop 버킷 보강(2026-06-26): 마커 폐지 → 지식·교훈·글감 버킷 없으면 추가(기존 데이터 보존) */
   const workBucketDone = useRef(false);
   useEffect(() => {
