@@ -245,7 +245,9 @@ const calMakeParams = (task, projects) => {
   const proj = projects?.find(p => p.id === task.project);
   const cleanNotes = (task.notes || '').replace(/\[recurring:[^\]]*\]\s*/g, '').trim(); /* 기계용 태그는 캘린더로 안 보냄 */
   const desc = [proj ? `#${proj.name}` : '', cleanNotes].filter(Boolean).join('\n');
-  return { title: WS.calPrefix + task.text, date, desc };
+  const p = { title: WS.calPrefix + task.text, date, desc };
+  if (task.planTime) p.time = task.planTime; /* HH:MM 있으면 타임드 이벤트(GAS가 처리, 구버전 GAS는 무시=종일)(2026-07-01) */
+  return p;
 };
 /* 서브태스크 캘린더 객체 — 제목=서브 task(sub.text) 기준, 메모 맨 앞에 부모 task명(↳ 부모명) */
 const subCalObj = (sub, parent) => ({ ...sub, project: parent ? parent.project : sub.project, notes: "↳ " + (parent ? parent.text : "") + (sub.notes ? "\n" + sub.notes : "") });
@@ -302,7 +304,7 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
     newTasks.push({
       id: gid(), text: r.text, status: "action", project: r.project || "proj_etc",
       scheduledDate: "", scheduledLabel: "", planDate: TODAY,
-      createdAt: TODAY, notes: carried, focus: false, subtasks: [], calEventId: "", calUpdated: 0, /* focus=집중(기본 꺼짐, 2026-06-30) — 루틴은 수행날짜=오늘로 '오늘 할 일'에 표출 */
+      createdAt: TODAY, notes: carried, focus: false, subtasks: [], calEventId: "", calUpdated: 0, planTime: r.time || "", /* focus=집중(기본 꺼짐) · planTime=반복 시간(선택, 2026-07-01) */
       recurringId: r.id, recurringPeriod: period
     });
   });
@@ -761,6 +763,7 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
             <div style={{ ...S.lbl, color: "#6366F1", fontWeight: 600 }}>📆 언제할지 (선택)</div>
             <div className="plan-fields" style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <input type="date" style={{ ...S.fld, width: 160, flex: "none" }} value={f.planDate || ""} onChange={e => u("planDate", e.target.value)} />
+              <span style={{ fontSize: 11, color: "#6366F1" }}>🕒</span><input type="time" style={{ ...S.fld, width: 120, flex: "none" }} value={f.planTime || ""} onChange={e => u("planTime", e.target.value)} title="시간(선택) — 넣으면 캘린더에 타임드 일정" />
             </div>
           </div>
           <div>
@@ -1236,16 +1239,18 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
   const [show, setShow] = useState(false);
   const [nt, setNt] = useState(""); const [nd, setNd] = useState(1); const [np, setNp] = useState("proj_etc");
   const [rType, setRType] = useState("weekly"); const [dom, setDom] = useState(1); const [lastDay, setLastDay] = useState(false);
+  const [rTime, setRTime] = useState(""); /* 선택 시간 HH:MM (2026-07-01) */
   const addR = () => {
     if (!nt.trim()) return;
+    const base = { id: gid(), text: nt.trim(), project: np, time: rTime || "" };
     if (rType === "daily") {
-      setRecurrings(p => [...p, { id: gid(), type: "daily", text: nt.trim(), project: np }]);
+      setRecurrings(p => [...p, { ...base, type: "daily" }]);
     } else if (rType === "weekly") {
-      setRecurrings(p => [...p, { id: gid(), type: "weekly", dow: parseInt(nd), text: nt.trim(), project: np }]);
+      setRecurrings(p => [...p, { ...base, type: "weekly", dow: parseInt(nd) }]);
     } else {
-      setRecurrings(p => [...p, { id: gid(), type: "monthly", dom: lastDay ? 0 : parseInt(dom), lastDay, text: nt.trim(), project: np }]);
+      setRecurrings(p => [...p, { ...base, type: "monthly", dom: lastDay ? 0 : parseInt(dom), lastDay }]);
     }
-    setNt(""); setNd(1); setDom(1); setLastDay(false);
+    setNt(""); setNd(1); setDom(1); setLastDay(false); setRTime("");
   };
   const delR = (id) => setRecurrings(p => p.filter(r => r.id !== id));
   return (
@@ -1259,7 +1264,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
         {recurrings.map(r => (
           <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", fontSize: 13, borderBottom: "1px solid #f3f4f6" }}>
             <span style={{ background: "#EEF2FF", color: "#4338CA", fontWeight: 700, fontSize: 12, padding: "2px 8px", borderRadius: 6, flexShrink: 0 }}>
-              {(r.type || "weekly") === "daily" ? "매일" : (r.type || "weekly") === "weekly" ? `매주 ${DAYS_KO[r.dow]}` : r.lastDay ? "매월 마지막일" : `매월 ${r.dom}일`}
+              {(r.type || "weekly") === "daily" ? "매일" : (r.type || "weekly") === "weekly" ? `매주 ${DAYS_KO[r.dow]}` : r.lastDay ? "매월 마지막일" : `매월 ${r.dom}일`}{r.time ? ` ${r.time}` : ""}
             </span>
             <span style={{ flex: 1 }}>{r.text}</span>
             <span style={{ fontSize: 10, color: "#9ca3af" }}>#{projects.find(p => p.id === r.project)?.name}</span>
@@ -1285,6 +1290,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
             </div>
           )}
           <input style={{ ...S.inp, fontSize: 12 }} placeholder="반복할 할일..." value={nt} onChange={e => setNt(e.target.value)} onKeyDown={e => e.key === "Enter" && addR()} />
+          <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>🕒</span><input type="time" style={{ ...S.fld, width: 110, flex: "none", fontSize: 11 }} value={rTime} onChange={e => setRTime(e.target.value)} title="시간(선택) — 넣으면 캘린더에 타임드 일정" /></div>
           <PrSel value={np} onChange={setNp} projects={projects} />
           <button style={S.btn()} onClick={addR}>추가</button>
         </div>
@@ -1654,8 +1660,12 @@ function App({ onSwitchWs }) {
         if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, ...items] } : h);
         return [...prev, { date: TODAY, items }];
       });
-      /* 반복/루틴 캘린더 자동등록 폐지(2026-06-30, 소유자 결정): 반복·루틴은 네이티브 고정 캘린더 일정으로 관리 →
-         task-mgr가 매 인스턴스마다 이벤트를 또 만들면 고정일정 위에 매일 중복 생성됨. recurringId는 캘린더 미동기. */
+      /* 반복/루틴 캘린더 등록 재활성(2026-07-01, 소유자 결정 #6): task-mgr가 루틴 캘린더를 소유(네이티브는 수동 삭제).
+         carry-forward 메모가 desc에 누적되고, 시간(planTime) 있으면 타임드. autoCalDone 폐지 상태라 중복 재등록 없음. */
+      newTasks.forEach(t => {
+        const cp = calMakeParams(t, projects);
+        if (cp) calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === t.id ? { ...x, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : x)); });
+      });
     }
   }, [cloudLoaded, recurrings, tasks, projects]); /* eslint-disable-line */
 
@@ -1789,7 +1799,7 @@ function App({ onSwitchWs }) {
     setTasks(p => p.map(t => t.id === updated.id ? updated : t));
     syncSubDoneHist(cur, updated);
     /* 새로 추가된(날짜 있는) 서브태스크 즉시 캘린더 동기화 — task와 동일 (Q3) */
-    if (cur && !updated.recurringId) { const prevIds = new Set((cur.subtasks || []).map(s => s.id));
+    if (cur) { const prevIds = new Set((cur.subtasks || []).map(s => s.id));
       (updated.subtasks || []).forEach(s => { if (!prevIds.has(s.id) && (s.planDate || s.scheduledDate) && !s.calEventId) {
         const cp = calMakeParams(subCalObj(s, updated), projects);
         if (cp) calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(t => t.id === updated.id ? { ...t, subtasks: (t.subtasks || []).map(y => y.id === s.id ? { ...y, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : y) } : t)); });
@@ -1835,7 +1845,7 @@ function App({ onSwitchWs }) {
         }
       }
       /* 캘린더 자동 동기화 (날짜/제목/메모/과제 변경 시) */
-      const calChanged = !updated.recurringId && (prev.text !== updated.text || prev.planDate !== updated.planDate || prev.scheduledDate !== updated.scheduledDate || prev.notes !== updated.notes || prev.project !== updated.project); /* 반복/루틴=캘린더 미동기(2026-06-30) */
+      const calChanged = prev.text !== updated.text || prev.planDate !== updated.planDate || prev.scheduledDate !== updated.scheduledDate || prev.notes !== updated.notes || prev.project !== updated.project || prev.planTime !== updated.planTime;
       const hasDate = updated.planDate || updated.scheduledDate;
       if (calChanged && hasDate) {
         const cp = calMakeParams(updated, projects);
@@ -1949,10 +1959,11 @@ function App({ onSwitchWs }) {
     let changed = 0;
     const merged = tasks.map(t => {
       let nt = t;
-      if (t.recurringId) return nt; /* 반복/루틴=캘린더 미관리, pull 제외(2026-06-30) */
       const ev = t.calEventId && byId[t.calEventId];
       if (ev && ev.start && ev.updated > (t.calUpdated || 0)) {
-        const f = pick(t); nt = { ...nt, [f]: ev.start, calUpdated: ev.updated }; changed++;
+        const f = pick(t); const parts = String(ev.start).split("T"); /* 타임드면 날짜T시간 분리(2026-07-01) */
+        const upd = { [f]: parts[0], calUpdated: ev.updated }; if (f === "planDate") upd.planTime = parts[1] || "";
+        nt = { ...nt, ...upd }; changed++;
       }
       if (nt.subtasks?.length) {
         let sc = false;
@@ -1960,7 +1971,9 @@ function App({ onSwitchWs }) {
           const se = s.calEventId && byId[s.calEventId];
           if (se && se.start && se.updated > (s.calUpdated || 0)) {
             const f = pick(s); sc = true; changed++;
-            return { ...s, [f]: se.start, calUpdated: se.updated };
+            const parts = String(se.start).split("T");
+            const upd = { [f]: parts[0], calUpdated: se.updated }; if (f === "planDate") upd.planTime = parts[1] || "";
+            return { ...s, ...upd };
           }
           return s;
         });
@@ -1985,7 +1998,6 @@ function App({ onSwitchWs }) {
   const bulkCalSync = async () => {
     const items = [];
     tasks.forEach(t => {
-      if (t.recurringId) return;
       if (t.status !== "done" && (t.planDate || t.scheduledDate)) items.push({ kind: "task", t });
       (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.planDate || s.scheduledDate)) items.push({ kind: "sub", t, s }); });
     });
