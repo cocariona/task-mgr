@@ -1658,6 +1658,24 @@ function App({ onSwitchWs }) {
     setProjects(prev => { const n = prev.filter(p => !BK.has(p.id)); return n.length === prev.length ? prev : n; });
   }, [cloudLoaded]); /* eslint-disable-line */
 
+  /* 지난 미완료 루틴 인스턴스 정리(2026-07-01): 루틴마다 가장 최근 미완료 1개만 남기고, 그보다 오래된 지난 인스턴스는 제거
+     (carry-forward는 가장 최근 것이 note를 안고 있어 안전). 그 캘린더 이벤트도 삭제 → 유형별/과제별 클러터 제거. */
+  const staleRoutineCleanDone = useRef(false);
+  useEffect(() => {
+    if (!cloudLoaded || staleRoutineCleanDone.current) return;
+    staleRoutineCleanDone.current = true;
+    const byRid = {};
+    tasks.forEach(t => { if (t.recurringId && t.status !== "done") (byRid[t.recurringId] = byRid[t.recurringId] || []).push(t); });
+    const remove = new Set();
+    Object.values(byRid).forEach(list => {
+      const sorted = [...list].sort((a, b) => (b.recurringPeriod || "").localeCompare(a.recurringPeriod || ""));
+      sorted.slice(1).forEach(t => { if (t.planDate && t.planDate < TODAY) remove.add(t.id); });
+    });
+    if (!remove.size) return;
+    tasks.forEach(t => { if (remove.has(t.id) && t.calEventId) calSync("delete", { eventId: t.calEventId }); });
+    setTasks(prev => prev.filter(t => !remove.has(t.id)));
+  }, [cloudLoaded]); /* eslint-disable-line */
+
   /* 반복 태스크 자동 생성 — ⚠️ 클라우드 화해가 끝난 뒤(cloudLoaded) 1회만.
      예전엔 마운트 즉시 실행돼, stale/INIT 상태에서 반복 task와 캘린더 이벤트를
      중복 생성했음(2026-06-10 아침 '위클리 작성' 캘린더 7중복의 원인). */
