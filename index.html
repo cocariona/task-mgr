@@ -376,6 +376,7 @@ const migrateData = (data) => {
     if (t.attachments === undefined) t = { ...t, attachments: [] };
     if (t.marks === undefined) t = { ...t, marks: [] };
     if (t.recap === undefined) t = { ...t, recap: "" };
+    if (t.recaps === undefined) t = { ...t, recaps: (t.recap ? [{ id: "lg_" + t.id, text: t.recap, ts: (t.createdAt || TODAY) }] : []) }; /* recap 문자열 → recaps 배열(2026-07-01) */
     if (t.subtasks?.length) t = { ...t, subtasks: t.subtasks.map(s => {
       let ns = s.status === "scheduled" ? { ...s, status: "action" } : { ...s };
       if (ns.planDate === undefined) ns = { ...ns, planDate: "" };
@@ -1319,32 +1320,61 @@ const RecapFileBox = ({ recapKey, files, setFiles, canUpload }) => {
     </div>
   );
 };
-/* 완료 회고 카드 — 회고 입력 + 그 완료건 전용 파일(task:<id>)이 한 곳에 */
-const RecapCompletionCard = ({ e, onSaveRecap, files, setFiles, canUpload }) => {
-  const [draft, setDraft] = useState(e.recap || "");
-  useEffect(() => { setDraft(e.recap || ""); }, [e.recap, e.key]);
+/* 한 회고 항목 — 편집(onBlur 저장) + 삭제 + 그 회고 전용 파일첨부(recap:<id>)(2026-07-01) */
+const RecapItem = ({ r, onSave, onDel, files, setFiles, canUpload }) => {
+  const [d, setD] = useState(r.text || "");
+  useEffect(() => { setD(r.text || ""); }, [r.text, r.id]);
   return (
-    <div style={{ ...S.card, padding: "8px 10px", marginBottom: 6, borderColor: e.recap ? "#eef0f2" : "#DDD6FE" }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-        <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }}>{(e.date || "").slice(5)}</span>
-        <span style={{ flex: 1, fontSize: 13, color: "#374151" }}>{e.text} {e.sub && e.parent && <span style={{ fontSize: 10, color: "#9ca3af" }} title="하위 할일">↳ {e.parent}</span>} {e.proj && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{e.proj}</span>}</span>
-        {!e.recap && <span style={{ fontSize: 9, color: "#7C3AED", background: "#F3E8FF", borderRadius: 4, padding: "1px 5px", flexShrink: 0 }}>회고 대기</span>}
+    <div style={{ background: "#FAF5FF", border: "1px solid #E9D5FF", borderRadius: 6, padding: "5px 7px", marginBottom: 4 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+        <span style={{ fontSize: 9, color: "#a78bfa", flexShrink: 0 }}>🪞 {fd((r.ts || "").slice(0, 10))}</span>
+        <div style={{ flex: 1 }} />
+        <button style={{ ...S.gh, fontSize: 9, color: "#EF4444", padding: "0 4px" }} onClick={onDel}>🗑</button>
       </div>
-      {e.notes && <div style={{ ...S.note, marginLeft: 0 }}>{e.notes}</div>}
-      {e.origId
-        ? <textarea value={draft} onChange={ev => setDraft(ev.target.value)}
-            onBlur={() => { if (draft !== (e.recap || "")) onSaveRecap(e.date, e.origId, draft); }}
-            placeholder="🪞 회고 (근거·결과·다음 액션)" rows={2}
-            style={{ ...S.ta, minHeight: 0, fontSize: 12, marginTop: 4, background: "#FAF5FF", borderColor: "#E9D5FF" }} />
-        : (e.recap ? <div style={{ ...S.note, color: "#7C3AED", marginLeft: 0 }}>🪞 {e.recap}</div> : null)}
-      {e.origId && <RecapFileBox recapKey={"task:" + e.origId} files={files} setFiles={setFiles} canUpload={canUpload} />}
+      <textarea value={d} onChange={e => setD(e.target.value)} onBlur={() => { if (d !== (r.text || "")) onSave(d); }} rows={2}
+        style={{ ...S.ta, minHeight: 0, fontSize: 12, background: "#fff", borderColor: "#E9D5FF" }} />
+      <RecapFileBox recapKey={"recap:" + r.id} files={files} setFiles={setFiles} canUpload={canUpload} />
     </div>
   );
 };
-/* 진행중 할일 회고 행 — 회고탭 '진행중'에서도 인라인 회고 입력(2026-07-01, 완료 전에도 회고탭서 작성) */
-const ActiveRecapRow = ({ t, isWork, pname, onEdit, onSaveRecap }) => {
-  const [draft, setDraft] = useState(t.recap || "");
-  useEffect(() => { setDraft(t.recap || ""); }, [t.recap, t.id]);
+/* 여러 회고 = 목록 + '추가' 버튼(명시 저장). 각 회고에 파일첨부 종속 */
+const RecapEntries = ({ recaps, onChange, files, setFiles, canUpload }) => {
+  const list = recaps || [];
+  const [draft, setDraft] = useState("");
+  const add = () => { if (!draft.trim()) return; onChange([...list, { id: gid(), text: draft.trim(), ts: new Date().toISOString() }]); setDraft(""); };
+  return (
+    <div style={{ marginTop: 4 }}>
+      {list.map(r => <RecapItem key={r.id} r={r} files={files} setFiles={setFiles} canUpload={canUpload}
+        onSave={txt => onChange(list.map(x => x.id === r.id ? { ...x, text: txt } : x))}
+        onDel={() => { if (window.confirm("이 회고를 삭제할까요?")) onChange(list.filter(x => x.id !== r.id)); }} />)}
+      <div style={{ display: "flex", gap: 4, alignItems: "stretch", marginTop: 2 }}>
+        <textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="🪞 회고 추가 (결과·교훈·다음에 반영할 것)" rows={2}
+          onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) add(); }}
+          style={{ ...S.ta, minHeight: 0, fontSize: 12, flex: 1, background: "#FAF5FF", borderColor: "#DDD6FE" }} />
+        <button style={{ ...S.btn("#7C3AED"), whiteSpace: "nowrap" }} onClick={add}>+ 저장</button>
+      </div>
+    </div>
+  );
+};
+/* 완료 회고 카드 — 여러 회고(각자 파일) 목록 + 추가 */
+const RecapCompletionCard = ({ e, onSaveRecaps, files, setFiles, canUpload }) => {
+  const has = (e.recaps || []).length > 0;
+  return (
+    <div style={{ ...S.card, padding: "8px 10px", marginBottom: 6, borderColor: has ? "#eef0f2" : "#DDD6FE" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+        <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }}>{(e.date || "").slice(5)}</span>
+        <span style={{ flex: 1, fontSize: 13, color: "#374151" }}>{e.text} {e.sub && e.parent && <span style={{ fontSize: 10, color: "#9ca3af" }} title="하위 할일">↳ {e.parent}</span>} {e.proj && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{e.proj}</span>}</span>
+        {!has && <span style={{ fontSize: 9, color: "#7C3AED", background: "#F3E8FF", borderRadius: 4, padding: "1px 5px", flexShrink: 0 }}>회고 대기</span>}
+      </div>
+      {e.notes && <div style={{ ...S.note, marginLeft: 0 }}>{e.notes}</div>}
+      {e.origId
+        ? <RecapEntries recaps={e.recaps} onChange={rs => onSaveRecaps(e.date, e.origId, rs)} files={files} setFiles={setFiles} canUpload={canUpload} />
+        : (e.recaps || []).map(r => <div key={r.id} style={{ ...S.note, color: "#7C3AED", marginLeft: 0 }}>🪞 {r.text}</div>)}
+    </div>
+  );
+};
+/* 진행중 할일 회고 행 — 회고탭 '진행중'에서도 회고 여러 개 + 각자 파일첨부(2026-07-01) */
+const ActiveRecapRow = ({ t, isWork, pname, onEdit, onSaveRecaps, files, setFiles, canUpload }) => {
   const dl = t.scheduledDate ? deadlineInfo(t.scheduledDate) : null;
   return (
     <div style={{ padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
@@ -1353,14 +1383,11 @@ const ActiveRecapRow = ({ t, isWork, pname, onEdit, onSaveRecap }) => {
         <div style={{ flex: 1, minWidth: 0 }}>{t.text} {isWork && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{pname(t.project)}</span>}{t.notes && <div style={S.note}><span style={{ fontSize: 8, fontWeight: 700, opacity: 0.6, marginRight: 4 }}>📝</span>{t.notes}</div>}</div>
         <button style={{ ...S.gh, fontSize: 10 }} onClick={() => onEdit(t)}>✏️</button>
       </div>
-      <textarea value={draft} onChange={e => setDraft(e.target.value)}
-        onBlur={() => { if (draft !== (t.recap || "")) onSaveRecap(t.id, draft); }}
-        placeholder="🪞 회고 (결과·교훈·다음에 반영할 것)" rows={2}
-        style={{ ...S.ta, minHeight: 0, fontSize: 12, marginTop: 4, background: "#FAF5FF", borderColor: "#E9D5FF" }} />
+      <RecapEntries recaps={t.recaps} onChange={rs => onSaveRecaps(t.id, rs)} files={files} setFiles={setFiles} canUpload={canUpload} />
     </div>
   );
 };
-const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, onUpdateHistRecap, onUpdateTaskRecap }) => {
+const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, onUpdateHistRecaps, onUpdateTaskRecaps }) => {
   const targets = (isWork
     /* 업무(2026-06-28): 마커 폐지 → 프로젝트 + develop 버킷(지식·교훈·글감) 전부를 회고 타깃으로. 완료(alldone)는 .concat로 공통 추가. */
     ? (projects || []).map(p => ({ kind: "project", key: p.id, label: p.name }))
@@ -1390,16 +1417,17 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
     (history || []).forEach(day => (day.items || []).forEach(it => {
       if (it.type !== "done" || !it.orig) return;
       const ok = cur.kind === "alldone" ? true : cur.kind === "project" ? it.orig.project === cur.key : false;
-      if (ok) out.push({ key: (it.orig.id || it.text) + day.date, origId: it.orig.id, text: it.text, notes: it.orig.notes, recap: it.orig.recap || "", proj: it.projectName || pname(it.orig.project), date: day.date, sub: it.isSub, parent: it.parentText });
+      if (ok) out.push({ key: (it.orig.id || it.text) + day.date, origId: it.orig.id, text: it.text, notes: it.orig.notes, recaps: it.orig.recaps || (it.orig.recap ? [{ id: "lg_" + (it.orig.id || ""), text: it.orig.recap, ts: day.date }] : []), proj: it.projectName || pname(it.orig.project), date: day.date, sub: it.isSub, parent: it.parentText });
     }));
     return out;
   }, [history, cur.kind, cur.key]);
   /* 회고 대기(미작성) 먼저 → 최근순. 기본=미작성+최근2주만, 이전은 '더 보기'(무한 증가 방지) */
   const doneView = useMemo(() => {
     const cut = new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10);
-    const sorted = [...doneHist].sort((a, b) => { const ar = a.recap ? 1 : 0, br = b.recap ? 1 : 0; if (ar !== br) return ar - br; return (b.date || "").localeCompare(a.date || ""); });
-    const shown = showAllDone ? sorted : sorted.filter(e => !e.recap || (e.date || "") >= cut);
-    return { shown, hidden: sorted.length - shown.length, total: sorted.length, pending: shown.filter(e => !e.recap), recapped: shown.filter(e => e.recap) };
+    const has = (e) => (e.recaps || []).length > 0;
+    const sorted = [...doneHist].sort((a, b) => { const ar = has(a) ? 1 : 0, br = has(b) ? 1 : 0; if (ar !== br) return ar - br; return (b.date || "").localeCompare(a.date || ""); });
+    const shown = showAllDone ? sorted : sorted.filter(e => !has(e) || (e.date || "") >= cut);
+    return { shown, hidden: sorted.length - shown.length, total: sorted.length, pending: shown.filter(e => !has(e)), recapped: shown.filter(has) };
   }, [doneHist, showAllDone]);
   const routineEntries = useMemo(() => {
     if (cur.kind !== "routine") return [];
@@ -1443,7 +1471,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
       {cur.kind === "project" && <div style={S.card}>
         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>진행중 ({active.length})</div>
         {active.length === 0 && <div style={{ ...S.emp, padding: 12 }}>없음</div>}
-        {active.map(t => <ActiveRecapRow key={t.id} t={t} isWork={isWork} pname={pname} onEdit={onEdit} onSaveRecap={onUpdateTaskRecap} />)}
+        {active.map(t => <ActiveRecapRow key={t.id} t={t} isWork={isWork} pname={pname} onEdit={onEdit} onSaveRecaps={onUpdateTaskRecaps} files={files} setFiles={setFiles} canUpload={canUpload} />)}
       </div>}
 
       {cur.kind === "routine" && <div style={S.card}>
@@ -1458,12 +1486,12 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
       {cur.kind !== "routine" && cur.kind !== "none" && <div>
         <div style={{ fontSize: 12, fontWeight: 600, margin: "10px 2px 6px" }}>완료 ({doneView.total}){doneView.pending.length > 0 && <span style={{ fontSize: 10, color: "#7C3AED", fontWeight: 600 }}> · 회고 대기 {doneView.pending.length}</span>}</div>
         {doneView.total === 0 && <div style={{ ...S.emp, padding: 12 }}>완료 기록 없음 (task 완료 시 모임)</div>}
-        {doneView.pending.map(e => <RecapCompletionCard key={e.key} e={e} onSaveRecap={onUpdateHistRecap} files={files} setFiles={setFiles} canUpload={canUpload} />)}
+        {doneView.pending.map(e => <RecapCompletionCard key={e.key} e={e} onSaveRecaps={onUpdateHistRecaps} files={files} setFiles={setFiles} canUpload={canUpload} />)}
         {doneView.recapped.length > 0 && <>
           <div onClick={() => setDoneOpen(!doneOpen)} style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, cursor: "pointer", userSelect: "none", padding: "6px 2px", display: "flex", alignItems: "center", gap: 5 }}>
             <span style={{ fontSize: 10 }}>{doneOpen ? "▼" : "▶"}</span> ✅ 회고 완료 {doneView.recapped.length}건 {doneOpen ? "접기" : "펼치기"}
           </div>
-          {doneOpen && doneView.recapped.map(e => <RecapCompletionCard key={e.key} e={e} onSaveRecap={onUpdateHistRecap} files={files} setFiles={setFiles} canUpload={canUpload} />)}
+          {doneOpen && doneView.recapped.map(e => <RecapCompletionCard key={e.key} e={e} onSaveRecaps={onUpdateHistRecaps} files={files} setFiles={setFiles} canUpload={canUpload} />)}
         </>}
         {doneView.hidden > 0 && <button style={{ ...S.gh, fontSize: 11, width: "100%", padding: "6px" }} onClick={() => setShowAllDone(true)}>이전 완료 {doneView.hidden}건 더 보기</button>}
       </div>}
@@ -1736,11 +1764,12 @@ function App({ onSwitchWs }) {
   };
   /* (2026-06-23 ④-b) setRoutineHist 제거 — 루틴=daily 반복 할일, RoutineSection 폐지. */
   /* 완료/해소된 task의 회고를 히스토리 orig.recap에 기록 (#11) */
-  const updateHistRecap = (date, origId, recap) => {
-    setHistory(prev => prev.map(h => h.date === date ? { ...h, items: h.items.map(it => (it.orig && it.orig.id === origId) ? { ...it, orig: { ...it.orig, recap } } : it) } : h));
+  /* 여러 회고(recaps 배열) 저장(2026-07-01). recap 문자열은 조인 유지(하네스/스냅샷 호환). */
+  const joinRecaps = (rs) => (rs || []).map(r => r.text).filter(Boolean).join("\n\n");
+  const updateHistRecaps = (date, origId, recaps) => {
+    setHistory(prev => prev.map(h => h.date === date ? { ...h, items: h.items.map(it => (it.orig && it.orig.id === origId) ? { ...it, orig: { ...it.orig, recaps, recap: joinRecaps(recaps) } } : it) } : h));
   };
-  /* 진행중 할일 회고 인라인 저장(회고탭 진행중 카드, 2026-07-01) */
-  const updateTaskRecap = (id, recap) => setTasks(p => p.map(t => t.id === id ? { ...t, recap } : t));
+  const updateTaskRecaps = (id, recaps) => setTasks(p => p.map(t => t.id === id ? { ...t, recaps, recap: joinRecaps(recaps) } : t));
 
   const addTask = ({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => {
     const proj = projects.find(p => p.id === project);
@@ -2055,7 +2084,7 @@ function App({ onSwitchWs }) {
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
         {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
-        {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecap={updateHistRecap} onUpdateTaskRecap={updateTaskRecap} />}
+        {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecaps={updateHistRecaps} onUpdateTaskRecaps={updateTaskRecaps} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} />}
       </div>
