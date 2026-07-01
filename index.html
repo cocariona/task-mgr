@@ -244,7 +244,9 @@ const calMakeParams = (task, projects) => {
   if (!date) return null;
   const proj = projects?.find(p => p.id === task.project);
   const cleanNotes = (task.notes || '').replace(/\[recurring:[^\]]*\]\s*/g, '').trim(); /* 기계용 태그는 캘린더로 안 보냄 */
-  const desc = [proj ? `#${proj.name}` : '', cleanNotes].filter(Boolean).join('\n');
+  const base = [proj ? `#${proj.name}` : '', cleanNotes].filter(Boolean).join('\n');
+  /* 실행 방법(protocol, 고정 참고) 맨 위 + 아래 '─ 오늘 ─' 노트(2026-07-01). 없으면 기존과 동일. */
+  const desc = task.protocol ? (task.protocol + (base ? '\n\n─ 오늘 ─\n' + base : '')) : base;
   const p = { title: WS.calPrefix + task.text, date, desc };
   if (task.planTime) p.time = task.planTime; /* HH:MM 있으면 타임드 이벤트(GAS가 처리, 구버전 GAS는 무시=종일)(2026-07-01) */
   return p;
@@ -304,7 +306,7 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
     newTasks.push({
       id: gid(), text: r.text, status: "action", project: r.project || "proj_etc",
       scheduledDate: "", scheduledLabel: "", planDate: TODAY,
-      createdAt: TODAY, notes: carried, focus: false, subtasks: [], calEventId: "", calUpdated: 0, planTime: r.time || "", /* focus=집중(기본 꺼짐) · planTime=반복 시간(선택, 2026-07-01) */
+      createdAt: TODAY, notes: carried, focus: false, subtasks: [], calEventId: "", calUpdated: 0, planTime: r.time || "", protocol: r.protocol || "", /* focus=집중 · planTime=반복시간 · protocol=실행방법(선택, 2026-07-01) */
       recurringId: r.id, recurringPeriod: period
     });
   });
@@ -1233,15 +1235,43 @@ const HistRow = ({ item, date, idx, onRestore }) => {
 /* (S3) InboxView 제거 — 업무 인박스 탭(붙여넣기 트리아지·🏢회사 캘린더 가져오기) 삭제.
    (cleanup 2026-06-16: COMPANY_GAS_*·companyFetchEvents·calImport 제거 완료.) */
 
+/* 반복 태스크 한 행 — 실행 방법(protocol) 인라인 편집 토글(2026-07-01) */
+const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
+  const [open, setOpen] = useState(false);
+  const [d, setD] = useState(r.protocol || "");
+  useEffect(() => { setD(r.protocol || ""); }, [r.protocol, r.id]);
+  const dirty = d !== (r.protocol || "");
+  const label = (r.type || "weekly") === "daily" ? "매일" : (r.type || "weekly") === "weekly" ? `매주 ${DAYS_KO[r.dow]}` : r.lastDay ? "매월 마지막일" : `매월 ${r.dom}일`;
+  return (
+    <div style={{ borderBottom: "1px solid #f3f4f6", padding: "6px 4px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+        <span style={{ background: "#EEF2FF", color: "#4338CA", fontWeight: 700, fontSize: 12, padding: "2px 8px", borderRadius: 6, flexShrink: 0 }}>{label}{r.time ? ` ${r.time}` : ""}</span>
+        <span style={{ flex: 1 }}>{r.text}</span>
+        <span style={{ fontSize: 10, color: "#9ca3af" }}>#{projects.find(p => p.id === r.project)?.name}</span>
+        <button style={{ ...S.gh, fontSize: 10, background: open ? "#EEF2FF" : "#fff" }} onClick={() => setOpen(!open)} title="실행 방법(고정 참고)">📋{r.protocol ? "✓" : ""}</button>
+        <button style={{ ...S.gh, color: "#EF4444", fontSize: 10 }} onClick={onDelete}>✕</button>
+      </div>
+      {open && <div style={{ marginTop: 4 }}>
+        <textarea value={d} onChange={e => setD(e.target.value)} rows={4} placeholder={"실행 방법 (고정 참고). 예:\n[실행] F45 클래스 참석\n[tier별] 최소=푸시업10+스쿼트10 / 보통=F45 / 최대=F45 그대로"}
+          style={{ ...S.ta, minHeight: 0, fontSize: 12 }} />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+          <span style={{ fontSize: 10, color: "#9ca3af" }}>→ 캘린더 이벤트 설명 맨 위에 고정 표시(오늘 노트는 그 아래)</span>
+          {dirty && <button style={{ ...S.btn("#4338CA"), fontSize: 11 }} onClick={() => onUpdate(r.id, { protocol: d.trim() })}>저장</button>}
+        </div>
+      </div>}
+    </div>
+  );
+};
 /* ═══ 반복 태스크 설정 ═══ */
-const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
+const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurring }) => {
   const [show, setShow] = useState(false);
   const [nt, setNt] = useState(""); const [nd, setNd] = useState(1); const [np, setNp] = useState("proj_etc");
   const [rType, setRType] = useState("weekly"); const [dom, setDom] = useState(1); const [lastDay, setLastDay] = useState(false);
   const [rTime, setRTime] = useState(""); /* 선택 시간 HH:MM (2026-07-01) */
+  const [rProto, setRProto] = useState(""); /* 실행 방법(선택, 2026-07-01) */
   const addR = () => {
     if (!nt.trim()) return;
-    const base = { id: gid(), text: nt.trim(), project: np, time: rTime || "" };
+    const base = { id: gid(), text: nt.trim(), project: np, time: rTime || "", protocol: rProto.trim() };
     if (rType === "daily") {
       setRecurrings(p => [...p, { ...base, type: "daily" }]);
     } else if (rType === "weekly") {
@@ -1249,7 +1279,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
     } else {
       setRecurrings(p => [...p, { ...base, type: "monthly", dom: lastDay ? 0 : parseInt(dom), lastDay }]);
     }
-    setNt(""); setNd(1); setDom(1); setLastDay(false); setRTime("");
+    setNt(""); setNd(1); setDom(1); setLastDay(false); setRTime(""); setRProto("");
   };
   const delR = (id) => setRecurrings(p => p.filter(r => r.id !== id));
   return (
@@ -1260,16 +1290,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
       </div>
       {show && <div style={{ ...S.card, marginTop: 4 }}>
         {recurrings.length === 0 && <div style={{ ...S.emp, padding: 12 }}>설정된 반복 태스크가 없습니다</div>}
-        {recurrings.map(r => (
-          <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", fontSize: 13, borderBottom: "1px solid #f3f4f6" }}>
-            <span style={{ background: "#EEF2FF", color: "#4338CA", fontWeight: 700, fontSize: 12, padding: "2px 8px", borderRadius: 6, flexShrink: 0 }}>
-              {(r.type || "weekly") === "daily" ? "매일" : (r.type || "weekly") === "weekly" ? `매주 ${DAYS_KO[r.dow]}` : r.lastDay ? "매월 마지막일" : `매월 ${r.dom}일`}{r.time ? ` ${r.time}` : ""}
-            </span>
-            <span style={{ flex: 1 }}>{r.text}</span>
-            <span style={{ fontSize: 10, color: "#9ca3af" }}>#{projects.find(p => p.id === r.project)?.name}</span>
-            <button style={{ ...S.gh, color: "#EF4444", fontSize: 10 }} onClick={() => delR(r.id)}>✕</button>
-          </div>
-        ))}
+        {recurrings.map(r => <RecurringRow key={r.id} r={r} projects={projects} onDelete={() => delR(r.id)} onUpdate={onUpdateRecurring} />)}
         <div style={S.div} />
         <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
           <select style={{ ...S.sel, fontSize: 12 }} value={rType} onChange={e => setRType(e.target.value)}>
@@ -1293,6 +1314,8 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects }) => {
           <PrSel value={np} onChange={setNp} projects={projects} />
           <button style={S.btn()} onClick={addR}>추가</button>
         </div>
+        <textarea value={rProto} onChange={e => setRProto(e.target.value)} rows={2} placeholder="실행 방법(선택) — [실행]/[tier별] 등. 캘린더 이벤트 설명 맨 위 고정. (기존 반복은 목록의 📋로 편집)"
+          style={{ ...S.ta, minHeight: 0, fontSize: 12, marginTop: 6 }} />
       </div>}
     </div>
   );
@@ -1785,6 +1808,12 @@ function App({ onSwitchWs }) {
     setHistory(prev => prev.map(h => h.date === date ? { ...h, items: h.items.map(it => (it.orig && it.orig.id === origId) ? { ...it, orig: { ...it.orig, recaps, recap: joinRecaps(recaps) } } : it) } : h));
   };
   const updateTaskRecaps = (id, recaps) => setTasks(p => p.map(t => t.id === id ? { ...t, recaps, recap: joinRecaps(recaps) } : t));
+  /* 반복 정의 수정(실행방법·시간) + 진행중 인스턴스에도 전파(2026-07-01) */
+  const updateRecurring = (id, patch) => {
+    setRecurrings(p => p.map(r => r.id === id ? { ...r, ...patch } : r));
+    if ("protocol" in patch || "time" in patch) setTasks(p => p.map(t => (t.recurringId === id && t.status !== "done")
+      ? { ...t, ...("protocol" in patch ? { protocol: patch.protocol } : {}), ...("time" in patch ? { planTime: patch.time } : {}) } : t));
+  };
 
   const addTask = ({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => {
     const proj = projects.find(p => p.id === project);
@@ -2097,7 +2126,7 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} /></>}
+        {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
         {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecaps={updateHistRecaps} onUpdateTaskRecaps={updateTaskRecaps} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
