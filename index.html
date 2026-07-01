@@ -231,7 +231,7 @@ const GCAL_URL = GAS_URL;
 /* ─── 캘린더 JSONP 동기화 (add / update / delete) ─── */
 const calSync = (action, params) => new Promise((resolve) => {
   const cb = "_gcal_" + gid();
-  const timer = setTimeout(() => { delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); }, 12000);
+  const timer = setTimeout(() => { delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); }, 20000); /* GAS cold-start 견디게 20s(2026-07-01) */
   window[cb] = (r) => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve(r || { success: false }); };
   const qs = new URLSearchParams({ ...params, action, callback: cb });
   const s = document.createElement("script");
@@ -407,10 +407,8 @@ const INIT_PROJECTS = [
   { id: "itrc", name: "ITRC", order: 7 },
   { id: "proj_general", name: "과제 일반 업무", order: 8 },
   { id: "proj_etc", name: "기타 업무", order: 9 },
-  /* develop 버킷(2026-06-26): 마커 🧠🎯✍️ 폐지 → 지식·교훈·글감 캡처 채널(예측 폐지). vault 종착=연동스펙 ⑦. */
-  { id: "bk_knowledge", name: "🧠 지식", order: 10, kind: "bucket" },
-  { id: "bk_lesson", name: "📒 교훈", order: 11, kind: "bucket" },
-  { id: "bk_writing", name: "✍️ 글감", order: 12, kind: "bucket" },
+  /* develop 버킷(지식·교훈·글감) 폐지(2026-07-01, 소유자 결정 #3): 사람이 3칸 분류하지 않음 →
+     주1 정제가 메모+회고를 읽어 자동분류(회사지식/집중/피드백/글쓰기백로그 제안). 아래 workBucketDone에서 기존분 제거·이전. */
 ];
 
 const INIT_TASKS = [
@@ -1320,31 +1318,37 @@ const RecapFileBox = ({ recapKey, files, setFiles, canUpload }) => {
     </div>
   );
 };
-/* 한 회고 항목 — 편집(onBlur 저장) + 삭제 + 그 회고 전용 파일첨부(recap:<id>)(2026-07-01) */
+/* 한 회고 항목 — 편집 후 '저장' 버튼(수정 시에만 표시) + 삭제 + 그 회고 전용 파일첨부(recap:<id>)(2026-07-01) */
 const RecapItem = ({ r, onSave, onDel, files, setFiles, canUpload }) => {
   const [d, setD] = useState(r.text || "");
   useEffect(() => { setD(r.text || ""); }, [r.text, r.id]);
+  const dirty = d !== (r.text || "");
   return (
     <div style={{ background: "#FAF5FF", border: "1px solid #E9D5FF", borderRadius: 6, padding: "5px 7px", marginBottom: 4 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
         <span style={{ fontSize: 9, color: "#a78bfa", flexShrink: 0 }}>🪞 {fd((r.ts || "").slice(0, 10))}</span>
         <div style={{ flex: 1 }} />
+        {dirty && <button style={{ ...S.btn("#7C3AED"), fontSize: 10, padding: "2px 8px" }} onClick={() => onSave(d)}>저장</button>}
         <button style={{ ...S.gh, fontSize: 9, color: "#EF4444", padding: "0 4px" }} onClick={onDel}>🗑</button>
       </div>
-      <textarea value={d} onChange={e => setD(e.target.value)} onBlur={() => { if (d !== (r.text || "")) onSave(d); }} rows={2}
-        style={{ ...S.ta, minHeight: 0, fontSize: 12, background: "#fff", borderColor: "#E9D5FF" }} />
+      <textarea value={d} onChange={e => setD(e.target.value)} rows={2}
+        style={{ ...S.ta, minHeight: 0, fontSize: 12, background: dirty ? "#FFFDF5" : "#fff", borderColor: dirty ? "#FCD34D" : "#E9D5FF" }} />
       <RecapFileBox recapKey={"recap:" + r.id} files={files} setFiles={setFiles} canUpload={canUpload} />
     </div>
   );
 };
-/* 여러 회고 = 목록 + '추가' 버튼(명시 저장). 각 회고에 파일첨부 종속 */
+/* 여러 회고 = (접기 가능한) 목록 + '추가' 버튼(명시 저장). 각 회고에 파일첨부 종속 */
 const RecapEntries = ({ recaps, onChange, files, setFiles, canUpload }) => {
   const list = recaps || [];
   const [draft, setDraft] = useState("");
+  const [open, setOpen] = useState(false); /* 기존 회고는 기본 접힘 */
   const add = () => { if (!draft.trim()) return; onChange([...list, { id: gid(), text: draft.trim(), ts: new Date().toISOString() }]); setDraft(""); };
   return (
     <div style={{ marginTop: 4 }}>
-      {list.map(r => <RecapItem key={r.id} r={r} files={files} setFiles={setFiles} canUpload={canUpload}
+      {list.length > 0 && <div onClick={() => setOpen(!open)} style={{ fontSize: 11, color: "#7C3AED", fontWeight: 600, cursor: "pointer", userSelect: "none", padding: "2px 0", display: "flex", alignItems: "center", gap: 5 }}>
+        <span style={{ fontSize: 10 }}>{open ? "▼" : "▶"}</span> 🪞 회고 {list.length}개 {open ? "접기" : "펴기"}
+      </div>}
+      {open && list.map(r => <RecapItem key={r.id} r={r} files={files} setFiles={setFiles} canUpload={canUpload}
         onSave={txt => onChange(list.map(x => x.id === r.id ? { ...x, text: txt } : x))}
         onDel={() => { if (window.confirm("이 회고를 삭제할까요?")) onChange(list.filter(x => x.id !== r.id)); }} />)}
       <div style={{ display: "flex", gap: 4, alignItems: "stretch", marginTop: 2 }}>
@@ -1644,21 +1648,14 @@ function App({ onSwitchWs }) {
     }
   }, [cloudLoaded]); /* eslint-disable-line */
 
-  /* 업무 develop 버킷 보강(2026-06-26): 마커 폐지 → 지식·교훈·글감 버킷 없으면 추가(기존 데이터 보존) */
+  /* 업무 develop 버킷 제거(2026-07-01, #3): 지식·교훈·글감 버킷 폐지 → 든 할일은 '기타 업무'(proj_etc)로 이전 후 버킷 삭제. */
   const workBucketDone = useRef(false);
   useEffect(() => {
     if (!isWork || !cloudLoaded || workBucketDone.current) return;
     workBucketDone.current = true;
-    const WORK_BUCKETS = [
-      { id: "bk_knowledge", name: "🧠 지식", order: 10, kind: "bucket" },
-      { id: "bk_lesson", name: "📒 교훈", order: 11, kind: "bucket" },
-      { id: "bk_writing", name: "✍️ 글감", order: 12, kind: "bucket" },
-    ];
-    setProjects(prev => {
-      const have = new Set(prev.map(p => p.id));
-      const missing = WORK_BUCKETS.filter(b => !have.has(b.id));
-      return missing.length ? [...prev, ...missing] : prev;
-    });
+    const BK = new Set(["bk_knowledge", "bk_lesson", "bk_writing"]);
+    setTasks(prev => { let ch = false; const n = prev.map(t => BK.has(t.project) ? (ch = true, { ...t, project: "proj_etc" }) : t); return ch ? n : prev; });
+    setProjects(prev => { const n = prev.filter(p => !BK.has(p.id)); return n.length === prev.length ? prev : n; });
   }, [cloudLoaded]); /* eslint-disable-line */
 
   /* 반복 태스크 자동 생성 — ⚠️ 클라우드 화해가 끝난 뒤(cloudLoaded) 1회만.
