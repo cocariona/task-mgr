@@ -1808,11 +1808,15 @@ function App({ onSwitchWs }) {
     setHistory(prev => prev.map(h => h.date === date ? { ...h, items: h.items.map(it => (it.orig && it.orig.id === origId) ? { ...it, orig: { ...it.orig, recaps, recap: joinRecaps(recaps) } } : it) } : h));
   };
   const updateTaskRecaps = (id, recaps) => setTasks(p => p.map(t => t.id === id ? { ...t, recaps, recap: joinRecaps(recaps) } : t));
-  /* 반복 정의 수정(실행방법·시간) + 진행중 인스턴스에도 전파(2026-07-01) */
+  /* 반복 정의 수정(실행방법·시간) + 진행중 인스턴스에 전파 + 연결된 캘린더 이벤트 갱신(2026-07-01) */
   const updateRecurring = (id, patch) => {
     setRecurrings(p => p.map(r => r.id === id ? { ...r, ...patch } : r));
-    if ("protocol" in patch || "time" in patch) setTasks(p => p.map(t => (t.recurringId === id && t.status !== "done")
-      ? { ...t, ...("protocol" in patch ? { protocol: patch.protocol } : {}), ...("time" in patch ? { planTime: patch.time } : {}) } : t));
+    if (!("protocol" in patch) && !("time" in patch)) return;
+    const merge = (t) => ({ ...t, ...("protocol" in patch ? { protocol: patch.protocol } : {}), ...("time" in patch ? { planTime: patch.time } : {}) });
+    const affected = tasks.filter(t => t.recurringId === id && t.status !== "done");
+    setTasks(p => p.map(t => (t.recurringId === id && t.status !== "done") ? merge(t) : t));
+    affected.forEach(t => { if (!t.calEventId) return; const cp = calMakeParams(merge(t), projects);
+      if (cp) calSync("update", { ...cp, eventId: t.calEventId }).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === t.id ? { ...x, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : x)); }); });
   };
 
   const addTask = ({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => {
