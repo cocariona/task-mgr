@@ -56,16 +56,40 @@ function doGet(e) {
     }
 
     if (action === "update") {
+      // ★ in-place 수정(2026-07-01): 삭제+재생성 대신 기존 이벤트를 그대로 고침 → eventId 유지.
+      //   (delete+recreate 는 앱이 새 id 저장에 실패하면 고아/중복이 쌓였음. in-place 는 실패해도 안전.)
       var eventId = e.parameter.eventId || "";
-      // 기존 이벤트 삭제 후 재생성 (날짜/시간 변경을 위해)
-      try {
-        var oldEv = cal.getEventById(eventId);
-        if (oldEv) oldEv.deleteEvent();
-      } catch (err) {
-        // 기존 이벤트를 못 찾아도 새로 생성
+      var ev = null;
+      try { ev = cal.getEventById(eventId); } catch (err) { ev = null; }
+      var title = e.parameter.title || "";
+      var dateStr = e.parameter.date || "";
+      var time = e.parameter.time || "";
+      var desc = e.parameter.desc || "";
+      if (!ev) { // 못 찾으면 새로 생성
+        var nev = makeEvent(title, dateStr, time, desc);
+        return respond({ success: true, eventId: nev.getId(), updated: nev.getLastUpdated().getTime(), recreated: true });
       }
-      var newEv = makeEvent(e.parameter.title || "", e.parameter.date || "", e.parameter.time || "", e.parameter.desc || "");
-      return respond({ success: true, eventId: newEv.getId(), updated: newEv.getLastUpdated().getTime() });
+      try {
+        if (title) ev.setTitle(title);
+        ev.setDescription(desc);
+        if (dateStr) {
+          if (time) {
+            var hm = String(time).split(":");
+            var st = new Date(dateStr + "T00:00:00");
+            st.setHours(Number(hm[0]) || 0, Number(hm[1]) || 0, 0, 0);
+            var dur = Number(e.parameter.dur || 60);
+            ev.setTime(st, new Date(st.getTime() + dur * 60000)); // 종일↔타임드 전환 포함
+          } else {
+            ev.setAllDayDate(new Date(dateStr + "T00:00:00"));
+          }
+        }
+        return respond({ success: true, eventId: ev.getId(), updated: ev.getLastUpdated().getTime() });
+      } catch (moderr) {
+        // in-place 수정이 막히면(종일↔타임드 전환 제약 등) 삭제+재생성 폴백
+        try { ev.deleteEvent(); } catch (e2) {}
+        var rev = makeEvent(title, dateStr, time, desc);
+        return respond({ success: true, eventId: rev.getId(), updated: rev.getLastUpdated().getTime(), recreated: true });
+      }
     }
 
     if (action === "delete") {
