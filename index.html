@@ -523,7 +523,7 @@ const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit, onCal }) => {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
           <Badge st={sub.status} />
-          {sub.planDate && <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "0px 4px", borderRadius: 4 }}>📆 {fd(sub.planDate)}</span>}
+          {sub.planDate && <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "0px 4px", borderRadius: 4 }}>📆 {fd(sub.planDate)}{sub.planTime ? " 🕒" + sub.planTime : ""}</span>}
           {dl && <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>}
           {sub.scheduledDate && <span style={{ fontSize: 9, color: "#6B7280" }}>마감 {fd(sub.scheduledDate)}</span>}
           {sub.scheduledLabel && <span style={{ fontSize: 9, color: "#9ca3af" }}>({sub.scheduledLabel})</span>}
@@ -600,7 +600,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <Badge st={task.status} />
-            {task.planDate && <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "1px 5px", borderRadius: 6 }}>📆 {fd(task.planDate)}</span>}
+            {task.planDate && <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "1px 5px", borderRadius: 6 }}>📆 {fd(task.planDate)}{task.planTime ? " 🕒" + task.planTime : ""}</span>}
             {task.scheduledDate && (() => { const dl = deadlineInfo(task.scheduledDate); return dl ? <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span> : null; })()}
             {task.scheduledDate && <span style={{ fontSize: 10, color: "#6B7280" }}>마감 {fd(task.scheduledDate)}</span>}
             {task.scheduledLabel && <span style={{ fontSize: 10, color: "#9ca3af" }}>({task.scheduledLabel})</span>}
