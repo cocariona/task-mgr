@@ -2036,7 +2036,10 @@ function App({ onSwitchWs }) {
     /* 캘린더 자동 삭제 */
     if (task.calEventId) calSync("delete", { eventId: task.calEventId });
     (task.subtasks || []).forEach(s => { if (s.calEventId) calSync("delete", { eventId: s.calEventId }); });
-    addHistItem({ type: "deleted", text: task.text, projectName: proj?.name || "", time: nowTime() });
+    /* 반복 인스턴스 삭제 시 orig(recurringId+period)를 남겨 '이 회차 건너뜀'으로 기록 → 같은 기간 재생성 방지(2026-07-03).
+       반복 자체를 멈추려면 반복설정에서 삭제. */
+    addHistItem({ type: "deleted", text: task.text, projectName: proj?.name || "", time: nowTime(),
+      ...(task.recurringId ? { orig: { id: task.id, recurringId: task.recurringId, recurringPeriod: task.recurringPeriod, notes: task.notes } } : {}) });
     showT(`"${task.text}" 삭제됨`, () => {
       setTasks(p => [...p, task]);
       if (orphanSubDone.length) setHistory(prev => { let next = [...prev]; orphanSubDone.forEach(({ date, item }) => { const ex = next.find(h => h.date === date); if (ex) next = next.map(h => h.date === date ? { ...h, items: [...h.items, item] } : h); else next = [...next, { date, items: [item] }]; }); return next; });
@@ -2160,7 +2163,11 @@ function App({ onSwitchWs }) {
     calBusyRef.current = true; setCalBusy(true);
     try {
       if (!silent) showT(`📅 ${targets.length}건 캘린더 확인 중...`, null);
-      const BACK = 90, FWD = 365;
+      /* list 범위 = target 날짜 폭(+여유)으로 축소 → 조밀한 캘린더에서 응답 크기·실패위험↓. cap: back 90 / fwd 365 */
+      const dd = (ds) => Math.round((new Date(ds + "T00:00:00") - new Date(TODAY + "T00:00:00")) / 86400000);
+      let needBack = 7, needFwd = 7;
+      targets.forEach(it => { const o = it.kind === "task" ? it.t : it.s; const ds = (o.planDate || o.scheduledDate || "").slice(0, 10); if (!ds) return; const k = dd(ds); if (k < 0) needBack = Math.max(needBack, -k); else needFwd = Math.max(needFwd, k); });
+      const BACK = Math.min(90, needBack + 3), FWD = Math.min(365, needFwd + 3);
       const lr = await calSync("list", { days: FWD, back: BACK });
       const listOk = !!(lr && lr.success && Array.isArray(lr.events));
       const norm = (s) => (s || "").replace(/\s+/g, " ").trim();
