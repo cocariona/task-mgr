@@ -327,11 +327,10 @@ const PERSONAL_PROJECTS = [
   { id: "rt_writing", name: "글쓰기", order: 3, kind: "routine" },
   { id: "p_invest", name: "투자원칙 정립", order: 4, kind: "project" },
   { id: "p_workcap", name: "업무역량 시스템", order: 5, kind: "project" },
-  { id: "appt", name: "약속", order: 6, kind: "bucket" },
-  { id: "p_house", name: "집안일", order: 7, kind: "bucket" },
-  { id: "petc", name: "기타", order: 8, kind: "bucket" },
+  /* 약속·집안일 버킷 폐지(2026-07-01, 캘린더 클러터) → bucketTrimDone 마이그레이션이 데이터서 제거. 기타(petc)는 Track2 백로그 미러 연결로 잔존(동기 끊은 뒤 별도 제거). */
+  { id: "petc", name: "기타", order: 6, kind: "bucket" },
 ];
-const PERSONAL_BUCKET_IDS = ["appt", "p_house", "petc"];
+const PERSONAL_BUCKET_IDS = ["petc"];
 const ROUTINE_PROJ_IDS = ["rt_workout", "rt_english", "rt_vocal", "rt_writing"];
 const isBucketProj = (p) => p && (p.kind === "bucket" || PERSONAL_BUCKET_IDS.includes(p.id));
 const isRoutineProj = (p) => p && (p.kind === "routine" || ROUTINE_PROJ_IDS.includes(p.id));
@@ -1677,6 +1676,17 @@ function App({ onSwitchWs }) {
       const same = merged.length === prev.length && merged.every((p, i) => p.id === prev[i]?.id);
       return same ? prev : merged;
     });
+  }, [cloudLoaded]); /* eslint-disable-line */
+
+  /* 개인 잡동 버킷 정리(2026-07-01): '약속'·'집안일' 버킷 제거(사용자 요청 — 캘린더 클러터).
+     남은 할일은 '기타'(petc)로 흡수. 기타는 Track2 백로그 미러라 잔존. */
+  const bucketTrimDone = useRef(false);
+  useEffect(() => {
+    if (isWork || !cloudLoaded || bucketTrimDone.current) return;
+    bucketTrimDone.current = true;
+    const REMOVE = new Set(["appt", "p_house"]);
+    setTasks(prev => { let ch = false; const n = prev.map(t => REMOVE.has(t.project) ? (ch = true, { ...t, project: "petc" }) : t); return ch ? n : prev; });
+    setProjects(prev => { const n = prev.filter(p => !REMOVE.has(p.id)); return n.length === prev.length ? prev : n; });
   }, [cloudLoaded]); /* eslint-disable-line */
 
   /* 루틴 과제 교정(2026-06-30): B2 이전 데이터의 반복설정·루틴 인스턴스가 폐기된 'p_routine'에 묶여,
