@@ -1450,7 +1450,7 @@ const ActiveRecapRow = ({ t, isWork, pname, onEdit, onSaveRecaps, files, setFile
     </div>
   );
 };
-const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, onUpdateHistRecaps, onUpdateTaskRecaps }) => {
+const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, onUpdateHistRecaps, onUpdateTaskRecaps, recurrings, onToggleDay }) => {
   const targets = (isWork
     /* 업무(2026-06-28): 마커 폐지 → 프로젝트 + develop 버킷(지식·교훈·글감) 전부를 회고 타깃으로. 완료(alldone)는 .concat로 공통 추가. */
     ? (projects || []).map(p => ({ kind: "project", key: p.id, label: p.name }))
@@ -1518,6 +1518,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
 
   return (
     <div style={{ marginTop: 12 }}>
+      {!isWork && <RoutineStreak recurrings={recurrings} tasks={tasks} history={history} onToggleDay={onToggleDay} />}
       <div style={{ display: "flex", gap: 4, marginBottom: 10, flexWrap: "wrap" }}>
         {targets.map(t => { const k = t.kind + ":" + t.key; const on = k === (cur.kind + ":" + cur.key);
           const pal = t.kind === "routine" ? { bg: "#EDE9FE", fg: "#6D28D9", bd: "#C4B5FD", dot: "#8B5CF6" }
@@ -2185,9 +2186,9 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /><RoutineStreak recurrings={recurrings} tasks={tasks} history={history} onToggleDay={toggleRoutineDay} /></>}
+        {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
-        {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecaps={updateHistRecaps} onUpdateTaskRecaps={updateTaskRecaps} />}
+        {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecaps={updateHistRecaps} onUpdateTaskRecaps={updateTaskRecaps} recurrings={recurrings} onToggleDay={toggleRoutineDay} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} />}
       </div>
