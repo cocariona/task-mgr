@@ -2176,7 +2176,7 @@ function App({ onSwitchWs }) {
       const claimed = new Set(); /* 이미 다른 task에 물린 eventId — 오연결 방지(동일 제목+날짜 충돌) */
       tasks.forEach(t => { if (t.calEventId) claimed.add(t.calEventId); (t.subtasks || []).forEach(s => { if (s.calEventId) claimed.add(s.calEventId); }); });
       const b = new Date(TODAY + "T00:00:00"), fmtD = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      const minDate = fmtD(new Date(b.getTime() - (BACK - 2) * 86400000)), maxDate = fmtD(new Date(b.getTime() + (FWD - 5) * 86400000)); /* 조회 범위(여유) 밖은 add 보류 */
+      const minDate = fmtD(new Date(b.getTime() - 88 * 86400000)), maxDate = fmtD(new Date(b.getTime() + 363 * 86400000)); /* GAS list cap(back90/fwd365) 안쪽 — 이 밖은 list가 못 봐 add 보류 */
       const setEid = (it, eid, upd) => {
         if (it.kind === "task") setTasks(p => p.map(x => x.id === it.t.id ? { ...x, calEventId: eid, calUpdated: upd || Date.now() } : x));
         else setTasks(p => p.map(x => x.id === it.t.id ? { ...x, subtasks: (x.subtasks || []).map(y => y.id === it.s.id ? { ...y, calEventId: eid, calUpdated: upd || Date.now() } : y) } : x));
@@ -2188,17 +2188,18 @@ function App({ onSwitchWs }) {
         if (!cp) continue;
         const eid = it.kind === "task" ? it.t.calEventId : it.s.calEventId;
         if (eid) { const ur = await calSync("update", { ...cp, eventId: eid }); if (ur?.eventId) { setEid(it, ur.eventId, ur.updated); updated++; } else deferred++; continue; }
-        if (!listOk) { deferred++; continue; } /* 목록 조회 실패 → 중복 위험, 이번엔 보류 */
-        const myKey = it.kind === "task" ? it.t.id : it.s.id; /* 멱등키 우선 매칭 — 제목이 바뀌어도 안전(신 GAS만 key 반환, 구 GAS는 아래 제목+날짜 폴백) */
-        if (keyIdx[myKey] && !claimed.has(keyIdx[myKey])) { setEid(it, keyIdx[myKey], Date.now()); claimed.add(keyIdx[myKey]); relinked++; continue; }
         const cd = (cp.date || "").slice(0, 10);
-        const free = (idx[norm(cp.title) + "|" + cd] || []).filter(id => !claimed.has(id)); /* 아직 안 물린 후보만 */
-        if (free.length === 1) { setEid(it, free[0], Date.now()); claimed.add(free[0]); relinked++; }
-        else if (!(idx[norm(cp.title) + "|" + cd] || []).length) {
-          if (cd < minDate || cd > maxDate) { deferred++; continue; } /* 조회 범위 밖 → 중복 위험, 보류 */
-          const ar = await calSync("add", cp); if (ar?.eventId) { setEid(it, ar.eventId, ar.updated || Date.now()); claimed.add(ar.eventId); added++; } else deferred++;
+        if (listOk) { /* 목록 성공 → 재연결로 중복 차단(멱등키 우선 → 제목+날짜) */
+          const myKey = it.kind === "task" ? it.t.id : it.s.id;
+          if (keyIdx[myKey] && !claimed.has(keyIdx[myKey])) { setEid(it, keyIdx[myKey], Date.now()); claimed.add(keyIdx[myKey]); relinked++; continue; }
+          const free = (idx[norm(cp.title) + "|" + cd] || []).filter(id => !claimed.has(id));
+          if (free.length === 1) { setEid(it, free[0], Date.now()); claimed.add(free[0]); relinked++; continue; }
+          if ((idx[norm(cp.title) + "|" + cd] || []).length) { deferred++; continue; } /* 이미 존재(claimed/모호) → 중복 방지 보류 */
         }
-        else deferred++; /* 이미 존재(claimed/동일 제목+날짜 다수) → 중복 방지 위해 보류 */
+        /* 미존재(목록 성공) 또는 ★목록 조회 실패 → add. 멱등키 GAS면 같은 key 중복 자동 방지. cap 밖만 보류 */
+        if (cd < minDate || cd > maxDate) { deferred++; continue; }
+        const ar = await calSync("add", cp);
+        if (ar?.eventId) { setEid(it, ar.eventId, ar.updated || Date.now()); claimed.add(ar.eventId); added++; } else deferred++;
       }
       if (!silent) showT(`📅 완료 — 재연결 ${relinked}·신규 ${added}${updated ? `·갱신 ${updated}` : ""}${deferred ? `·보류 ${deferred}` : ""}`, null);
     } finally { calBusyRef.current = false; setCalBusy(false); }
