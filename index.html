@@ -1321,6 +1321,42 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
   );
 };
 
+/* 지난 루틴 소급 체크 — 루틴 × 지난 N일 그리드. 칸 클릭 = 그날 완료 체크/해제(2026-07-01) */
+const RoutineStreak = ({ recurrings, tasks, history, onToggleDay }) => {
+  const [open, setOpen] = useState(false);
+  const routines = (recurrings || []).filter(r => (r.type || "weekly") === "daily");
+  if (!routines.length) return null;
+  const N = 10;
+  const base = new Date(TODAY + "T00:00:00").getTime();
+  const days = [];
+  for (let i = N; i >= 1; i--) { const d = new Date(base - i * 86400000); days.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`); }
+  const doneSet = new Set();
+  (tasks || []).forEach(t => { if (t.recurringId && t.status === "done") doneSet.add(t.recurringId + "|" + (t.recurringPeriod || t.planDate)); });
+  (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && it.orig && it.orig.recurringId) doneSet.add(it.orig.recurringId + "|" + (it.orig.recurringPeriod || day.date)); }));
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setOpen(!open)}>
+        {open ? "▼" : "▶"} 🔁 지난 루틴 체크
+      </div>
+      {open && <div style={{ ...S.card, marginTop: 4, overflowX: "auto" }}>
+        <div style={{ display: "flex", gap: 3, marginBottom: 4, paddingLeft: 94 }}>
+          {days.map(d => <span key={d} style={{ width: 24, textAlign: "center", fontSize: 8, color: "#9ca3af", flexShrink: 0 }}>{d.slice(5).replace("-", ".")}</span>)}
+        </div>
+        {routines.map(r => (
+          <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 3, padding: "3px 0" }}>
+            <span style={{ width: 90, flexShrink: 0, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.text}</span>
+            {days.map(d => { const done = doneSet.has(r.id + "|" + d);
+              return <button key={d} onClick={() => onToggleDay(r.id, d, !done)} title={d + (done ? " 완료" : " 미완료")}
+                style={{ width: 24, height: 24, borderRadius: 5, border: "1px solid #e5e7eb", background: done ? "#10B981" : "#fff", color: done ? "#fff" : "#d1d5db", fontSize: 11, cursor: "pointer", flexShrink: 0 }}>{done ? "✓" : ""}</button>;
+            })}
+          </div>
+        ))}
+        <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 6 }}>칸 클릭 = 그날 루틴 완료 체크/해제(지난 날 소급). 오늘은 위 '오늘 할 일'에서.</div>
+      </div>}
+    </div>
+  );
+};
+
 /* ═══ 회고 (통합) — 업무: 마커별(보기+파일) / 개인: 루틴·프로젝트별(보기+입력+파일). 완료=history ═══ */
 /* 회고 첨부 — recapKey 단위로 파일 종속(업로드·목록·삭제). 회고 UI와 한 카드 안에. */
 const RecapFileBox = ({ recapKey, files, setFiles, canUpload }) => {
@@ -1818,6 +1854,25 @@ function App({ onSwitchWs }) {
     affected.forEach(t => { if (!t.calEventId) return; const cp = calMakeParams(merge(t), projects);
       if (cp) calSync("update", { ...cp, eventId: t.calEventId }).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === t.id ? { ...x, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : x)); }); });
   };
+  /* 지난 루틴 소급 체크/해제(2026-07-01): 완료=history done 항목 + 미완료 인스턴스 정리 / 해제=반대 */
+  const toggleRoutineDay = (rid, date, makeDone) => {
+    const rec = recurrings.find(r => r.id === rid);
+    const proj = projects.find(p => p.id === (rec && rec.project));
+    if (makeDone) {
+      setTasks(prev => prev.filter(t => !(t.recurringId === rid && (t.recurringPeriod === date || t.planDate === date) && t.status !== "done")));
+      setHistory(prev => {
+        if (prev.some(h => h.date === date && (h.items || []).some(it => it.type === "done" && it.orig && it.orig.recurringId === rid))) return prev;
+        const orig = { id: gid(), text: rec ? rec.text : "루틴", status: "done", project: rec ? rec.project : "proj_etc", recurringId: rid, recurringPeriod: date, notes: "", planDate: date, createdAt: date, subtasks: [], calEventId: "", calUpdated: 0 };
+        const item = { type: "done", text: orig.text, projectName: proj ? proj.name : "", project: orig.project, orig, time: "" };
+        const ex = prev.find(h => h.date === date);
+        if (ex) return prev.map(h => h.date === date ? { ...h, items: [...h.items, item] } : h);
+        return [...prev, { date, items: [item] }];
+      });
+    } else {
+      setTasks(prev => prev.map(t => (t.recurringId === rid && (t.recurringPeriod === date || t.planDate === date) && t.status === "done") ? { ...t, status: "action" } : t));
+      setHistory(prev => prev.map(h => h.date === date ? { ...h, items: h.items.filter(it => !(it.type === "done" && it.orig && it.orig.recurringId === rid)) } : h).filter(h => (h.items || []).length));
+    }
+  };
 
   const addTask = ({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => {
     const proj = projects.find(p => p.id === project);
@@ -2130,7 +2185,7 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
+        {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /><RoutineStreak recurrings={recurrings} tasks={tasks} history={history} onToggleDay={toggleRoutineDay} /></>}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
         {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecaps={updateHistRecaps} onUpdateTaskRecaps={updateTaskRecaps} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
