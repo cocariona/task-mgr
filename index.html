@@ -231,7 +231,7 @@ const GCAL_URL = GAS_URL;
 /* ─── 캘린더 JSONP 동기화 (add / update / delete) ─── */
 const calSync = (action, params) => new Promise((resolve) => {
   const cb = "_gcal_" + gid();
-  const timer = setTimeout(() => { delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); }, 20000); /* GAS cold-start 견디게 20s(2026-07-01) */
+  const timer = setTimeout(() => { delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); }, 45000); /* GAS가 느림(실측 update~29s·list~15-19s) → 45s로(2026-07-03). 20s는 update가 타임아웃돼 '보류' 다발이었음 */
   window[cb] = (r) => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve(r || { success: false }); };
   const qs = new URLSearchParams({ ...params, action, callback: cb });
   const s = document.createElement("script");
@@ -2242,7 +2242,7 @@ function App({ onSwitchWs }) {
           <span id="sync-status" style={{ fontSize: 10, color: "#9ca3af" }}>☁️</span>
           <span style={{ fontSize: 10, color: "#10B981" }}>● 자동 저장</span>
           {unsyncedCnt > 0 && <button disabled={calBusy} style={{ ...S.gh, background: "#FEF3C7", borderColor: "#FCD34D", color: "#B45309", fontWeight: 700, opacity: calBusy ? 0.5 : 1 }} onClick={() => calSyncAll({})} title="캘린더 미동기 태스크 — 클릭해 지금 동기화">⚠️ 미동기 {unsyncedCnt}</button>}
-          <button disabled={calBusy} style={{ ...S.gh, opacity: calBusy ? 0.5 : 1 }} onClick={() => calSyncAll({ linkedToo: true })} title="날짜 있는 모든 태스크를 캘린더에 반영(재연결·갱신)">{calBusy ? "📅 동기화 중…" : "📅 일괄동기화"}</button>
+          <button disabled={calBusy} style={{ ...S.gh, opacity: calBusy ? 0.5 : 1 }} onClick={() => calSyncAll({})} title="미동기(캘린더에 아직 없는) 태스크를 캘린더에 반영 — 이미 연결된 건 편집 때 자동 갱신됨">{calBusy ? "📅 동기화 중…" : "📅 일괄동기화"}</button>
           <button style={S.gh} onClick={() => calPull(false)} title="캘린더에서 변경된 날짜 가져오기">📅 가져오기</button>
           <button style={S.gh} onClick={exportData}>📤 백업</button>
           <button style={S.gh} onClick={() => fileRef.current?.click()}>📂 불러오기</button>
