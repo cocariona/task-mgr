@@ -327,10 +327,9 @@ const PERSONAL_PROJECTS = [
   { id: "rt_writing", name: "글쓰기", order: 3, kind: "routine" },
   { id: "p_invest", name: "투자원칙 정립", order: 4, kind: "project" },
   { id: "p_workcap", name: "업무역량 시스템", order: 5, kind: "project" },
-  /* 약속·집안일 버킷 폐지(2026-07-01, 캘린더 클러터) → bucketTrimDone 마이그레이션이 데이터서 제거. 기타(petc)는 Track2 백로그 미러 연결로 잔존(동기 끊은 뒤 별도 제거). */
-  { id: "petc", name: "기타", order: 6, kind: "bucket" },
+  /* 버킷(약속·집안일·기타) 전면 폐지(2026-07-01, 소유자 지시): 개인=루틴/프로젝트만. bucketTrimDone가 버킷 프로젝트 + Track2 미러([t2-*]) 데이터를 제거. */
 ];
-const PERSONAL_BUCKET_IDS = ["petc"];
+const PERSONAL_BUCKET_IDS = [];
 const ROUTINE_PROJ_IDS = ["rt_workout", "rt_english", "rt_vocal", "rt_writing"];
 const isBucketProj = (p) => p && (p.kind === "bucket" || PERSONAL_BUCKET_IDS.includes(p.id));
 const isRoutineProj = (p) => p && (p.kind === "routine" || ROUTINE_PROJ_IDS.includes(p.id));
@@ -984,7 +983,6 @@ const ProjectsView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, 
   const [np, setNp] = useState("");
   const [editId, setEditId] = useState(null);
   const [editName, setEditName] = useState("");
-  const [addKind, setAddKind] = useState("project");
   const tog = id => setOpen(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const dragHandlers = useDragReorder(onReorder);
   const isDefault = (id) => PERSONAL_PROJECTS.some(d => d.id === id);
@@ -1037,14 +1035,9 @@ const ProjectsView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, 
         {bucketProjs.map(renderProj)}
       </>}
       <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 16, padding: "8px 0", flexWrap: "wrap" }}>
-        {!isWork && <div style={{ display: "flex", gap: 3 }}>
-          {[["project", "📂 프로젝트"], ["bucket", "🗂 그 외"]].map(([k, lbl]) => (
-            <button key={k} onClick={() => setAddKind(k)} style={{ ...S.gh, fontSize: 11, background: addKind === k ? "#EEF2FF" : "#fff", color: addKind === k ? "#4338CA" : "#9ca3af", borderColor: addKind === k ? "#A5B4FC" : "#e5e7eb", fontWeight: addKind === k ? 700 : 400 }}>{lbl}</button>
-          ))}
-        </div>}
-        <input style={{ ...S.inp, maxWidth: 200 }} placeholder={isWork ? "새 과제 추가..." : (addKind === "bucket" ? "새 '그 외' 항목 (예: 여행)..." : "새 프로젝트 추가...")} value={np} onChange={e => setNp(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && np.trim()) { onAddProj(np.trim(), isWork ? "project" : addKind); setNp(""); }}} />
-        <button style={S.gh} onClick={() => { if (np.trim()) { onAddProj(np.trim(), isWork ? "project" : addKind); setNp(""); }}}>+ 추가</button>
+        <input style={{ ...S.inp, maxWidth: 200 }} placeholder={isWork ? "새 과제 추가..." : "새 프로젝트 추가..."} value={np} onChange={e => setNp(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && np.trim()) { onAddProj(np.trim(), "project"); setNp(""); }}} />
+        <button style={S.gh} onClick={() => { if (np.trim()) { onAddProj(np.trim(), "project"); setNp(""); }}}>+ 추가</button>
       </div>
     </div>
   );
@@ -1678,15 +1671,25 @@ function App({ onSwitchWs }) {
     });
   }, [cloudLoaded]); /* eslint-disable-line */
 
-  /* 개인 잡동 버킷 정리(2026-07-01): '약속'·'집안일' 버킷 제거(사용자 요청 — 캘린더 클러터).
-     남은 할일은 '기타'(petc)로 흡수. 기타는 Track2 백로그 미러라 잔존. */
+  /* 개인 버킷·Track2 미러 완전 제거(2026-07-01, 소유자 지시): 개인 워크스페이스 = 루틴/프로젝트만.
+     삭제 대상 = ① 모든 버킷(kind:bucket — 약속·집안일·기타) 프로젝트 + 그 소속 할일
+                ② Track2 백로그 미러 할일([t2-*] 노트, 루틴 밑에 흩어진 것 포함).
+     Track2 원본은 vault 문서가 정본이라 보존됨. 삭제 할일에 캘린더 이벤트 있으면 함께 제거. */
   const bucketTrimDone = useRef(false);
   useEffect(() => {
     if (isWork || !cloudLoaded || bucketTrimDone.current) return;
     bucketTrimDone.current = true;
-    const REMOVE = new Set(["appt", "p_house"]);
-    setTasks(prev => { let ch = false; const n = prev.map(t => REMOVE.has(t.project) ? (ch = true, { ...t, project: "petc" }) : t); return ch ? n : prev; });
-    setProjects(prev => { const n = prev.filter(p => !REMOVE.has(p.id)); return n.length === prev.length ? prev : n; });
+    const bucketIds = new Set(projects.filter(p => p.kind === "bucket").map(p => p.id));
+    const isT2 = (t) => /^\[t2-/.test((t.notes || "").trim());
+    const doomed = tasks.filter(t => bucketIds.has(t.project) || isT2(t));
+    if (!doomed.length && !bucketIds.size) return;
+    doomed.forEach(t => { if (t.calEventId) calSync("delete", { eventId: t.calEventId }); });
+    const doomedIds = new Set(doomed.map(t => t.id));
+    if (doomedIds.size) setTasks(prev => prev.filter(t => !doomedIds.has(t.id)));
+    if (bucketIds.size) {
+      setProjects(prev => prev.filter(p => !bucketIds.has(p.id)));
+      setMemos(prev => { const n = { ...prev }; bucketIds.forEach(id => delete n[id]); return n; }); /* delProj와 동일하게 고아 메모 정리 */
+    }
   }, [cloudLoaded]); /* eslint-disable-line */
 
   /* 루틴 과제 교정(2026-06-30): B2 이전 데이터의 반복설정·루틴 인스턴스가 폐기된 'p_routine'에 묶여,
