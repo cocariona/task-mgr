@@ -17,6 +17,10 @@
  *    없으면 종일(기존과 동일). list 의 start = 타임드면 "yyyy-MM-ddTHH:mm", 종일이면 "yyyy-MM-dd".
  *    → 루틴/반복 일정을 task-mgr가 소유하며 시간까지 캘린더에 박을 수 있음.
  *
+ * ★ 멱등키(2026-07-03): add/update 에 key=task.id 가 오면 이벤트에 tmk 태그로 저장하고, list 가 key 를 반환한다.
+ *    add 는 같은 key 이벤트가 이미 있으면 새로 만들지 않고 기존 것을 반환(제목/설명만 갱신) → JSONP 응답 유실이나
+ *    task 이름 변경에도 캘린더 중복이 절대 안 생긴다. 클라이언트는 list 의 key 로 재연결(제목 무관).
+ *
  * 재배포(URL 유지): 코드 교체·저장 → 배포 > 배포 관리 > 기존 배포 ✏️ 수정 > 버전 "새 버전" > 배포.
  *  (새 배포를 만들면 URL 이 바뀌어 GAS_URL 을 고쳐야 하므로 기존 배포를 갱신할 것.)
  */
@@ -49,9 +53,29 @@ function doGet(e) {
     return cal.createAllDayEvent(title, date, { description: desc });
   }
 
+  // 멱등키(2026-07-03): 같은 tmk 태그를 가진 이벤트를 해당 날짜 근방(±2~3일)에서 찾음.
+  function findByKey(c, dateStr, key) {
+    if (!key || !dateStr) return null;
+    var ds = new Date(dateStr + "T00:00:00"); ds.setDate(ds.getDate() - 2);
+    var de = new Date(dateStr + "T00:00:00"); de.setDate(de.getDate() + 3);
+    var evs = c.getEvents(ds, de);
+    for (var i = 0; i < evs.length; i++) { try { if (evs[i].getTag("tmk") === key) return evs[i]; } catch (u) {} }
+    return null;
+  }
+
   try {
     if (action === "add") {
-      var ev = makeEvent(e.parameter.title || "", e.parameter.date || "", e.parameter.time || "", e.parameter.desc || "");
+      var akey = e.parameter.key || "";
+      var adate = e.parameter.date || "";
+      if (akey) { // 멱등: 같은 key 이벤트가 이미 있으면 새로 안 만들고 제목/설명만 갱신 후 반환 → 응답유실·이름변경에도 중복 0
+        var dup = findByKey(cal, adate, akey);
+        if (dup) {
+          try { if (e.parameter.title) dup.setTitle(e.parameter.title); dup.setDescription(e.parameter.desc || ""); } catch (u) {}
+          return respond({ success: true, eventId: dup.getId(), updated: dup.getLastUpdated().getTime(), idempotent: true });
+        }
+      }
+      var ev = makeEvent(e.parameter.title || "", adate, e.parameter.time || "", e.parameter.desc || "");
+      if (akey) { try { ev.setTag("tmk", akey); } catch (u) {} }
       return respond({ success: true, eventId: ev.getId(), updated: ev.getLastUpdated().getTime() });
     }
 
@@ -67,6 +91,7 @@ function doGet(e) {
       var desc = e.parameter.desc || "";
       if (!ev) { // 못 찾으면 새로 생성
         var nev = makeEvent(title, dateStr, time, desc);
+        if (e.parameter.key) { try { nev.setTag("tmk", e.parameter.key); } catch (u) {} }
         return respond({ success: true, eventId: nev.getId(), updated: nev.getLastUpdated().getTime(), recreated: true });
       }
       try {
@@ -83,11 +108,13 @@ function doGet(e) {
             ev.setAllDayDate(new Date(dateStr + "T00:00:00"));
           }
         }
+        if (e.parameter.key) { try { ev.setTag("tmk", e.parameter.key); } catch (u) {} } // 옛 이벤트도 키 태깅 → 이후 멱등/재연결 가능
         return respond({ success: true, eventId: ev.getId(), updated: ev.getLastUpdated().getTime() });
       } catch (moderr) {
         // in-place 수정이 막히면(종일↔타임드 전환 제약 등) 삭제+재생성 폴백
         try { ev.deleteEvent(); } catch (e2) {}
         var rev = makeEvent(title, dateStr, time, desc);
+        if (e.parameter.key) { try { rev.setTag("tmk", e.parameter.key); } catch (u) {} }
         return respond({ success: true, eventId: rev.getId(), updated: rev.getLastUpdated().getTime(), recreated: true });
       }
     }
@@ -117,6 +144,7 @@ function doGet(e) {
             ? Utilities.formatDate(ev.getStartTime(), "Asia/Seoul", "yyyy-MM-dd")
             : Utilities.formatDate(ev.getStartTime(), "Asia/Seoul", "yyyy-MM-dd'T'HH:mm"),
           allDay: allDay,
+          key: (function () { try { return ev.getTag("tmk") || ""; } catch (u) { return ""; } })(), // 멱등키(2026-07-03) — 클라 재연결/중복차단용
           updated: ev.getLastUpdated().getTime()
         };
       });

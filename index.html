@@ -249,6 +249,7 @@ const calMakeParams = (task, projects) => {
   const desc = task.protocol ? (task.protocol + (base ? '\n\n─ 오늘 ─\n' + base : '')) : base;
   const p = { title: WS.calPrefix + task.text, date, desc };
   if (task.planTime) p.time = task.planTime; /* HH:MM 있으면 타임드 이벤트(GAS가 처리, 구버전 GAS는 무시=종일)(2026-07-01) */
+  if (task.id) p.key = task.id; /* 멱등키(2026-07-03): GAS add가 같은 key 이벤트 있으면 새로 안 만들고 반환 → 응답유실·이름변경에도 중복 0. 구버전 GAS는 무시. */
   return p;
 };
 /* 서브태스크 캘린더 객체 — 제목=서브 task(sub.text) 기준, 메모 맨 앞에 부모 task명(↳ 부모명) */
@@ -2163,8 +2164,8 @@ function App({ onSwitchWs }) {
       const lr = await calSync("list", { days: FWD, back: BACK });
       const listOk = !!(lr && lr.success && Array.isArray(lr.events));
       const norm = (s) => (s || "").replace(/\s+/g, " ").trim();
-      const idx = {};
-      if (listOk) lr.events.forEach(ev => { const k = norm(ev.title) + "|" + (ev.start || "").slice(0, 10); (idx[k] = idx[k] || []).push(ev.id); });
+      const idx = {}, keyIdx = {};
+      if (listOk) lr.events.forEach(ev => { const k = norm(ev.title) + "|" + (ev.start || "").slice(0, 10); (idx[k] = idx[k] || []).push(ev.id); if (ev.key) keyIdx[ev.key] = ev.id; });
       const claimed = new Set(); /* 이미 다른 task에 물린 eventId — 오연결 방지(동일 제목+날짜 충돌) */
       tasks.forEach(t => { if (t.calEventId) claimed.add(t.calEventId); (t.subtasks || []).forEach(s => { if (s.calEventId) claimed.add(s.calEventId); }); });
       const b = new Date(TODAY + "T00:00:00"), fmtD = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -2181,6 +2182,8 @@ function App({ onSwitchWs }) {
         const eid = it.kind === "task" ? it.t.calEventId : it.s.calEventId;
         if (eid) { const ur = await calSync("update", { ...cp, eventId: eid }); if (ur?.eventId) { setEid(it, ur.eventId, ur.updated); updated++; } else deferred++; continue; }
         if (!listOk) { deferred++; continue; } /* 목록 조회 실패 → 중복 위험, 이번엔 보류 */
+        const myKey = it.kind === "task" ? it.t.id : it.s.id; /* 멱등키 우선 매칭 — 제목이 바뀌어도 안전(신 GAS만 key 반환, 구 GAS는 아래 제목+날짜 폴백) */
+        if (keyIdx[myKey] && !claimed.has(keyIdx[myKey])) { setEid(it, keyIdx[myKey], Date.now()); claimed.add(keyIdx[myKey]); relinked++; continue; }
         const cd = (cp.date || "").slice(0, 10);
         const free = (idx[norm(cp.title) + "|" + cd] || []).filter(id => !claimed.has(id)); /* 아직 안 물린 후보만 */
         if (free.length === 1) { setEid(it, free[0], Date.now()); claimed.add(free[0]); relinked++; }
