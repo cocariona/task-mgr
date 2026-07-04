@@ -20,6 +20,17 @@ html = html.replace(m[0], '<script>\n' + compiled + '\n</script>');
 /* @babel/standalone CDN 제거 (이제 불필요) */
 html = html.replace(/<script[^>]*@babel\/standalone[^>]*><\/script>/i, '<!-- @babel/standalone 제거: JSX는 CI에서 사전 컴파일됨 -->');
 
+/* ★스모크 게이트(2026-07-04): 구문오류 외 '빈/깨진 빌드'를 배포 전 차단. 필수 마커·크기 검증.
+   (진짜 런타임 렌더체크는 Playwright 필요=무겁고, 사전컴파일이 6/17 CDN 백지사고 근본원인을 이미 제거함.) */
+const smoke = [
+  [compiled.includes('React.createElement'), 'JSX가 React.createElement로 컴파일되지 않음(preset-react 실패?)'],
+  [/ReactDOM\s*\.\s*render\s*\(/.test(compiled) || /createRoot\s*\(/.test(compiled), 'ReactDOM 렌더 호출이 산출물에 없음'],
+  [compiled.length > 80000, '컴파일 산출물이 비정상적으로 작음(' + compiled.length + 'B) — 부분 컴파일 의심'],
+  [!/type=["']text\/babel["']/.test(html), '배포본에 text/babel 스크립트가 남아있음(babel 미제거)'],
+];
+const failed = smoke.filter(c => !c[0]).map(c => c[1]);
+if (failed.length) { console.error('BUILD SMOKE FAIL:\n - ' + failed.join('\n - ')); process.exit(1); }
+
 fs.mkdirSync('_site', { recursive: true });
 fs.writeFileSync('_site/index.html', html, 'utf8');
-console.log('built _site/index.html (' + Math.round(html.length / 1024) + 'KB) — babel 제거 + 사전 컴파일 완료');
+console.log('built _site/index.html (' + Math.round(html.length / 1024) + 'KB) — babel 제거 + 사전 컴파일 + 스모크 통과');
