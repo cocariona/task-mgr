@@ -1415,17 +1415,20 @@ const RecapEntries = ({ recaps, onChange, files, setFiles, canUpload }) => {
 /* 완료 회고 카드 — 여러 회고(각자 파일) 목록 + 추가 */
 const RecapCompletionCard = ({ e, onSaveRecaps, files, setFiles, canUpload }) => {
   const has = (e.recaps || []).length > 0;
+  const [open, setOpen] = useState(has); /* 회고 입력은 선택적으로 펼침(2026-07-04) — 완료 목록이 길어지지 않게. 이미 회고 있으면 열림 */
   return (
     <div style={{ ...S.card, padding: "8px 10px", marginBottom: 6, borderColor: has ? "#eef0f2" : "#DDD6FE" }}>
       <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
         <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }}>{(e.date || "").slice(5)}</span>
         <span style={{ flex: 1, fontSize: 13, color: "#374151" }}>{e.text} {e.sub && e.parent && <span style={{ fontSize: 10, color: "#9ca3af" }} title="하위 할일">↳ {e.parent}</span>} {e.proj && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{e.proj}</span>}</span>
-        {!has && <span style={{ fontSize: 9, color: "#7C3AED", background: "#F3E8FF", borderRadius: 4, padding: "1px 5px", flexShrink: 0 }}>회고 대기</span>}
+        {!has && (open
+          ? <button onClick={() => setOpen(false)} style={{ ...S.gh, fontSize: 9, flexShrink: 0, padding: "1px 6px" }}>접기</button>
+          : <button onClick={() => setOpen(true)} style={{ fontSize: 9, color: "#7C3AED", background: "#F3E8FF", borderRadius: 4, padding: "2px 7px", flexShrink: 0, border: "none", cursor: "pointer", fontWeight: 600 }}>🪞 회고 추가</button>)}
       </div>
       {e.notes && <div style={{ ...S.note, marginLeft: 0 }}>{e.notes}</div>}
-      {e.origId
+      {open && (e.origId
         ? <RecapEntries recaps={e.recaps} onChange={rs => onSaveRecaps(e.date, e.origId, rs)} files={files} setFiles={setFiles} canUpload={canUpload} />
-        : (e.recaps || []).map(r => <div key={r.id} style={{ ...S.note, color: "#7C3AED", marginLeft: 0 }}>🪞 {r.text}</div>)}
+        : (e.recaps || []).map(r => <div key={r.id} style={{ ...S.note, color: "#7C3AED", marginLeft: 0 }}>🪞 {r.text}</div>))}
     </div>
   );
 };
@@ -1472,7 +1475,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
     const out = [];
     (history || []).forEach(day => (day.items || []).forEach(it => {
       if (it.type !== "done" || !it.orig) return;
-      const ok = cur.kind === "alldone" ? true : cur.kind === "project" ? it.orig.project === cur.key : false;
+      const ok = cur.kind === "alldone" ? !it.orig.recurringId : cur.kind === "project" ? it.orig.project === cur.key : false; /* 완료 칩=실제 과제만, 루틴 완료 제외(루틴 칩에서 봄)(2026-07-04) */
       if (ok) out.push({ key: (it.orig.id || it.text) + day.date, origId: it.orig.id, text: it.text, notes: it.orig.notes, recaps: it.orig.recaps || (it.orig.recap ? [{ id: "lg_" + (it.orig.id || ""), text: it.orig.recap, ts: day.date }] : []), proj: it.projectName || pname(it.orig.project), date: day.date, sub: it.isSub, parent: it.parentText });
     }));
     return out;
