@@ -148,16 +148,21 @@ const loadCalToken = async () => {
 };
 
 /* 클라우드 저장: Firebase PUT (1회 요청, 2초 디바운스) */
-let _saveTimer = null, _pendingData = null;
+let _saveTimer = null, _pendingData = null, _pendingPath = null;
 const cloudSave = (data) => {
   _pendingData = data; /* ★자정 리로드·탭닫기 flush용으로 대기 데이터 보관(2026-07-04) */
+  /* ★E2(2026-07-05): 저장 대상 경로를 '예약 시점'에 고정(closure). 디바운스 2초 내 워크스페이스 전환 시
+     flush가 fbDataUrl()로 새 WS.fbPath를 읽어 옛 워크스페이스 블롭을 반대편(/data↔/personal)에 덮어쓰던
+     치명 버그 차단(WS는 모듈 전역·전환 시 리마운트돼도 _saveTimer는 생존). */
+  const path = WS.fbPath; _pendingPath = path;
+  const url = "https://taskmgr-sync-default-rtdb.firebaseio.com/" + path + ".json";
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(async () => {
     _saveTimer = null;
     const el = document.getElementById("sync-status");
     if (el) { el.textContent = "☁️ 저장중..."; el.style.color = "#F59E0B"; }
     const q = await authParam();
-    fetch(fbDataUrl() + q, {
+    fetch(url + q, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -177,8 +182,9 @@ const cloudSave = (data) => {
 const flushCloudSave = async () => {
   if (!_pendingData) return;
   clearTimeout(_saveTimer); _saveTimer = null;
-  const data = _pendingData; _pendingData = null;
-  try { const q = await authParam(); await fetch(fbDataUrl() + q, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data), keepalive: true }); } catch {}
+  const data = _pendingData; const path = _pendingPath || WS.fbPath; _pendingData = null; /* ★E2: 예약 시점 경로로 flush(전환돼도 옛 데이터는 옛 경로로) */
+  const url = "https://taskmgr-sync-default-rtdb.firebaseio.com/" + path + ".json";
+  try { const q = await authParam(); await fetch(url + q, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data), keepalive: true }); } catch {}
 };
 
 /* 클라우드 로드: Firebase GET (1회 요청). 실패와 '빈 DB'를 구분해 반환 —
@@ -2266,26 +2272,33 @@ function App({ onSwitchWs }) {
   useEffect(() => {
     if (!cloudLoaded || calPullDone.current) return;
     calPullDone.current = true;
-    calPull(true);
+    loadCalToken().then(() => calPull(true)); /* ★C(2026-07-05): TMTOKEN 게이트 활성 시 토큰 대기 후 pull — 미대기면 unauthorized로 그 세션 역동기가 무성 스킵됐음(토큰 미설정이면 즉시 resolve=no-op) */
   }, [cloudLoaded]); /* eslint-disable-line */
 
   /* 자가복구 캘린더 동기화(2026-07-03, 적대검증 반영): JSONP add가 GAS 콜드스타트/네트워크로 조용히 실패해 미동기 누적.
      → 캘린더 목록 조회 후 [제목+날짜] 대조: 있으면 재연결(중복 차단), 없으면 add / calEventId 있으면 update(반복·루틴 제외).
      중복 방지 가드: ①재진입(calBusyRef)=자동+수동 동시 add 차단 ②claimed=이미 물린 이벤트 재연결 금지(제목+날짜 충돌)
        ③조회 범위(back 90·fwd 365) 밖 날짜=add 보류 ④list 실패 시 미동기 add 전면 보류.
-     linkedToo=true(수동 버튼)=연결분도 update / false(자동)=미동기만. 남은 극단 케이스(미동기 상태서 제목 변경)는 GAS 멱등키로 완결 예정. */
+     ★연결분 stale 자가치유(2026-07-05, 실측 date-mismatch 3건): 편집 push가 조용히 실패하면 '연결됐지만
+       캘린더 날짜가 옛날'(글랜스 오염) — 미동기만 보던 옛 스코프의 사각. → 연결분도 list와 대조:
+       (a) 날짜·시간 일치=skip(무네트워크) (b) 앱이 최신인데 어긋남=update로 in-place 이동
+       (c) 캘린더가 최신(ev.updated>calUpdated)=calPull 영역이라 안 건드림(역동기와 충돌 0)
+       (d) ★목록(창) 안에 없음=삭제/창밖이동 판별 불가라 보류(deferred). 옛 시도의 '재생성'은 사용자가 멀리
+       옮긴 이벤트를 앱 옛 날짜로 yank-back하는 결함이라 폐기 — 창밖 이동은 calPull이 역동기로 흡수.
+       (옛 linkedToo 파라미터=블라인드 전건 update라 폐기.) */
   const calBusyRef = useRef(false);
   const [calBusy, setCalBusy] = useState(false);
-  const calSyncAll = async ({ silent = false, linkedToo = false } = {}) => {
+  const [calMissingIds, setCalMissingIds] = useState([]); /* ★연결됐지만 캘린더에서 삭제된(창내 미발견) task id 목록 — 자동동기 후 배지 표출용(2026-07-05). unsyncedCnt(calEventId 부재)로는 안 잡혀 무성 stale이던 것 가시화. id 저장→삭제/완료된 유령은 live 재계산(calMissingCnt)에서 자동 감산 */
+  const calSyncAll = async ({ silent = false } = {}) => {
     if (calBusyRef.current) { if (!silent) showT("이미 동기화 중입니다", null); return; } /* 재진입 가드: 자동+수동 동시 add 방지 */
-    const dated = [];
+    const wsSnap = WS; /* ★E1(2026-07-05): 워크스페이스 스냅샷 — list 대기(15~19s) 중 전환되면 새 calPrefix로 push해 제목 오염되던 것 방지(아래 list 후 대조) */
+    const targets = [];
     tasks.forEach(t => {
       if (t.recurringId || t.status === "done") return; /* 반복/루틴·완료 제외(서브태스크도 함께) */
-      if (t.planDate || t.scheduledDate) dated.push({ kind: "task", t });
-      (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.planDate || s.scheduledDate)) dated.push({ kind: "sub", t, s }); });
+      if (t.planDate || t.scheduledDate) targets.push({ kind: "task", t });
+      (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.planDate || s.scheduledDate)) targets.push({ kind: "sub", t, s }); });
     });
-    const targets = linkedToo ? dated : dated.filter(it => !(it.kind === "task" ? it.t.calEventId : it.s.calEventId));
-    if (!targets.length) { if (!silent) showT(linkedToo ? "동기화할 일정이 없습니다" : "미동기 일정 없음 — 모두 반영됨 ✅", null); return; }
+    if (!targets.length) { if (!silent) showT("동기화할 일정이 없습니다", null); return; }
     calBusyRef.current = true; setCalBusy(true);
     try {
       if (!silent) showT(`📅 ${targets.length}건 캘린더 확인 중...`, null);
@@ -2295,10 +2308,11 @@ function App({ onSwitchWs }) {
       targets.forEach(it => { const o = it.kind === "task" ? it.t : it.s; const ds = (o.planDate || o.scheduledDate || "").slice(0, 10); if (!ds) return; const k = dd(ds); if (k < 0) needBack = Math.max(needBack, -k); else needFwd = Math.max(needFwd, k); });
       const BACK = Math.min(90, needBack + 3), FWD = Math.min(365, needFwd + 3);
       const lr = await calSync("list", { days: FWD, back: BACK });
+      if (WS !== wsSnap) return; /* ★E1: list 대기 중 워크스페이스 전환됨 → 구 스냅샷으로 push하면 제목·경로 오염 → 중단(finally가 calBusy 해제) */
       const listOk = !!(lr && lr.success && Array.isArray(lr.events));
       const norm = (s) => (s || "").replace(/\s+/g, " ").trim();
-      const idx = {}, keyIdx = {}, evDate = {};
-      if (listOk) lr.events.forEach(ev => { const k = norm(ev.title) + "|" + (ev.start || "").slice(0, 10); (idx[k] = idx[k] || []).push(ev.id); if (ev.key) keyIdx[ev.key] = ev.id; evDate[ev.id] = (ev.start || "").slice(0, 10); });
+      const idx = {}, keyIdx = {}, evDate = {}, evStart = {}, evUpd = {};
+      if (listOk) lr.events.forEach(ev => { const k = norm(ev.title) + "|" + (ev.start || "").slice(0, 10); (idx[k] = idx[k] || []).push(ev.id); if (ev.key) keyIdx[ev.key] = ev.id; evDate[ev.id] = (ev.start || "").slice(0, 10); evStart[ev.id] = ev.start || ""; evUpd[ev.id] = ev.updated || 0; });
       const claimed = new Set(); /* 이미 다른 task에 물린 eventId — 오연결 방지(동일 제목+날짜 충돌) */
       tasks.forEach(t => { if (t.calEventId) claimed.add(t.calEventId); (t.subtasks || []).forEach(s => { if (s.calEventId) claimed.add(s.calEventId); }); });
       const setEid = (it, eid, upd) => {
@@ -2307,12 +2321,40 @@ function App({ onSwitchWs }) {
       };
       let relinked = 0, added = 0, updated = 0, deferred = 0;
       const toSync = []; /* 네트워크 호출(add/update) 대상 — 재연결(무네트워크)은 아래 pass에서 즉시 처리 */
+      const missIds = []; /* 연결됐지만 캘린더 창에서 미발견(삭제/창밖이동)된 task·sub id — 배지 표출·live 재계산용 */
       for (const it of targets) {
         const obj = it.kind === "task" ? it.t : subCalObj(it.s, it.t);
         const cp = calMakeParams(obj, projects);
         if (!cp) continue;
         const eid = it.kind === "task" ? it.t.calEventId : it.s.calEventId;
-        if (eid) { toSync.push({ it, cp, eid }); continue; } /* 연결됨 → update */
+        if (eid) { /* ★연결됨 — stale 자가치유(2026-07-05): 캘린더 목록과 대조해 '앱이 옳은데 날짜가 어긋난' 것만 in-place 이동 */
+          if (!listOk) { deferred++; continue; } /* 목록 없인 판정 불가 → 보류(블라인드 update 금지) */
+          const o = it.kind === "task" ? it.t : it.s;
+          /* 이벤트 재발견: 원 eid가 목록에 있으면 그것, 없으면 멱등키(=task.id)로(과거 recreate로 id 드리프트된 경우) */
+          const realId = (evStart[eid] !== undefined) ? eid : (keyIdx[o.id] || "");
+          if (!realId) {
+            /* ★목록(창) 안에 없음 = 삭제 or 창밖 이동 — 판별 불가. 자동(silent)은 손대지 않고 카운트만
+               (사용자의 캘린더 이동을 앱 옛 날짜로 yank-back하던 결함 차단·창내 이동은 calPull이 역동기).
+               명시적 버튼(!silent)일 때만 '삭제된 유령'으로 보고 링크 해제→멱등 add로 재등록.
+               dup 안전: 진짜 삭제/근거리(±2~3일) 이동은 GAS findByKey가 reuse/무생성이라 dup 0.
+               실가드는 '명시적 클릭' 하나 — 창 밖으로 멀리 옮긴 이벤트는 재등록이 dup을 만들 수 있음(수용 리스크). */
+            missIds.push(it.kind === "task" ? it.t.id : it.s.id);
+            if (silent) { deferred++; continue; }
+            setEid(it, "", 0); toSync.push({ it, cp, eid: "" }); continue;
+          }
+          claimed.add(realId); /* 다른 미동기 task가 이 이벤트를 free-match로 가로채지 못하게 */
+          const expected = cp.time ? cp.date + "T" + cp.time : cp.date;
+          if (evStart[realId] === expected) { /* 날짜·시간 일치 — id 드리프트면 재연결만(무네트워크·서버 updated 기록) */
+            if (realId !== eid) { setEid(it, realId, evUpd[realId] || o.calUpdated || Date.now()); relinked++; } /* 서버값 우선(evUpd 부재 시 옛 calUpdated 유지=인위적 최신화로 calPull 억제 방지) */
+            continue;
+          }
+          if ((evUpd[realId] || 0) > (o.calUpdated || 0)) { /* 캘린더가 더 최신 = 사용자가 캘린더서 옮김 → calPull(역동기) 영역 */
+            if (realId !== eid) setEid(it, realId, o.calUpdated || 0); /* 드리프트 id만 바로잡되 calUpdated는 옛값 유지 → calPull이 날짜 patch 가능(dead-id 교착 방지) */
+            continue;
+          }
+          toSync.push({ it, cp, eid: realId }); /* 앱이 최신인데 어긋남 → update로 in-place 이동 */
+          continue;
+        }
         const cd = (cp.date || "").slice(0, 10);
         if (listOk) { /* 목록 성공 → 재연결로 중복 차단(멱등키 우선 → 제목+날짜) */
           const myKey = it.kind === "task" ? it.t.id : it.s.id;
@@ -2333,22 +2375,25 @@ function App({ onSwitchWs }) {
           if (r?.eventId) { setEid(it, r.eventId, r.updated || Date.now()); if (eid) updated++; else added++; } else deferred++;
         }));
       }
-      if (!silent) showT(`📅 완료 — 재연결 ${relinked}·신규 ${added}${updated ? `·갱신 ${updated}` : ""}${deferred ? `·보류 ${deferred}` : ""}`, null);
+      if (listOk) setCalMissingIds(silent ? missIds : []); /* 자동: 캘린더서 삭제된 연결 task id 배지에 표출 / 수동: 방금 재등록했으므로 비움 */
+      if (!silent) showT(`📅 완료 — 재연결 ${relinked}·신규 ${added}${updated ? `·갱신 ${updated}` : ""}${missIds.length ? `·재등록 ${missIds.length}` : ""}${deferred ? `·보류 ${deferred}` : ""}`, null);
     } finally { calBusyRef.current = false; setCalBusy(false); }
   };
 
   /* 로드 시 자동 자가복구(2026-07-03): 미동기(calEventId 없는 날짜 task)가 있으면 조용히 동기.
-     list-first 재연결이라 옛 autoCalDone 같은 중복 폭발 없음 → 버튼 눌러야 하는 부담 제거. */
+     list-first 재연결이라 옛 autoCalDone 같은 중복 폭발 없음 → 버튼 눌러야 하는 부담 제거.
+     ★2026-07-05: '연결됐지만 stale(push 실패로 날짜 어긋남·캘린더서 직접 삭제된 유령)'은 미동기 검사에 안 걸려
+     영구 잔존했음(실측 3+3건) → 날짜 task가 하나라도 있으면 항상 silent 동기. 추가 비용=list 1회, 일치분은 skip. */
   const calAutoDone = useRef(false);
   useEffect(() => {
     if (!cloudLoaded || calAutoDone.current) return;
     calAutoDone.current = true;
-    const hasUnsynced = tasks.some(t => !t.recurringId && t.status !== "done" && (
-      ((t.planDate || t.scheduledDate) && !t.calEventId) ||
-      (t.subtasks || []).some(s => s.status !== "done" && (s.planDate || s.scheduledDate) && !s.calEventId)));
+    const hasDated = tasks.some(t => !t.recurringId && t.status !== "done" && (
+      (t.planDate || t.scheduledDate) ||
+      (t.subtasks || []).some(s => s.status !== "done" && (s.planDate || s.scheduledDate))));
     /* ★C3 레이스 방지(2026-07-04): 토큰 게이트(TMTOKEN) 사용 시, 자동복구가 토큰 로드보다 먼저 돌면 unauthorized로 막힘
        → loadCalToken 먼저 await 후 동기. (토큰 미설정이면 즉시 resolve = no-op) */
-    if (hasUnsynced) loadCalToken().then(() => calSyncAll({ silent: true }));
+    if (hasDated) loadCalToken().then(() => calSyncAll({ silent: true }));
   }, [cloudLoaded]); /* eslint-disable-line */
 
   const allFocused = useMemo(() => {
@@ -2370,6 +2415,18 @@ function App({ onSwitchWs }) {
     });
     return c;
   }, [tasks]);
+  /* 삭제된 유령(연결됐는데 캘린더 창서 미발견) live 재계산 — 마지막 동기의 id 중 '아직 연결·날짜 있는 미완료 task로 존재'하는 것만.
+     삭제·완료·미동기강등된 유령은 자동 감산(calMissingIds는 calSyncAll에서만 set되므로 이 파생이 배지 stale 과다표시 완화). */
+  const calMissingCnt = useMemo(() => {
+    if (!calMissingIds.length) return 0;
+    const live = new Set();
+    tasks.forEach(t => {
+      if (t.recurringId || t.status === "done") return;
+      if (t.calEventId && (t.planDate || t.scheduledDate)) live.add(t.id);
+      (t.subtasks || []).forEach(s => { if (s.calEventId && s.status !== "done" && (s.planDate || s.scheduledDate)) live.add(s.id); });
+    });
+    return calMissingIds.filter(id => live.has(id)).length;
+  }, [calMissingIds, tasks]);
 
   return (
     <div className="app-wrap" style={S.app}>
@@ -2383,8 +2440,8 @@ function App({ onSwitchWs }) {
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span id="sync-status" style={{ fontSize: 10, color: "#9ca3af" }}>☁️</span>
           <span style={{ fontSize: 10, color: "#10B981" }}>● 자동 저장</span>
-          {unsyncedCnt > 0 && <button disabled={calBusy} style={{ ...S.gh, background: "#FEF3C7", borderColor: "#FCD34D", color: "#B45309", fontWeight: 700, opacity: calBusy ? 0.5 : 1 }} onClick={() => calSyncAll({})} title="캘린더 미동기 태스크 — 클릭해 지금 동기화">⚠️ 미동기 {unsyncedCnt}</button>}
-          <button disabled={calBusy} style={{ ...S.gh, opacity: calBusy ? 0.5 : 1 }} onClick={() => calSyncAll({})} title="미동기(캘린더에 아직 없는) 태스크를 캘린더에 반영 — 이미 연결된 건 편집 때 자동 갱신됨">{calBusy ? "📅 동기화 중…" : "📅 일괄동기화"}</button>
+          {(unsyncedCnt > 0 || calMissingCnt > 0) && <button disabled={calBusy} style={{ ...S.gh, background: "#FEF3C7", borderColor: "#FCD34D", color: "#B45309", fontWeight: 700, opacity: calBusy ? 0.5 : 1 }} onClick={() => calSyncAll({})} title={calMissingCnt > 0 ? `미동기 ${unsyncedCnt}건 + 캘린더에서 삭제된 연결 ${calMissingCnt}건 — 클릭해 재등록/동기화` : "캘린더 미동기 태스크 — 클릭해 지금 동기화"}>⚠️ 미동기 {unsyncedCnt + calMissingCnt}</button>}
+          <button disabled={calBusy} style={{ ...S.gh, opacity: calBusy ? 0.5 : 1 }} onClick={() => calSyncAll({})} title="캘린더와 대조해 맞춤 — 미동기는 추가, 연결됐어도 날짜가 어긋났거나 캘린더서 지워진 건 복구(일치분은 건드리지 않음)">{calBusy ? "📅 동기화 중…" : "📅 일괄동기화"}</button>
           <button style={S.gh} onClick={() => calPull(false)} title="캘린더에서 변경된 날짜 가져오기">📅 가져오기</button>
           <button style={S.gh} onClick={exportData}>📤 백업</button>
           <button style={S.gh} onClick={() => fileRef.current?.click()}>📂 불러오기</button>
@@ -2462,6 +2519,7 @@ function AuthGate() {
 function WorkspaceRoot() {
   const [wsKey, setWsKey] = useState(WS.key);
   const switchWs = () => {
+    flushCloudSave(); /* ★E2(2026-07-05): 전환 전 대기 저장을 즉시 flush(예약 경로로) — 안 하면 2초 디바운스 중인 이 워크스페이스의 클라우드 저장이 새 워크스페이스 편집에 preempt돼 유실. flushCloudSave가 _pendingData/_pendingPath를 동기 캡처하므로 아래 WS 재할당 전 호출로 옛 경로 보존. */
     const nk = wsKey === "work" ? "personal" : "work";
     try { localStorage.setItem("tm-workspace", nk); } catch {}
     WS = WORKSPACES[nk];
