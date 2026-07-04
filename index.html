@@ -287,8 +287,9 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
     if (type === "daily") {
       period = TODAY;
     } else if (type === "weekly") {
-      if (r.dow !== dow) return;
-      period = weekId;
+      const days = r.dows || (r.dow != null ? [r.dow] : []); /* 복수 요일(dows) 지원 · 기존 dow 폴백(2026-07-04) */
+      if (!days.includes(dow)) return;
+      period = days.length > 1 ? weekId + "-" + dow : weekId; /* 복수면 요일별 인스턴스, 단일이면 기존 period 호환(중복 방지) */
     } else if (type === "monthly") {
       if (r.lastDay) { if (todayDom !== lastDom) return; }
       else { if (todayDom !== (r.dom || 1)) return; }
@@ -1240,7 +1241,8 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
   const [d, setD] = useState(r.protocol || "");
   useEffect(() => { setD(r.protocol || ""); }, [r.protocol, r.id]);
   const dirty = d !== (r.protocol || "");
-  const label = (r.type || "weekly") === "daily" ? "매일" : (r.type || "weekly") === "weekly" ? `매주 ${DAYS_KO[r.dow]}` : r.lastDay ? "매월 마지막일" : `매월 ${r.dom}일`;
+  const wdays = r.dows || (r.dow != null ? [r.dow] : []);
+  const label = (r.type || "weekly") === "daily" ? "매일" : (r.type || "weekly") === "weekly" ? `매주 ${wdays.map(d => DAYS_KO[d]).join("·")}` : r.lastDay ? "매월 마지막일" : `매월 ${r.dom}일`;
   return (
     <div style={{ borderBottom: "1px solid #f3f4f6", padding: "6px 4px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
@@ -1264,7 +1266,7 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
 /* ═══ 반복 태스크 설정 ═══ */
 const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurring }) => {
   const [show, setShow] = useState(false);
-  const [nt, setNt] = useState(""); const [nd, setNd] = useState(1); const [np, setNp] = useState("proj_etc");
+  const [nt, setNt] = useState(""); const [ndows, setNdows] = useState([]); const [np, setNp] = useState("proj_etc");
   const [rType, setRType] = useState("weekly"); const [dom, setDom] = useState(1); const [lastDay, setLastDay] = useState(false);
   const [rTime, setRTime] = useState(""); /* 선택 시간 HH:MM (2026-07-01) */
   const [rProto, setRProto] = useState(""); /* 실행 방법(선택, 2026-07-01) */
@@ -1274,11 +1276,12 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
     if (rType === "daily") {
       setRecurrings(p => [...p, { ...base, type: "daily" }]);
     } else if (rType === "weekly") {
-      setRecurrings(p => [...p, { ...base, type: "weekly", dow: parseInt(nd) }]);
+      if (!ndows.length) return; /* 요일 최소 1개 선택 필요 */
+      setRecurrings(p => [...p, { ...base, type: "weekly", dows: [...ndows].sort((a, b) => a - b) }]);
     } else {
       setRecurrings(p => [...p, { ...base, type: "monthly", dom: lastDay ? 0 : parseInt(dom), lastDay }]);
     }
-    setNt(""); setNd(1); setDom(1); setLastDay(false); setRTime(""); setRProto("");
+    setNt(""); setNdows([]); setDom(1); setLastDay(false); setRTime(""); setRProto("");
   };
   const delR = (id) => setRecurrings(p => p.filter(r => r.id !== id));
   return (
@@ -1296,15 +1299,17 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
             <option value="daily">매일</option><option value="weekly">매주</option><option value="monthly">매월</option>
           </select>
           {rType === "daily" ? null : rType === "weekly" ? (
-            <select style={{ ...S.sel, fontSize: 12 }} value={nd} onChange={e => setNd(e.target.value)}>
-              {DAYS_KO.map((d, i) => <option key={i} value={i}>{d}요일</option>)}
-            </select>
+            <div style={{ display: "flex", gap: 2, flexWrap: "wrap", flexShrink: 0 }}>
+              {DAYS_KO.map((d, i) => { const on = ndows.includes(i);
+                return <button key={i} type="button" onClick={() => setNdows(on ? ndows.filter(x => x !== i) : [...ndows, i])}
+                  style={{ ...S.gh, fontSize: 11, padding: "3px 8px", background: on ? "#EEF2FF" : "#fff", color: on ? "#4338CA" : "#9ca3af", borderColor: on ? "#A5B4FC" : "#e5e7eb", fontWeight: on ? 700 : 400 }} title={d + "요일"}>{d}</button>; })}
+            </div>
           ) : (
-            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
               <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap" }}>
                 <input type="checkbox" checked={lastDay} onChange={e => setLastDay(e.target.checked)} /> 마지막일
               </label>
-              {!lastDay && <input type="number" min={1} max={31} value={dom} onChange={e => setDom(e.target.value)} style={{ ...S.fld, width: 50, fontSize: 12 }} />}
+              {!lastDay && <input type="number" min={1} max={31} value={dom} onChange={e => setDom(e.target.value)} style={{ ...S.fld, width: 50, fontSize: 12, flexShrink: 0 }} />}
               {!lastDay && <span style={{ fontSize: 11, color: "#6b7280" }}>일</span>}
             </div>
           )}
