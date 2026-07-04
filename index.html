@@ -1447,12 +1447,12 @@ const ActiveRecapRow = ({ t, isWork, pname, onEdit, onSaveRecaps, files, setFile
   );
 };
 const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, onUpdateHistRecaps, onUpdateTaskRecaps, recurrings, onToggleDay }) => {
+  /* 완료(alldone) 칩 제거(2026-07-04, 소유자): 완료 회고는 각 프로젝트 칩의 '완료(N)' 섹션 + 루틴 칩에서 이미 보임 → 중복 제거.
+     업무=프로젝트별 / 개인=루틴별+프로젝트별. 완료 task는 해당 프로젝트 칩 하단 완료 섹션에 뜸. */
   const targets = (isWork
-    /* 업무(2026-06-28): 마커 폐지 → 프로젝트 + develop 버킷(지식·교훈·글감) 전부를 회고 타깃으로. 완료(alldone)는 .concat로 공통 추가. */
     ? (projects || []).map(p => ({ kind: "project", key: p.id, label: p.name }))
     : [...SD_ROUTINES.map(r => ({ kind: "routine", key: r, label: r })),
-       ...(projects || []).filter(p => !isBucketProj(p) && !isRoutineProj(p)).map(p => ({ kind: "project", key: p.id, label: p.name }))])
-    .concat([{ kind: "alldone", key: "all", label: "완료" }]);
+       ...(projects || []).filter(p => !isBucketProj(p) && !isRoutineProj(p)).map(p => ({ kind: "project", key: p.id, label: p.name }))]);
   const [selKey, setSelKey] = useState(targets[0] ? targets[0].kind + ":" + targets[0].key : "");
   const cur = targets.find(t => (t.kind + ":" + t.key) === selKey) || targets[0] || { kind: "none", key: "", label: "" };
   const recapKey = cur.kind + ":" + cur.key;
@@ -2185,12 +2185,13 @@ function App({ onSwitchWs }) {
         else setTasks(p => p.map(x => x.id === it.t.id ? { ...x, subtasks: (x.subtasks || []).map(y => y.id === it.s.id ? { ...y, calEventId: eid, calUpdated: upd || Date.now() } : y) } : x));
       };
       let relinked = 0, added = 0, updated = 0, deferred = 0;
+      const toSync = []; /* 네트워크 호출(add/update) 대상 — 재연결(무네트워크)은 아래 pass에서 즉시 처리 */
       for (const it of targets) {
         const obj = it.kind === "task" ? it.t : subCalObj(it.s, it.t);
         const cp = calMakeParams(obj, projects);
         if (!cp) continue;
         const eid = it.kind === "task" ? it.t.calEventId : it.s.calEventId;
-        if (eid) { const ur = await calSync("update", { ...cp, eventId: eid }); if (ur?.eventId) { setEid(it, ur.eventId, ur.updated); updated++; } else deferred++; continue; }
+        if (eid) { toSync.push({ it, cp, eid }); continue; } /* 연결됨 → update */
         const cd = (cp.date || "").slice(0, 10);
         if (listOk) { /* 목록 성공 → 재연결로 중복 차단(멱등키 우선 → 제목+날짜) */
           const myKey = it.kind === "task" ? it.t.id : it.s.id;
@@ -2199,10 +2200,17 @@ function App({ onSwitchWs }) {
           if (free.length === 1) { setEid(it, free[0], Date.now()); claimed.add(free[0]); relinked++; continue; }
           if ((idx[norm(cp.title) + "|" + cd] || []).length) { deferred++; continue; } /* 이미 존재(claimed/모호) → 중복 방지 보류 */
         }
-        /* 미존재(목록 성공) 또는 ★목록 조회 실패 → add. 멱등키 GAS면 같은 key 중복 자동 방지. cap 밖만 보류 */
+        /* 미존재(목록 성공) 또는 ★목록 조회 실패 → add. 멱등키 GAS가 같은 key 중복 방지. cap 밖만 보류 */
         if (cd < minDate || cd > maxDate) { deferred++; continue; }
-        const ar = await calSync("add", cp);
-        if (ar?.eventId) { setEid(it, ar.eventId, ar.updated || Date.now()); claimed.add(ar.eventId); added++; } else deferred++;
+        toSync.push({ it, cp, eid: "" }); /* 신규 add */
+      }
+      /* 병렬 동기화 — 동시 CAP개씩(Apps Script 레이트리밋 회피 + 속도). 멱등키가 중복 방지 */
+      const CAP = 5;
+      for (let i = 0; i < toSync.length; i += CAP) {
+        await Promise.all(toSync.slice(i, i + CAP).map(async ({ it, cp, eid }) => {
+          const r = await calSync(eid ? "update" : "add", eid ? { ...cp, eventId: eid } : cp);
+          if (r?.eventId) { setEid(it, r.eventId, r.updated || Date.now()); if (eid) updated++; else added++; } else deferred++;
+        }));
       }
       if (!silent) showT(`📅 완료 — 재연결 ${relinked}·신규 ${added}${updated ? `·갱신 ${updated}` : ""}${deferred ? `·보류 ${deferred}` : ""}`, null);
     } finally { calBusyRef.current = false; setCalBusy(false); }
