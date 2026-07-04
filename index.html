@@ -1720,6 +1720,26 @@ function App({ onSwitchWs }) {
     return () => { cancelled = true; window.removeEventListener("online", onOnline); };
   }, []); /* eslint-disable-line */
 
+  /* ★M2 완화(2026-07-04): 통짜블롭 LWW라 두 기기 동시 편집 시 lost-update 가능(구조적 한계 — 완전 병합/CRDT는 범위 밖).
+     탭이 다시 보일 때 클라우드 savedAt(deep GET)만 싸게 확인 → 우리 마지막 저장보다 최신이면(=다른 기기가 씀) 경고.
+     사용자가 새로고침하면 C2 채택 로직으로 안전히 반영. 무성 유실을 '보이는 신호'로 전환. 단일 기기에선 안 뜸. */
+  useEffect(() => {
+    if (!cloudLoaded) return;
+    let checking = false;
+    const check = async () => {
+      if (document.visibilityState !== "visible" || checking) return;
+      checking = true;
+      try {
+        const q = await authParam();
+        const res = await fetch("https://taskmgr-sync-default-rtdb.firebaseio.com/" + WS.fbPath + "/savedAt.json" + q);
+        if (res.ok) { const cs = await res.json(); if (typeof cs === "string" && cs > (lastSavedAtRef.current || "")) showT("⚠️ 다른 기기에서 변경됨 — 새로고침하면 반영됩니다", null); }
+      } catch {} finally { checking = false; }
+    };
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("focus", check);
+    return () => { document.removeEventListener("visibilitychange", check); window.removeEventListener("focus", check); };
+  }, [cloudLoaded]); /* eslint-disable-line */
+
   /* (폐지 2026-06-30) 수행날짜 도래 시 자동 별표(#1) 제거 — 별=집중 업무(날짜 무관)로 의미 전환.
      '오늘 할 일'은 수행날짜<=오늘로 자동 표출(TodayView onToday)이라 별로 끌어올릴 필요 없음. */
 
