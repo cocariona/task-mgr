@@ -157,7 +157,7 @@ function doGet(e) {
           updated: ev.getLastUpdated().getTime()
         };
       });
-      return respond({ success: true, events: events });
+      return respond({ success: true, events: events, v: "260704" }); /* ★버전 마커(2026-07-04): repo .gs와 대조해 재배포 드리프트 감지용 */
     }
 
     return respond({ success: false, error: "unknown action: " + action });
