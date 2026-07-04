@@ -501,8 +501,9 @@ const StSel = ({ value, onChange, compact }) => (
 /* 드롭다운 정렬: 프로젝트 → 그 외(버킷) → 기타(petc) 맨끝. 업무(kind 없음)는 전부 동일군 → 원순서 유지(안정정렬) */
 const projSortKey = (p) => (p && p.kind === "routine") ? 0 : (p && p.kind === "project") ? 1 : (p && (p.id === "petc" || p.id === "proj_etc")) ? 3 : 2;
 const sortProjsForSelect = (projects) => [...(projects || [])].sort((a, b) => projSortKey(a) - projSortKey(b));
-const PrSel = ({ value, onChange, projects }) => (
-  <select style={S.sel} value={value} onChange={e => onChange(e.target.value)}>
+const PrSel = ({ value, onChange, projects, highlight }) => (
+  <select style={{ ...S.sel, ...(highlight ? { borderColor: "#F59E0B", background: "#FFFBEB" } : {}) }} value={value || ""} onChange={e => onChange(e.target.value)}>
+    <option value="">과제 선택…</option>
     {sortProjsForSelect(projects).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
   </select>
 );
@@ -660,13 +661,14 @@ const useDragReorder = (onReorder) => {
 
 /* ─── AddForm ─── */
 const AddForm = ({ projects, onAdd, defProj }) => {
-  const [t, setT] = useState(""); const [s, setS] = useState("action"); const [p, setP] = useState(defProj || projects[0]?.id); const [f, setF] = useState(false); const [sd, setSd] = useState(""); const [sl, setSl] = useState(""); const [pd, setPd] = useState(TODAY); const r = useRef();
-  const go = () => { if (!t.trim()) return; onAdd({ text: t.trim(), status: s, project: p, focus: f, scheduledDate: sd, scheduledLabel: sl, planDate: pd }); setT(""); setS("action"); setF(false); setSd(""); setSl(""); setPd(TODAY); r.current?.focus(); };
+  const [t, setT] = useState(""); const [s, setS] = useState("action"); const [p, setP] = useState(defProj || ""); const [f, setF] = useState(false); const [sd, setSd] = useState(""); const [sl, setSl] = useState(""); const [pd, setPd] = useState(TODAY); const r = useRef();
+  /* 프로젝트/과제 미선택 상태로 시작(2026-07-04, 소유자) — 첫 항목 자동선택 안 함. 고르지 않으면 추가 안 됨(오분류 방지). */
+  const go = () => { if (!t.trim() || !p) return; onAdd({ text: t.trim(), status: s, project: p, focus: f, scheduledDate: sd, scheduledLabel: sl, planDate: pd }); setT(""); setS("action"); setF(false); setSd(""); setSl(""); setPd(TODAY); r.current?.focus(); };
   return (
     <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
       <input ref={r} style={S.inp} placeholder="새 할일 입력..." value={t} onChange={e => setT(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} />
       <StSel value={s} onChange={setS} compact />
-      {!defProj && <PrSel value={p} onChange={setP} projects={projects} />}
+      {!defProj && <PrSel value={p} onChange={setP} projects={projects} highlight={!!t.trim() && !p} />}
       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
         <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600 }}>📆</span>
         <input type="date" style={{ ...S.fld, width: 130, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} title="📆 언제할지 (선택)" />
@@ -1583,7 +1585,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
 function App({ onSwitchWs }) {
   const isWork = WS.key === "work";
   const saved = useMemo(() => loadSaved(), []);
-  const [tab, setTab] = useState(null); /* 오늘 탭 자동선택 해제(2026-07-04, 소유자) — 워크스페이스 열면 탭 미선택, 직접 고름 */
+  const [tab, setTab] = useState("today");
   const [tasks, setTasks] = useState(saved?.tasks || (isWork ? INIT_TASKS : []));
   const [projects, setProjects] = useState(saved?.projects || (isWork ? INIT_PROJECTS : PERSONAL_PROJECTS));
   /* (2026-06-26) issues·projectInfo state 제거 (폐기) */
