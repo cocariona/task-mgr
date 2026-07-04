@@ -1576,7 +1576,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
 function App({ onSwitchWs }) {
   const isWork = WS.key === "work";
   const saved = useMemo(() => loadSaved(), []);
-  const [tab, setTab] = useState("today");
+  const [tab, setTab] = useState(null); /* 오늘 탭 자동선택 해제(2026-07-04, 소유자) — 워크스페이스 열면 탭 미선택, 직접 고름 */
   const [tasks, setTasks] = useState(saved?.tasks || (isWork ? INIT_TASKS : []));
   const [projects, setProjects] = useState(saved?.projects || (isWork ? INIT_PROJECTS : PERSONAL_PROJECTS));
   /* (2026-06-26) issues·projectInfo state 제거 (폐기) */
