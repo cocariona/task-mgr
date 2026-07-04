@@ -284,6 +284,7 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
   const allInstances = [...tasks, ...histInstances];
   const newTasks = [];
   recurrings.forEach(r => {
+    if (r.disabled) return; /* ★M5: 삭제 표식된 시드 루틴은 인스턴스 생성 안 함 */
     const type = r.type || "weekly";
     let period;
     if (type === "daily") {
@@ -294,7 +295,7 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
       period = days.length > 1 ? weekId + "-" + dow : weekId; /* 복수면 요일별 인스턴스, 단일이면 기존 period 호환(중복 방지) */
     } else if (type === "monthly") {
       if (r.lastDay) { if (todayDom !== lastDom) return; }
-      else { if (todayDom !== (r.dom || 1)) return; }
+      else { const effDom = Math.min(r.dom || 1, lastDom); if (todayDom !== effDom) return; } /* ★minor: 29·30·31일은 짧은 달에 말일로 클램프(결번 방지) */
       period = monthId;
     } else return;
     /* 이번 기간 인스턴스가 이미 있으면 skip (신규=recurringId+period / 구=notes 태그 호환), 완료분 포함 */
@@ -351,6 +352,7 @@ const PERSONAL_ROUTINES = [
   { id: "rt_ringle_mon",   type: "weekly", dow: 1, time: "23:00", text: "🇬🇧 링글 1:1 수업", project: "rt_english" },
   { id: "rt_vocal_lesson", type: "weekly", dow: 4, time: "17:00", text: "🎤 노래 레슨",       project: "rt_vocal" },
 ];
+const SEED_ROUTINE_IDS = new Set(PERSONAL_ROUTINES.map(r => r.id)); /* ★M5(2026-07-04): 시드 루틴 삭제는 제거 대신 disabled tombstone → 매 로드 재시드 부활 방지 */
 
 /* ─── localStorage (이중 백업, 워크스페이스별 키) ─── */
 const loadSaved = () => {
@@ -1238,29 +1240,46 @@ const HistRow = ({ item, date, idx, onRestore }) => {
 /* (S3) InboxView 제거 — 업무 인박스 탭(붙여넣기 트리아지·🏢회사 캘린더 가져오기) 삭제.
    (cleanup 2026-06-16: COMPANY_GAS_*·companyFetchEvents·calImport 제거 완료.) */
 
-/* 반복 태스크 한 행 — 실행 방법(protocol) 인라인 편집 토글(2026-07-01) */
+/* 반복 태스크 한 행 — ✏️ 일정(이름·시간·요일·과제) + 📋 실행방법 인라인 편집(2026-07-04 M7) */
 const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
   const [open, setOpen] = useState(false);
   const [d, setD] = useState(r.protocol || "");
-  useEffect(() => { setD(r.protocol || ""); }, [r.protocol, r.id]);
-  const dirty = d !== (r.protocol || "");
+  const type = r.type || "weekly";
   const wdays = r.dows || (r.dow != null ? [r.dow] : []);
-  const label = (r.type || "weekly") === "daily" ? "매일" : (r.type || "weekly") === "weekly" ? `매주 ${wdays.map(d => DAYS_KO[d]).join("·")}` : r.lastDay ? "매월 마지막일" : `매월 ${r.dom}일`;
+  const [txt, setTxt] = useState(r.text || "");
+  const [tm, setTm] = useState(r.time || "");
+  const [prj, setPrj] = useState(r.project || "");
+  const [dws, setDws] = useState(wdays);
+  useEffect(() => { setD(r.protocol || ""); setTxt(r.text || ""); setTm(r.time || ""); setPrj(r.project || ""); setDws(r.dows || (r.dow != null ? [r.dow] : [])); }, [r.id, r.protocol, r.text, r.time, r.project, r.dow]); /* eslint-disable-line */
+  const dirty = d !== (r.protocol || "");
+  const sortJoin = (a) => [...a].sort((x, y) => x - y).join(",");
+  const dirtySched = txt.trim() !== (r.text || "") || tm !== (r.time || "") || prj !== (r.project || "") || (type === "weekly" && sortJoin(dws) !== sortJoin(wdays));
+  const saveSched = () => { const patch = { text: txt.trim() || r.text, time: tm, project: prj || r.project }; if (type === "weekly") { if (!dws.length) return; patch.dows = [...dws].sort((a, b) => a - b); } onUpdate(r.id, patch); };
+  const label = type === "daily" ? "매일" : type === "weekly" ? `매주 ${wdays.map(x => DAYS_KO[x]).join("·")}` : r.lastDay ? "매월 마지막일" : `매월 ${r.dom}일`;
   return (
     <div style={{ borderBottom: "1px solid #f3f4f6", padding: "6px 4px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
         <span style={{ background: "#EEF2FF", color: "#4338CA", fontWeight: 700, fontSize: 12, padding: "2px 8px", borderRadius: 6, flexShrink: 0 }}>{label}{r.time ? ` ${r.time}` : ""}</span>
         <span style={{ flex: 1 }}>{r.text}</span>
         <span style={{ fontSize: 10, color: "#9ca3af" }}>#{projects.find(p => p.id === r.project)?.name}</span>
-        <button style={{ ...S.gh, fontSize: 10, background: open ? "#EEF2FF" : "#fff" }} onClick={() => setOpen(!open)} title="실행 방법(고정 참고)">📋{r.protocol ? "✓" : ""}</button>
+        <button style={{ ...S.gh, fontSize: 10, background: open ? "#EEF2FF" : "#fff" }} onClick={() => setOpen(!open)} title="편집(이름·시간·요일·과제·실행방법)">✏️{r.protocol ? "📋" : ""}</button>
         <button style={{ ...S.gh, color: "#EF4444", fontSize: 10 }} onClick={onDelete}>✕</button>
       </div>
       {open && <div style={{ marginTop: 4 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+          <input value={txt} onChange={e => setTxt(e.target.value)} placeholder="이름" style={{ ...S.inp, fontSize: 12, maxWidth: 180 }} />
+          <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>🕒</span><input type="time" value={tm} onChange={e => setTm(e.target.value)} style={{ ...S.fld, width: 110, flex: "none", fontSize: 11 }} title="시간(선택) — 캘린더 타임드" /></div>
+          <PrSel value={prj} onChange={setPrj} projects={projects} />
+          {type === "weekly" && <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+            {DAYS_KO.map((dn, i) => { const on = dws.includes(i); return <button key={i} type="button" onClick={() => setDws(on ? dws.filter(x => x !== i) : [...dws, i])} style={{ ...S.gh, fontSize: 11, padding: "3px 7px", background: on ? "#EEF2FF" : "#fff", color: on ? "#4338CA" : "#9ca3af", borderColor: on ? "#A5B4FC" : "#e5e7eb", fontWeight: on ? 700 : 400 }}>{dn}</button>; })}
+          </div>}
+          {dirtySched && <button style={{ ...S.btn("#4338CA"), fontSize: 11 }} onClick={saveSched}>일정 저장</button>}
+        </div>
         <textarea value={d} onChange={e => setD(e.target.value)} rows={4} placeholder={"실행 방법 (고정 참고). 예:\n[실행] F45 클래스 참석\n[tier별] 최소=푸시업10+스쿼트10 / 보통=F45 / 최대=F45 그대로"}
           style={{ ...S.ta, minHeight: 0, fontSize: 12 }} />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
           <span style={{ fontSize: 10, color: "#9ca3af" }}>→ 캘린더 이벤트 설명 맨 위에 고정 표시(오늘 노트는 그 아래)</span>
-          {dirty && <button style={{ ...S.btn("#4338CA"), fontSize: 11 }} onClick={() => onUpdate(r.id, { protocol: d.trim() })}>저장</button>}
+          {dirty && <button style={{ ...S.btn("#4338CA"), fontSize: 11 }} onClick={() => onUpdate(r.id, { protocol: d.trim() })}>실행방법 저장</button>}
         </div>
       </div>}
     </div>
@@ -1286,7 +1305,8 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
     }
     setNt(""); setNdows([]); setDom(1); setLastDay(false); setRTime(""); setRProto("");
   };
-  const delR = (id) => setRecurrings(p => p.filter(r => r.id !== id));
+  /* ★M5: 시드 루틴은 제거 대신 disabled 표식(재시드 부활 방지). 사용자 생성 반복은 완전 제거. */
+  const delR = (id) => setRecurrings(p => SEED_ROUTINE_IDS.has(id) ? p.map(r => r.id === id ? { ...r, disabled: true } : r) : p.filter(r => r.id !== id));
   return (
     <div style={{ marginTop: 16 }}>
       <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setShow(!show)}>
@@ -1295,7 +1315,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
       </div>
       {show && <div style={{ ...S.card, marginTop: 4 }}>
         {recurrings.length === 0 && <div style={{ ...S.emp, padding: 12 }}>설정된 반복 태스크가 없습니다</div>}
-        {recurrings.map(r => <RecurringRow key={r.id} r={r} projects={projects} onDelete={() => delR(r.id)} onUpdate={onUpdateRecurring} />)}
+        {recurrings.filter(r => !r.disabled).map(r => <RecurringRow key={r.id} r={r} projects={projects} onDelete={() => delR(r.id)} onUpdate={onUpdateRecurring} />)}
         <div style={S.div} />
         <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
           <select style={{ ...S.sel, fontSize: 12 }} value={rType} onChange={e => setRType(e.target.value)}>
@@ -1882,8 +1902,13 @@ function App({ onSwitchWs }) {
   /* 반복 정의 수정(실행방법·시간) + 진행중 인스턴스에 전파 + 연결된 캘린더 이벤트 갱신(2026-07-01) */
   const updateRecurring = (id, patch) => {
     setRecurrings(p => p.map(r => r.id === id ? { ...r, ...patch } : r));
-    if (!("protocol" in patch) && !("time" in patch)) return;
-    const merge = (t) => ({ ...t, ...("protocol" in patch ? { protocol: patch.protocol } : {}), ...("time" in patch ? { planTime: patch.time } : {}) });
+    /* 인스턴스+캘린더 전파 키(text/project/time/protocol). dows·type은 정의만 바꾸고 미래 생성에 반영 */
+    if (!["protocol", "time", "text", "project"].some(k => k in patch)) return;
+    const merge = (t) => ({ ...t,
+      ...("protocol" in patch ? { protocol: patch.protocol } : {}),
+      ...("time" in patch ? { planTime: patch.time } : {}),
+      ...("text" in patch ? { text: patch.text } : {}),
+      ...("project" in patch ? { project: patch.project } : {}) });
     const affected = tasks.filter(t => t.recurringId === id && t.status !== "done");
     setTasks(p => p.map(t => (t.recurringId === id && t.status !== "done") ? merge(t) : t));
     affected.forEach(t => { if (!t.calEventId) return; const cp = calMakeParams(merge(t), projects);
