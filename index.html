@@ -2346,7 +2346,9 @@ function App({ onSwitchWs }) {
     const hasUnsynced = tasks.some(t => !t.recurringId && t.status !== "done" && (
       ((t.planDate || t.scheduledDate) && !t.calEventId) ||
       (t.subtasks || []).some(s => s.status !== "done" && (s.planDate || s.scheduledDate) && !s.calEventId)));
-    if (hasUnsynced) calSyncAll({ silent: true });
+    /* ★C3 레이스 방지(2026-07-04): 토큰 게이트(TMTOKEN) 사용 시, 자동복구가 토큰 로드보다 먼저 돌면 unauthorized로 막힘
+       → loadCalToken 먼저 await 후 동기. (토큰 미설정이면 즉시 resolve = no-op) */
+    if (hasUnsynced) loadCalToken().then(() => calSyncAll({ silent: true }));
   }, [cloudLoaded]); /* eslint-disable-line */
 
   const allFocused = useMemo(() => {
