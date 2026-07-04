@@ -87,8 +87,10 @@ const TABS_BY_WS = {
 
 /* 로컬 시간 기준 오늘 날짜 (UTC가 아닌 KST 등 현지 시간) */
 let TODAY = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })();
-/* 자정 경과 시 자동 갱신 (60초마다 체크) */
-setInterval(() => { const d = new Date(); const now = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; if (now !== TODAY) { TODAY = now; window.location.reload(); } }, 60000);
+/* 자정 경과 시 자동 갱신 (60초마다 체크) — ★리로드 前 대기중 저장 flush(2026-07-04) */
+setInterval(async () => { const d = new Date(); const now = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; if (now !== TODAY) { TODAY = now; try { await flushCloudSave(); } catch {} window.location.reload(); } }, 60000);
+/* ★탭 닫기/숨김 시 대기중 저장 flush(2026-07-04, best-effort keepalive) */
+window.addEventListener("pagehide", () => { try { flushCloudSave(); } catch {} });
 const gid = () => Math.random().toString(36).slice(2, 9);
 const fd = (d) => { const t = new Date(d); return `${t.getFullYear()}.${String(t.getMonth()+1).padStart(2,"0")}.${String(t.getDate()).padStart(2,"0")}`; };
 const diffDays = (dateStr) => {
@@ -146,10 +148,12 @@ const loadCalToken = async () => {
 };
 
 /* 클라우드 저장: Firebase PUT (1회 요청, 2초 디바운스) */
-let _saveTimer = null;
+let _saveTimer = null, _pendingData = null;
 const cloudSave = (data) => {
+  _pendingData = data; /* ★자정 리로드·탭닫기 flush용으로 대기 데이터 보관(2026-07-04) */
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(async () => {
+    _saveTimer = null;
     const el = document.getElementById("sync-status");
     if (el) { el.textContent = "☁️ 저장중..."; el.style.color = "#F59E0B"; }
     const q = await authParam();
@@ -162,11 +166,19 @@ const cloudSave = (data) => {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }).then(() => {
+      _pendingData = null;
       if (el) { el.textContent = "☁️ 동기화됨"; el.style.color = "#10B981"; setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 2000); }
     }).catch(() => {
       if (el) { el.textContent = "☁️ 실패"; el.style.color = "#EF4444"; setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 3000); }
     });
   }, 2000);
+};
+/* ★디바운스 중인 저장을 즉시 flush(2026-07-04) — 자정 리로드/탭닫기로 2초 저장이 소멸하는 것 방지. keepalive로 언로드에도 도달 시도 */
+const flushCloudSave = async () => {
+  if (!_pendingData) return;
+  clearTimeout(_saveTimer); _saveTimer = null;
+  const data = _pendingData; _pendingData = null;
+  try { const q = await authParam(); await fetch(fbDataUrl() + q, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data), keepalive: true }); } catch {}
 };
 
 /* 클라우드 로드: Firebase GET (1회 요청). 실패와 '빈 DB'를 구분해 반환 —
@@ -264,7 +276,6 @@ const calMakeParams = (task, projects) => {
 /* 서브태스크 캘린더 객체 — 제목=서브 task(sub.text) 기준, 메모 맨 앞에 부모 task명(↳ 부모명) */
 const subCalObj = (sub, parent) => ({ ...sub, project: parent ? parent.project : sub.project, notes: "↳ " + (parent ? parent.text : "") + (sub.notes ? "\n" + sub.notes : "") });
 /* 캘린더 동기 가능 창(오늘-88 ~ +363일=GAS list cap 안쪽). 밖이면 sync가 보류하므로 미동기 배지·자동복구서 제외(2026-07-04, 해소 불가 배지 방지) */
-const inCalWin = (o) => { const d = ((o && (o.planDate || o.scheduledDate)) || "").slice(0, 10); if (!d) return false; const k = Math.round((new Date(d + "T00:00:00").getTime() - new Date(TODAY + "T00:00:00").getTime()) / 86400000); return k >= -88 && k <= 363; };
 /* 수동 버튼용: 기존 이벤트 있으면 update, 없으면 add */
 const addToCalendar = (task, projects, onResult) => {
   const p = calMakeParams(task, projects);
@@ -1732,14 +1743,22 @@ function App({ onSwitchWs }) {
     if (!cloudLoaded || rollFwdDone.current) return;
     rollFwdDone.current = true;
     const isStaleP = (t) => t.status !== "done" && !t.recurringId && t.planDate && t.planDate < TODAY; /* 수행날짜 지난 미완료(비반복)만 이월. 날짜 없는 백로그는 대상 아님 */
+    const isStaleS = (s) => s.status !== "done" && s.planDate && s.planDate < TODAY; /* ★minor(2026-07-04): 서브태스크도 이월(배너·오늘에 방치되던 것) */
     const stale = tasks.filter(isStaleP);
-    if (!stale.length) return;
-    setTasks(p => p.map(t => isStaleP(t) ? { ...t, planDate: TODAY } : t));
+    const staleS = []; tasks.forEach(t => { if (t.recurringId) return; (t.subtasks || []).forEach(s => { if (isStaleS(s)) staleS.push({ parent: t, s }); }); });
+    if (!stale.length && !staleS.length) return;
+    setTasks(p => p.map(t => {
+      let nt = isStaleP(t) ? { ...t, planDate: TODAY } : t;
+      if (!t.recurringId && (nt.subtasks || []).some(isStaleS)) nt = { ...nt, subtasks: nt.subtasks.map(s => isStaleS(s) ? { ...s, planDate: TODAY } : s) };
+      return nt;
+    }));
     stale.forEach(t => { /* 캘린더는 매번 갱신(사용자 요청) — 연동된 것만 update */
       if (!t.calEventId) return;
       const cp = calMakeParams({ ...t, planDate: TODAY }, projects);
       if (cp) calSync("update", { ...cp, eventId: t.calEventId }).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === t.id ? { ...x, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : x)); });
     });
+    staleS.forEach(({ parent, s }) => { if (!s.calEventId) return; const cp = calMakeParams(subCalObj({ ...s, planDate: TODAY }, parent), projects);
+      if (cp) calSync("update", { ...cp, eventId: s.calEventId }).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === parent.id ? { ...x, subtasks: (x.subtasks || []).map(y => y.id === s.id ? { ...y, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : y) } : x)); }); });
   }, [cloudLoaded]); /* eslint-disable-line */
 
   /* S4a: 개인 프로젝트 5종 보강(기존 데이터에 신규 추가, 정본 순서·id 보존) */
@@ -2050,7 +2069,7 @@ function App({ onSwitchWs }) {
     if (!editTarget) return;
     if (editTarget.parentId) {
       /* (폐지 2026-06-30) 수행날짜=오늘 자동별표 제거 — 별=집중 업무(날짜 무관) */
-      setTasks(p => p.map(t => t.id === editTarget.parentId ? { ...t, subtasks: (t.subtasks || []).map(s => s.id === updated.id ? updated : s) } : t));
+      setTasks(p => p.map(t => t.id === editTarget.parentId ? { ...t, subtasks: (t.subtasks || []).map(s => s.id === updated.id ? { ...updated, calEventId: s.calEventId || updated.calEventId, calUpdated: s.calUpdated || updated.calUpdated } : s) } : t));
       /* 서브태스크도 캘린더 동기화(부모 과제 기준) — task와 동일 */
       const par = tasks.find(t => t.id === editTarget.parentId);
       if (par) syncSubDoneHist(par, { ...par, subtasks: (par.subtasks || []).map(s => s.id === updated.id ? updated : s) });
@@ -2062,9 +2081,11 @@ function App({ onSwitchWs }) {
       else if (!subDate && updated.calEventId) { calSync("delete", { eventId: updated.calEventId }); subWrite("", 0); }
     } else {
       const prev = tasks.find(t => t.id === updated.id);
-      /* planDate가 오늘이면 자동 별표 */
-      /* (폐지 2026-06-30) 수행날짜=오늘 자동별표 제거 — 별=집중 업무(날짜 무관) */
-      setTasks(p => p.map(t => t.id === updated.id ? updated : t));
+      /* ★편집모달 덮어쓰기 방지(2026-07-04): 모달이 열려있는 동안 비동기로 찍힌 calEventId/calUpdated를
+         스냅샷이 덮지 않게 현재값 우선 보존(서브도 id별로). 편집 필드는 updated 적용. */
+      setTasks(p => p.map(t => t.id === updated.id ? { ...updated,
+        calEventId: t.calEventId || updated.calEventId, calUpdated: t.calUpdated || updated.calUpdated,
+        subtasks: (updated.subtasks || []).map(ns => { const c = (t.subtasks || []).find(x => x.id === ns.id); return c ? { ...ns, calEventId: ns.calEventId || c.calEventId, calUpdated: ns.calUpdated || c.calUpdated } : ns; }) } : t));
       if (!prev) return;
       const proj = projects.find(p => p.id === updated.project);
       const changes = [];
@@ -2100,6 +2121,9 @@ function App({ onSwitchWs }) {
     }
   };
 
+  /* ★undo 유령 이벤트 방지(2026-07-04): 완료/삭제 시 캘린더 이벤트를 지웠으므로, 되돌릴 땐 calEventId를 비워
+     '미동기'로 되돌린다 → 자동복구가 다시 등록(멱등키가 혹시 남은 이벤트엔 재연결). 안 그러면 삭제된 이벤트를 가리키는 유령. */
+  const stripCal = (t) => ({ ...t, calEventId: "", calUpdated: 0, subtasks: (t.subtasks || []).map(s => ({ ...s, calEventId: "", calUpdated: 0 })) });
   const doneTask = (id) => {
     const task = tasks.find(t => t.id === id); if (!task) return;
     const proj = projects.find(p => p.id === task.project);
@@ -2111,7 +2135,7 @@ function App({ onSwitchWs }) {
     const subCount = (task.subtasks || []).length;
     addHistItem({ type: "done", text: task.text, projectName: proj?.name || "", project: task.project, orig: snap, subCount, time: nowTime() });
     showT(`"${task.text}" 완료`, () => {
-      setTasks(p => [...p, snap]);
+      setTasks(p => [...p, stripCal(snap)]);
       removeHistItem(it => it.type === "done" && it.orig?.id === id);
       hideT();
     });
@@ -2133,7 +2157,7 @@ function App({ onSwitchWs }) {
     addHistItem({ type: "deleted", text: task.text, projectName: proj?.name || "", time: nowTime(),
       ...(task.recurringId ? { orig: { id: task.id, recurringId: task.recurringId, recurringPeriod: task.recurringPeriod, notes: task.notes } } : {}) });
     showT(`"${task.text}" 삭제됨`, () => {
-      setTasks(p => [...p, task]);
+      setTasks(p => [...p, stripCal(task)]);
       if (orphanSubDone.length) setHistory(prev => { let next = [...prev]; orphanSubDone.forEach(({ date, item }) => { const ex = next.find(h => h.date === date); if (ex) next = next.map(h => h.date === date ? { ...h, items: [...h.items, item] } : h); else next = [...next, { date, items: [item] }]; }); return next; });
       removeHistItem(it => it.type === "deleted" && it.text === task.text);
       hideT();
@@ -2144,8 +2168,9 @@ function App({ onSwitchWs }) {
     setHistory(prev => {
       const day = prev.find(h => h.date === date); if (!day?.items[idx]) return prev;
       const item = day.items[idx];
-      const restored = item.orig || { id: gid(), text: item.text, status: "action", project: projects.find(p => p.name === item.projectName)?.id || projects[0]?.id, scheduledDate: "", scheduledLabel: "", planDate: "",  createdAt: TODAY, notes: "", focus: false, subtasks: [], calEventId: "", calUpdated: 0 };
-              if (!restored.planDate) restored.planDate = TODAY;
+      const restored0 = item.orig || { id: gid(), text: item.text, status: "action", project: projects.find(p => p.name === item.projectName)?.id || projects[0]?.id, scheduledDate: "", scheduledLabel: "", planDate: "",  createdAt: TODAY, notes: "", focus: false, subtasks: [] };
+      const restored = stripCal(restored0); /* 되돌릴 땐 미동기로 → 자동복구가 재등록(유령 방지) */
+      if (!restored.planDate) restored.planDate = TODAY;
       setTasks(p => [...p, restored]);
       const ni = day.items.filter((_, i) => i !== idx);
       if (!ni.length) return prev.filter(h => h.date !== date);
@@ -2256,8 +2281,6 @@ function App({ onSwitchWs }) {
       if (listOk) lr.events.forEach(ev => { const k = norm(ev.title) + "|" + (ev.start || "").slice(0, 10); (idx[k] = idx[k] || []).push(ev.id); if (ev.key) keyIdx[ev.key] = ev.id; evDate[ev.id] = (ev.start || "").slice(0, 10); });
       const claimed = new Set(); /* 이미 다른 task에 물린 eventId — 오연결 방지(동일 제목+날짜 충돌) */
       tasks.forEach(t => { if (t.calEventId) claimed.add(t.calEventId); (t.subtasks || []).forEach(s => { if (s.calEventId) claimed.add(s.calEventId); }); });
-      const b = new Date(TODAY + "T00:00:00"), fmtD = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      const minDate = fmtD(new Date(b.getTime() - 88 * 86400000)), maxDate = fmtD(new Date(b.getTime() + 363 * 86400000)); /* GAS list cap(back90/fwd365) 안쪽 — 이 밖은 list가 못 봐 add 보류 */
       const setEid = (it, eid, upd) => {
         if (it.kind === "task") setTasks(p => p.map(x => x.id === it.t.id ? { ...x, calEventId: eid, calUpdated: upd || Date.now() } : x));
         else setTasks(p => p.map(x => x.id === it.t.id ? { ...x, subtasks: (x.subtasks || []).map(y => y.id === it.s.id ? { ...y, calEventId: eid, calUpdated: upd || Date.now() } : y) } : x));
