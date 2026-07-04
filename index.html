@@ -254,6 +254,8 @@ const calMakeParams = (task, projects) => {
 };
 /* 서브태스크 캘린더 객체 — 제목=서브 task(sub.text) 기준, 메모 맨 앞에 부모 task명(↳ 부모명) */
 const subCalObj = (sub, parent) => ({ ...sub, project: parent ? parent.project : sub.project, notes: "↳ " + (parent ? parent.text : "") + (sub.notes ? "\n" + sub.notes : "") });
+/* 캘린더 동기 가능 창(오늘-88 ~ +363일=GAS list cap 안쪽). 밖이면 sync가 보류하므로 미동기 배지·자동복구서 제외(2026-07-04, 해소 불가 배지 방지) */
+const inCalWin = (o) => { const d = ((o && (o.planDate || o.scheduledDate)) || "").slice(0, 10); if (!d) return false; const k = Math.round((new Date(d + "T00:00:00").getTime() - new Date(TODAY + "T00:00:00").getTime()) / 86400000); return k >= -88 && k <= 363; };
 /* 수동 버튼용: 기존 이벤트 있으면 update, 없으면 add */
 const addToCalendar = (task, projects, onResult) => {
   const p = calMakeParams(task, projects);
@@ -894,13 +896,14 @@ const TodayView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onU
     onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOverToday(false); },
     onDrop: (e) => { e.preventDefault(); setDragOverToday(false); const id = e.dataTransfer.getData("text/task-id"); if (id && onPlanToday) onPlanToday(id); },
   };
-  /* 오늘 할 일 = 수행날짜가 오늘이거나 지난(미완료) — 별(집중)과 무관(2026-06-30). 지난 미완료 루틴은 제외. */
-  const onToday = (t) => !!(t.planDate && t.planDate <= TODAY && !isStaleRoutine(t));
+  /* 오늘 할 일 = 수행날짜가 오늘이거나 지난(미완료) — 별(집중)과 무관(2026-06-30). 지난 미완료 루틴 제외.
+     ★M1(2026-07-04): 나중에(someday)=백로그는 수행날짜가 있어도 오늘에 안 뜸(시야에서 빠짐). */
+  const onToday = (t) => !!(t.planDate && t.planDate <= TODAY && !isStaleRoutine(t) && t.status !== "someday");
   const { focusedTasks, focusedSubs } = useMemo(() => {
     const pk = (t) => projSortKey(projects.find(p => p.id === t.project)); /* 루틴>프로젝트>버킷>기타 */
     const ft = tasks.filter(t => t.status !== "done" && onToday(t)).sort((a, b) => pk(a) - pk(b));
     const fs = [];
-    tasks.forEach(t => { (t.subtasks || []).forEach(s => { if (s.status !== "done" && s.planDate && s.planDate <= TODAY) fs.push({ sub: s, parent: t }); }); });
+    tasks.forEach(t => { (t.subtasks || []).forEach(s => { if (s.status !== "done" && s.status !== "someday" && s.planDate && s.planDate <= TODAY) fs.push({ sub: s, parent: t }); }); });
     return { focusedTasks: ft, focusedSubs: fs };
   }, [tasks, projects]);
   const totalFocused = focusedTasks.length + focusedSubs.length;
@@ -1612,6 +1615,7 @@ function App({ onSwitchWs }) {
      (로컬 저장은 계속 동작). */
   const [cloudLoaded, setCloudLoaded] = useState(false);
   const cloudLoadedRef = useRef(false);
+  const lastSavedAtRef = useRef(saved?.savedAt || ""); /* ★C2(2026-07-04): 저장/채택마다 갱신되는 '현재 savedAt' — 온라인 복귀 LWW 비교 기준(마운트 스냅샷 고정으로 오프라인 작업 유실 방지) */
   useEffect(() => {
     let cancelled = false;
     const tryLoad = () => cloudLoad().then(res => {
@@ -1623,8 +1627,8 @@ function App({ onSwitchWs }) {
         return;
       }
       const cloudData = res.data;
-      if (cloudData && cloudData.tasks && cloudData.tasks.length > 0 && cloudData.savedAt) {
-        const localSaved = saved?.savedAt || "";
+      if (cloudData && Array.isArray(cloudData.tasks) && cloudData.savedAt) { /* ★M3: tasks=[](전부 완료) 도 유효 — length>0 가드 제거 */
+        const localSaved = lastSavedAtRef.current || saved?.savedAt || ""; /* ★C2: 마운트 고정이 아니라 '현재까지 저장한' savedAt과 비교 → 오프라인 작업이 옛 클라우드에 안 짐 */
         /* 클라우드가 더 최신이면 reload 없이 메모리에서 직접 채택.
            (예전 reload 방식은 localStorage가 막힌 환경에서 무한 리로드 루프)
            saveToStorage는 여기서 호출하지 않는다 — 아래 자동저장 effect가 상태 변경을 감지해
@@ -1638,6 +1642,7 @@ function App({ onSwitchWs }) {
           setFiles(m.files || []);
           setHistory(m.history || []);
           setRecurrings(m.recurrings || []);
+          lastSavedAtRef.current = cloudData.savedAt; /* 채택했으니 기준도 클라우드 값으로 */
         }
       }
       cloudLoadedRef.current = true;
@@ -1660,7 +1665,7 @@ function App({ onSwitchWs }) {
   useEffect(() => {
     if (!cloudLoaded || rollFwdDone.current) return;
     rollFwdDone.current = true;
-    const isStaleP = (t) => t.status !== "done" && !t.recurringId && t.planDate && t.planDate < TODAY;
+    const isStaleP = (t) => t.status !== "done" && t.status !== "someday" && !t.recurringId && t.planDate && t.planDate < TODAY; /* ★M1: 나중에(백로그)는 이월 안 함 */
     const stale = tasks.filter(isStaleP);
     if (!stale.length) return;
     setTasks(p => p.map(t => isStaleP(t) ? { ...t, planDate: TODAY } : t));
@@ -1810,6 +1815,7 @@ function App({ onSwitchWs }) {
   useEffect(() => {
     if (firstSaveSkip.current) { firstSaveSkip.current = false; return; }
     const data = { tasks, projects, history, recurrings, memos, files, savedAt: new Date().toISOString() };
+    lastSavedAtRef.current = data.savedAt; /* ★C2: 저장한 savedAt을 기준으로 갱신 */
     saveToStorage(data);
     if (cloudLoadedRef.current) cloudSave(data);
   }, [tasks, projects, history, recurrings, memos, files]);
@@ -1906,14 +1912,13 @@ function App({ onSwitchWs }) {
   const addTask = ({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => {
     const proj = projects.find(p => p.id === project);
     const tid = gid();
-    const pd = planDate || TODAY;
+    const pd = status === "someday" ? (planDate || "") : (planDate || TODAY); /* ★M1: 나중에(백로그)는 날짜 강제 안 함(빈 값 허용) → 오늘·캘린더에서 빠짐 */
     const autoFocus = focus; /* 별=집중(날짜와 분리, 2026-06-30) — 오늘 표출은 수행날짜로 */
     const newTask = { id: tid, text, status, project, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: pd, createdAt: TODAY, notes: "", focus: autoFocus, subtasks: [], calEventId: "", calUpdated: 0 };
     setTasks(p => [...p, newTask]);
     addHistItem({ type: "added", text, projectName: proj?.name || "", project, time: nowTime() });
-    /* 캘린더 자동 동기화 */
-    const cp = calMakeParams(newTask, projects);
-    if (cp) calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(t => t.id === tid ? { ...t, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : t)); });
+    /* 캘린더 자동 동기화 — 나중에(someday)는 등록 안 함 */
+    if (status !== "someday") { const cp = calMakeParams(newTask, projects); if (cp) calSync("add", cp).then(r => { if (r?.eventId) setTasks(p => p.map(t => t.id === tid ? { ...t, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : t)); }); }
   };
 
   const toggleFocus = (id) => {
@@ -2120,32 +2125,21 @@ function App({ onSwitchWs }) {
     if (!r?.success || !Array.isArray(r.events)) { if (!silent) showT("캘린더 가져오기 실패", null); return; }
     const byId = {}; r.events.forEach(e => { if (e && e.id) byId[e.id] = e; });
     const pick = (o) => (o.scheduledDate && !o.planDate) ? "scheduledDate" : "planDate"; /* push의 planDate||scheduledDate 와 round-trip 일치 */
-    let changed = 0;
-    const merged = tasks.map(t => {
-      let nt = t;
-      const ev = t.calEventId && byId[t.calEventId];
-      if (ev && ev.start && ev.updated > (t.calUpdated || 0)) {
-        const f = pick(t); const parts = String(ev.start).split("T"); /* 타임드면 날짜T시간 분리(2026-07-01) */
-        const upd = { [f]: parts[0], calUpdated: ev.updated }; if (f === "planDate") upd.planTime = parts[1] || "";
-        nt = { ...nt, ...upd }; changed++;
-      }
-      if (nt.subtasks?.length) {
-        let sc = false;
-        const ns = nt.subtasks.map(s => {
-          const se = s.calEventId && byId[s.calEventId];
-          if (se && se.start && se.updated > (s.calUpdated || 0)) {
-            const f = pick(s); sc = true; changed++;
-            const parts = String(se.start).split("T");
-            const upd = { [f]: parts[0], calUpdated: se.updated }; if (f === "planDate") upd.planTime = parts[1] || "";
-            return { ...s, ...upd };
-          }
-          return s;
-        });
-        if (sc) nt = { ...nt, subtasks: ns };
-      }
-      return nt;
+    /* 이벤트→날짜 패치 계산(byId 기준·상태 무관). null이면 반영 없음 */
+    const patch = (o) => { const ev = o.calEventId && byId[o.calEventId]; if (!(ev && ev.start && ev.updated > (o.calUpdated || 0))) return null; const f = pick(o); const parts = String(ev.start).split("T"); const upd = { [f]: parts[0], calUpdated: ev.updated }; if (f === "planDate") upd.planTime = parts[1] || ""; return upd; };
+    let changed = 0; /* 토스트 표시용 근사(클로저 기준) */
+    tasks.forEach(t => { if (patch(t)) changed++; (t.subtasks || []).forEach(s => { if (patch(s)) changed++; }); });
+    /* ★C1 유실 방지(2026-07-04): merged 통짜 교체 폐지 → 함수형으로 '최신' prev에 날짜만 패치.
+       list 대기(15~19s) 중 생긴 루틴 생성·편집·완료/삭제를 소급 말소하지 않음. */
+    setTasks(prev => {
+      let any = false;
+      const next = prev.map(t => {
+        let nt = t; const p = patch(t); if (p) { nt = { ...nt, ...p }; any = true; }
+        if (nt.subtasks?.length) { let sc = false; const ns = nt.subtasks.map(s => { const sp = patch(s); if (sp) { sc = true; return { ...s, ...sp }; } return s; }); if (sc) { nt = { ...nt, subtasks: ns }; any = true; } }
+        return nt;
+      });
+      return any ? next : prev; /* 변경 없으면 동일 참조 반환 → 불필요 저장 방지 */
     });
-    if (changed) setTasks(merged);
     if (!silent) showT(changed ? `📅 캘린더에서 ${changed}건 반영됨` : "캘린더 변경 없음", null);
   };
 
@@ -2168,7 +2162,7 @@ function App({ onSwitchWs }) {
     if (calBusyRef.current) { if (!silent) showT("이미 동기화 중입니다", null); return; } /* 재진입 가드: 자동+수동 동시 add 방지 */
     const dated = [];
     tasks.forEach(t => {
-      if (t.recurringId || t.status === "done") return; /* 반복/루틴·완료 부모 제외(서브태스크도 함께) */
+      if (t.recurringId || t.status === "done" || t.status === "someday") return; /* 반복/루틴·완료·나중에(백로그) 제외(서브태스크도 함께) */
       if (t.planDate || t.scheduledDate) dated.push({ kind: "task", t });
       (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.planDate || s.scheduledDate)) dated.push({ kind: "sub", t, s }); });
     });
@@ -2185,8 +2179,8 @@ function App({ onSwitchWs }) {
       const lr = await calSync("list", { days: FWD, back: BACK });
       const listOk = !!(lr && lr.success && Array.isArray(lr.events));
       const norm = (s) => (s || "").replace(/\s+/g, " ").trim();
-      const idx = {}, keyIdx = {};
-      if (listOk) lr.events.forEach(ev => { const k = norm(ev.title) + "|" + (ev.start || "").slice(0, 10); (idx[k] = idx[k] || []).push(ev.id); if (ev.key) keyIdx[ev.key] = ev.id; });
+      const idx = {}, keyIdx = {}, evDate = {};
+      if (listOk) lr.events.forEach(ev => { const k = norm(ev.title) + "|" + (ev.start || "").slice(0, 10); (idx[k] = idx[k] || []).push(ev.id); if (ev.key) keyIdx[ev.key] = ev.id; evDate[ev.id] = (ev.start || "").slice(0, 10); });
       const claimed = new Set(); /* 이미 다른 task에 물린 eventId — 오연결 방지(동일 제목+날짜 충돌) */
       tasks.forEach(t => { if (t.calEventId) claimed.add(t.calEventId); (t.subtasks || []).forEach(s => { if (s.calEventId) claimed.add(s.calEventId); }); });
       const b = new Date(TODAY + "T00:00:00"), fmtD = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -2206,7 +2200,7 @@ function App({ onSwitchWs }) {
         const cd = (cp.date || "").slice(0, 10);
         if (listOk) { /* 목록 성공 → 재연결로 중복 차단(멱등키 우선 → 제목+날짜) */
           const myKey = it.kind === "task" ? it.t.id : it.s.id;
-          if (keyIdx[myKey] && !claimed.has(keyIdx[myKey])) { setEid(it, keyIdx[myKey], Date.now()); claimed.add(keyIdx[myKey]); relinked++; continue; }
+          if (keyIdx[myKey] && !claimed.has(keyIdx[myKey])) { const eid2 = keyIdx[myKey]; claimed.add(eid2); if (evDate[eid2] === cd) { setEid(it, eid2, Date.now()); relinked++; } else { toSync.push({ it, cp, eid: eid2 }); } continue; } /* ★M6: 이벤트 날짜가 task와 다르면(이월 등) update로 옮김, 같으면 재연결만 */
           const free = (idx[norm(cp.title) + "|" + cd] || []).filter(id => !claimed.has(id));
           if (free.length === 1) { setEid(it, free[0], Date.now()); claimed.add(free[0]); relinked++; continue; }
           if ((idx[norm(cp.title) + "|" + cd] || []).length) { deferred++; continue; } /* 이미 존재(claimed/모호) → 중복 방지 보류 */
@@ -2233,17 +2227,17 @@ function App({ onSwitchWs }) {
   useEffect(() => {
     if (!cloudLoaded || calAutoDone.current) return;
     calAutoDone.current = true;
-    const hasUnsynced = tasks.some(t => !t.recurringId && t.status !== "done" && (
-      ((t.planDate || t.scheduledDate) && !t.calEventId) ||
-      (t.subtasks || []).some(s => s.status !== "done" && (s.planDate || s.scheduledDate) && !s.calEventId)));
+    const hasUnsynced = tasks.some(t => !t.recurringId && t.status !== "done" && t.status !== "someday" && (
+      (!t.calEventId && inCalWin(t)) ||
+      (t.subtasks || []).some(s => s.status !== "done" && s.status !== "someday" && !s.calEventId && inCalWin(s))));
     if (hasUnsynced) calSyncAll({ silent: true });
   }, [cloudLoaded]); /* eslint-disable-line */
 
   const allFocused = useMemo(() => {
     let c = 0;
     tasks.forEach(t => {
-      if (t.status !== "done" && (t.focus || t.planDate === TODAY) && !isStaleRoutine(t)) c++;
-      (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.focus || s.planDate === TODAY)) c++; });
+      if (t.status !== "done" && t.focus) c++; /* ★minor: ⭐=집중(focus)만 — planDate==오늘(루틴 4개 등) 오염 제거 */
+      (t.subtasks || []).forEach(s => { if (s.status !== "done" && s.focus) c++; });
     });
     return c;
   }, [tasks]);
@@ -2252,9 +2246,9 @@ function App({ onSwitchWs }) {
   const unsyncedCnt = useMemo(() => {
     let c = 0;
     tasks.forEach(t => {
-      if (t.recurringId || t.status === "done") return; /* calSyncAll target과 동일 기준 유지 */
-      if ((t.planDate || t.scheduledDate) && !t.calEventId) c++;
-      (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.planDate || s.scheduledDate) && !s.calEventId) c++; });
+      if (t.recurringId || t.status === "done" || t.status === "someday") return; /* calSyncAll target과 동일: 반복·완료·나중에 제외 */
+      if (!t.calEventId && inCalWin(t)) c++; /* ★minor: 동기 창 밖(해소 불가)은 배지서 제외 */
+      (t.subtasks || []).forEach(s => { if (s.status !== "done" && s.status !== "someday" && !s.calEventId && inCalWin(s)) c++; });
     });
     return c;
   }, [tasks]);
