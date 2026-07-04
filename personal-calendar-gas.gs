@@ -31,12 +31,21 @@ function doGet(e) {
   var cal = CalendarApp.getDefaultCalendar();
 
   function respond(obj) {
-    if (callback) {
+    // ★XSS(2026-07-04): callback 은 JSONP 함수명 화이트리스트만 허용(반사형 XSS·콜백 주입 차단). 불일치면 순수 JSON.
+    if (callback && /^[A-Za-z0-9_$.]{1,64}$/.test(callback)) {
       return ContentService.createTextOutput(callback + "(" + JSON.stringify(obj) + ")")
         .setMimeType(ContentService.MimeType.JAVASCRIPT);
     }
     return ContentService.createTextOutput(JSON.stringify(obj))
       .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // ★C3 토큰 게이트(2026-07-04, opt-in): 스크립트 속성 TMTOKEN 이 설정돼 있으면 token 파라미터 일치 필수.
+  //   미설정이면 기존대로 통과(하위호환) → 사용자가 TMTOKEN 설정+클라 배선 후 익명 접근 차단됨.
+  var TMTOKEN = "";
+  try { TMTOKEN = PropertiesService.getScriptProperties().getProperty("TMTOKEN") || ""; } catch (te) {}
+  if (TMTOKEN && String(e.parameter.token || "") !== TMTOKEN) {
+    return respond({ success: false, error: "unauthorized" });
   }
 
   // time=HH:MM 있으면 타임드, 없으면 종일

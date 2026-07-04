@@ -135,6 +135,15 @@ const authParam = async () => {
   try { const u = fbUser(); if (u) return "?auth=" + await u.getIdToken(); } catch {}
   return "";
 };
+/* ★C3(2026-07-04): GAS 토큰을 RTDB /calToken(소유자 uid로 잠긴 경로)에서 읽어와 calSync에 첨부.
+   미설정이면 빈 값 → GAS도 opt-in이라 기존대로 동작. 설정 후엔 owner만 토큰을 얻어 GAS 호출 가능(익명 차단). */
+let _calToken = "";
+const loadCalToken = async () => {
+  try { const u = fbUser(); if (!u) return; const at = "?auth=" + await u.getIdToken();
+    const res = await fetch("https://taskmgr-sync-default-rtdb.firebaseio.com/calToken.json" + at);
+    if (res.ok) { const t = await res.json(); if (typeof t === "string" && t) _calToken = t; }
+  } catch {}
+};
 
 /* 클라우드 저장: Firebase PUT (1회 요청, 2초 디바운스) */
 let _saveTimer = null;
@@ -233,7 +242,7 @@ const calSync = (action, params) => new Promise((resolve) => {
   const cb = "_gcal_" + gid();
   const timer = setTimeout(() => { delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); }, 45000); /* GAS가 느림(실측 update~29s·list~15-19s) → 45s로(2026-07-03). 20s는 update가 타임아웃돼 '보류' 다발이었음 */
   window[cb] = (r) => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve(r || { success: false }); };
-  const qs = new URLSearchParams({ ...params, action, callback: cb });
+  const qs = new URLSearchParams({ ...params, action, callback: cb, ...(_calToken ? { token: _calToken } : {}) });
   const s = document.createElement("script");
   s.src = `${GCAL_URL}?${qs}`;
   s.onerror = () => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); };
@@ -1669,6 +1678,7 @@ function App({ onSwitchWs }) {
       setCloudLoaded(true);
       if (el && el.textContent.indexOf("연결실패") >= 0) { el.textContent = "☁️"; el.style.color = "#9ca3af"; }
     });
+    loadCalToken(); /* ★C3: GAS 토큰 프리로드(설정 전엔 no-op) */
     tryLoad();
     /* 일시적 글리치로 차단된 세션은 온라인 복귀 시 자동 재시도 */
     const onOnline = () => { if (!cloudLoadedRef.current) tryLoad(); };
