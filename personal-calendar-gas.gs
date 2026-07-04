@@ -21,6 +21,10 @@
  *    add 는 같은 key 이벤트가 이미 있으면 새로 만들지 않고 기존 것을 반환(제목/설명만 갱신) → JSONP 응답 유실이나
  *    task 이름 변경에도 캘린더 중복이 절대 안 생긴다. 클라이언트는 list 의 key 로 재연결(제목 무관).
  *
+ * ★ 타임존(2026-07-05): list 응답에 tz=Session.getScriptTimeZone() 추가. 스크립트 타임존은 반드시 Asia/Seoul
+ *    (프로젝트 설정 > 시간대). date 파라미터는 스크립트 tz로 파싱되고 list는 Asia/Seoul로 포맷하므로 다르면 시프트.
+ *    2026-07-05 실증: 타임드 이벤트(18:00/19:30/20:30) task↔캘린더 왕복 정확 일치 = 현재 Seoul 맞음.
+ *
  * ★ 보안 C3(2026-07-04): (1) 스크립트 속성 TMTOKEN 설정 시 token 파라미터 일치 필수(익명 호출 차단, opt-in).
  *    (2) callback(JSONP 함수명) 화이트리스트 검증(반사형 XSS 차단). TMTOKEN 미설정이면 기존대로 통과(하위호환).
  *    설정 절차 = repo SECURITY_SETUP.md (RTDB 규칙 소유자 잠금 + /calToken + TMTOKEN).
@@ -161,7 +165,10 @@ function doGet(e) {
           updated: ev.getLastUpdated().getTime()
         };
       });
-      return respond({ success: true, events: events, v: "260704" }); /* ★버전 마커(2026-07-04): repo .gs와 대조해 재배포 드리프트 감지용 */
+      /* ★tz(2026-07-05): 스크립트 타임존 노출 — Asia/Seoul 아니면 date 파싱(new Date("…T00:00:00")=스크립트 tz)이
+         list 포맷(Asia/Seoul 고정)과 어긋나 날짜/시간 시프트. 2026-07-05 read-only 실증으로 타임드 이벤트 왕복
+         정확 일치 = 현재 스크립트 tz는 Seoul 확인됨. 이 필드는 이후 드리프트 감시용. */
+      return respond({ success: true, events: events, v: "260705", tz: Session.getScriptTimeZone() }); /* ★버전 마커: repo .gs와 대조해 재배포 드리프트 감지용 */
     }
 
     return respond({ success: false, error: "unknown action: " + action });

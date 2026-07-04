@@ -26,7 +26,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm init -y && npm install @babel/core @babel/preset-react
+      # ⚠ 버전 고정(2026-07-05): babel 8 정식 릴리스 확인(8.0.1) — 비고정 install은 다음 빌드부터 8을 받아
+      #   6/17 CDN 백지사고와 같은 클래스(major 자동승급, require/preset 호환 미보장).
+      #   직접 의존성 exact 고정 → 전이 의존성도 전부 ^7 범위라 8이 못 들어옴. (로컬 npm 부재로 lockfile 대신
+      #   exact pin + build.js 스모크 게이트 2중 방어.) 승급은 의도적으로만 — 이 줄의 버전을 직접 올릴 것.
+      - run: npm init -y && npm install @babel/core@7.29.7 @babel/preset-react@7.29.7
       - run: node build.js
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
