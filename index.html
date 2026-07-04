@@ -343,6 +343,10 @@ const PERSONAL_ROUTINES = [
   { id: "rt_english", type: "daily", text: "🇬🇧 영어", project: "rt_english" },
   { id: "rt_vocal",   type: "daily", text: "🎤 보컬", project: "rt_vocal" },
   { id: "rt_writing", type: "daily", text: "✍️ 글쓰기", project: "rt_writing" },
+  /* 캘린더 고정 수업 → task-mgr 소유 루틴(2026-07-04): 기존 네이티브 캘린더 이벤트는 사용자가 삭제, 이후 task-mgr가 tmk 멱등키로 재등록(중복 0).
+     링글 1:1 = 월요일, 노래(보컬) 레슨 = 목요일. time 있으면 타임드 이벤트로 push(운동/보컬 루틴과 동일 경로). */
+  { id: "rt_ringle_mon",   type: "weekly", dow: 1, time: "23:00", text: "🇬🇧 링글 1:1 수업", project: "rt_english" },
+  { id: "rt_vocal_lesson", type: "weekly", dow: 4, time: "17:00", text: "🎤 노래 레슨",       project: "rt_vocal" },
 ];
 
 /* ─── localStorage (이중 백업, 워크스페이스별 키) ─── */
