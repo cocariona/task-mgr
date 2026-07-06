@@ -270,7 +270,7 @@ const calSync = (action, params) => new Promise((resolve) => {
    미래에 미리 얹은 placeholder 이벤트와, 그날이 와서 생성되는 당일 인스턴스가 같은 키를 공유해
    GAS findByKey가 재연결(중복 0). 일반 task는 기존대로 고유 id. */
 const calKey = (t) => (t && t.recurringId && t.recurringPeriod) ? (t.recurringId + "@" + t.recurringPeriod) : ((t && t.id) || "");
-const calMakeParams = (task, projects) => {
+const calMakeParams = (task, projects, prefix) => {
   const date = task.planDate || task.scheduledDate;
   if (!date) return null;
   const proj = projects?.find(p => p.id === task.project);
@@ -278,7 +278,7 @@ const calMakeParams = (task, projects) => {
   const base = [proj ? `#${proj.name}` : '', cleanNotes].filter(Boolean).join('\n');
   /* 실행 방법(protocol, 고정 참고) 맨 위 + 아래 '─ 오늘 ─' 노트(2026-07-01). 없으면 기존과 동일. */
   const desc = task.protocol ? (task.protocol + (base ? '\n\n─ 오늘 ─\n' + base : '')) : base;
-  const p = { title: WS.calPrefix + task.text, date, desc };
+  const p = { title: (prefix != null ? prefix : WS.calPrefix) + task.text, date, desc }; /* ★prefix 인자(2026-07-07): 미래 lay 등 async 경로가 워크스페이스 스냅샷(wsSnap.calPrefix)을 넘겨 라이브 WS 전환 오염 차단. 미전달 시 기존대로 현재 WS */
   if (task.planTime) p.time = task.planTime; /* HH:MM 있으면 타임드 이벤트(GAS가 처리, 구버전 GAS는 무시=종일)(2026-07-01) */
   const k = calKey(task); if (k) p.key = k; /* 멱등키(2026-07-03·회차키 2026-07-06): GAS add가 같은 key 이벤트 있으면 새로 안 만들고 반환 → 응답유실·이름변경·미래 placeholder 재연결에도 중복 0. 구버전 GAS는 무시. */
   return p;
@@ -1970,7 +1970,7 @@ function App({ onSwitchWs }) {
       const ridOk = {}; /* rid → 전부 성공 시에만 futureThrough 전진(부분 실패는 다음 로드 재시도, 회차키라 중복 안 남) */
       for (let i = 0; i < jobs.length; i += CAP) {
         await Promise.all(jobs.slice(i, i + CAP).map(async ({ r, occ }) => {
-          const cp = calMakeParams({ id: "", recurringId: r.id, recurringPeriod: occ.period, text: r.text, project: r.project, planDate: occ.date, planTime: r.time || "", protocol: r.protocol || "", notes: "" }, projects);
+          const cp = calMakeParams({ id: "", recurringId: r.id, recurringPeriod: occ.period, text: r.text, project: r.project, planDate: occ.date, planTime: r.time || "", protocol: r.protocol || "", notes: "" }, projects, wsSnap.calPrefix); /* ★prefix 스냅샷(2026-07-07): async 배치 루프 중 워크스페이스 전환돼도 접두사 오염 안 됨(개인 루틴이 "0. 업무 /"로 찍히던 회귀 수정). calMakeParams가 라이브 WS.calPrefix를 읽던 게 원인 */
           if (!cp) return;
           const res = await calSync("add", cp);
           if (!(res && res.eventId)) ridOk[r.id] = false;
