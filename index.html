@@ -266,6 +266,10 @@ const calSync = (action, params) => new Promise((resolve) => {
   s.onerror = () => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); };
   document.body.appendChild(s);
 });
+/* 멱등키(2026-07-06 미래 롤링): 반복 인스턴스는 회차별 '안정 키'(recurringId@period)를 쓴다 —
+   미래에 미리 얹은 placeholder 이벤트와, 그날이 와서 생성되는 당일 인스턴스가 같은 키를 공유해
+   GAS findByKey가 재연결(중복 0). 일반 task는 기존대로 고유 id. */
+const calKey = (t) => (t && t.recurringId && t.recurringPeriod) ? (t.recurringId + "@" + t.recurringPeriod) : ((t && t.id) || "");
 const calMakeParams = (task, projects) => {
   const date = task.planDate || task.scheduledDate;
   if (!date) return null;
@@ -276,7 +280,7 @@ const calMakeParams = (task, projects) => {
   const desc = task.protocol ? (task.protocol + (base ? '\n\n─ 오늘 ─\n' + base : '')) : base;
   const p = { title: WS.calPrefix + task.text, date, desc };
   if (task.planTime) p.time = task.planTime; /* HH:MM 있으면 타임드 이벤트(GAS가 처리, 구버전 GAS는 무시=종일)(2026-07-01) */
-  if (task.id) p.key = task.id; /* 멱등키(2026-07-03): GAS add가 같은 key 이벤트 있으면 새로 안 만들고 반환 → 응답유실·이름변경에도 중복 0. 구버전 GAS는 무시. */
+  const k = calKey(task); if (k) p.key = k; /* 멱등키(2026-07-03·회차키 2026-07-06): GAS add가 같은 key 이벤트 있으면 새로 안 만들고 반환 → 응답유실·이름변경·미래 placeholder 재연결에도 중복 0. 구버전 GAS는 무시. */
   return p;
 };
 /* 서브태스크 캘린더 객체 — 제목=서브 task(sub.text) 기준, 메모 맨 앞에 부모 task명(↳ 부모명) */
@@ -294,7 +298,7 @@ const addToCalendar = (task, projects, onResult) => {
 /* ─── 반복 태스크 ─── */
 const DAYS_KO = ["일", "월", "화", "수", "목", "금", "토"];
 const getTodayDow = () => new Date().getDay(); /* 0=일 ~ 6=토 */
-const getWeekId = () => { const d = new Date(); const jan1 = new Date(d.getFullYear(),0,1); return `${d.getFullYear()}-W${Math.ceil(((d-jan1)/86400000+jan1.getDay()+1)/7)}`; };
+const getWeekId = () => { const d = new Date(); d.setHours(0,0,0,0); const jan1 = new Date(d.getFullYear(),0,1); return `${d.getFullYear()}-W${Math.ceil(((d-jan1)/86400000+jan1.getDay()+1)/7)}`; }; /* ★자정 정규화(2026-07-06): 시각 의존 weekId 경계 흔들림 제거 → 당일 인스턴스 period가 미래 placeholder(자정 계산 weekIdOf)와 항상 일치(주간 중복 방지) */
 const getMonthId = () => { const d = new Date(); return `${d.getFullYear()}-M${d.getMonth()+1}`; };
 const generateRecurringTasks = (recurrings, tasks, projects, history) => {
   const dow = getTodayDow();
@@ -342,6 +346,45 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
     });
   });
   return newTasks;
+};
+
+/* ─── 미래 반복 회차 계산(2026-07-06 롤링 4주): 캘린더에 미리 얹을 occurrence 목록.
+   반복 규칙(RRULE)을 안 쓰고 앱이 날짜를 직접 계산하므로 '매월 말일'·dom 클램프도 그대로 처리된다.
+   generateRecurringTasks의 period 규칙과 동일하게 맞춰, 그날이 오면 당일 인스턴스가 같은 회차키로 재연결된다. */
+const FUTURE_WINDOW_DAYS = 28;
+const dateStrOf = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+const weekIdOf = (d) => { const jan1 = new Date(d.getFullYear(),0,1); return `${d.getFullYear()}-W${Math.ceil(((d-jan1)/86400000+jan1.getDay()+1)/7)}`; };
+const monthIdOf = (d) => `${d.getFullYear()}-M${d.getMonth()+1}`;
+/* afterStr(제외) < 날짜 <= endDate 범위의 회차 [{date, period}] 반환 (오늘은 generateRecurringTasks 담당이라 제외) */
+const recurOccurrences = (r, afterStr, endDate) => {
+  const out = [];
+  const type = r.type || "weekly";
+  const days = r.dows || (r.dow != null ? [r.dow] : []);
+  const start = new Date((afterStr || dateStrOf(new Date())) + "T00:00:00");
+  const d = new Date(start); d.setDate(d.getDate() + 1); /* afterStr 다음날부터 */
+  while (d <= endDate) {
+    const ds = dateStrOf(d);
+    if (type === "daily") out.push({ date: ds, period: ds });
+    else if (type === "weekly") { if (days.includes(d.getDay())) out.push({ date: ds, period: days.length > 1 ? weekIdOf(d) + "-" + d.getDay() : weekIdOf(d) }); }
+    else if (type === "monthly") {
+      const lastDom = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+      const hit = r.lastDay ? (d.getDate() === lastDom) : (d.getDate() === Math.min(r.dom || 1, lastDom)); /* 말일·dom 클램프 = generateRecurringTasks와 동일 */
+      if (hit) out.push({ date: ds, period: monthIdOf(d) });
+    }
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+};
+/* 반복 편집·삭제·비활성 시 이미 얹은 '미래(오늘 이후) placeholder 이벤트' 제거(2026-07-06): key가 rid@로 시작하는 것만.
+   당일 이벤트(당일 인스턴스의 실이벤트, start≤오늘)는 건드리지 않음. 호출측이 futureThrough를 리셋해 다음 로드에 현재 정의로 재-lay. */
+const deleteFuturePlaceholders = async (rid) => {
+  try {
+    await loadCalToken();
+    const lr = await calSync("list", { days: FUTURE_WINDOW_DAYS + 7, back: 1 });
+    if (!(lr && Array.isArray(lr.events))) return;
+    const stale = lr.events.filter(ev => ev.key && ev.key.indexOf(rid + "@") === 0 && (ev.start || "").slice(0, 10) > TODAY);
+    for (let i = 0; i < stale.length; i += 5) await Promise.all(stale.slice(i, i + 5).map(ev => calSync("delete", { eventId: ev.id })));
+  } catch {}
 };
 
 /* ─── 워크스페이스 (업무 ⇄ 개인 — 데이터·캘린더 prefix 완전 분리) ─── */
@@ -1354,7 +1397,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
     setNt(""); setNdows([]); setDom(1); setLastDay(false); setRTime(""); setRProto("");
   };
   /* ★M5: 시드 루틴은 제거 대신 disabled 표식(재시드 부활 방지). 사용자 생성 반복은 완전 제거. */
-  const delR = (id) => setRecurrings(p => SEED_ROUTINE_IDS.has(id) ? p.map(r => r.id === id ? { ...r, disabled: true } : r) : p.filter(r => r.id !== id));
+  const delR = (id) => { deleteFuturePlaceholders(id); setRecurrings(p => SEED_ROUTINE_IDS.has(id) ? p.map(r => r.id === id ? { ...r, disabled: true, futureThrough: "" } : r) : p.filter(r => r.id !== id)); }; /* 삭제/비활성 시 미래 placeholder 고아 제거(2026-07-06) */
   return (
     <div style={{ marginTop: 16 }}>
       <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setShow(!show)}>
@@ -1900,6 +1943,45 @@ function App({ onSwitchWs }) {
     }
   }, [cloudLoaded, recurrings, tasks, projects]); /* eslint-disable-line */
 
+  /* ★미래 반복 이벤트 미리 얹기(2026-07-06 롤링 4주, 소유자 지시): 위 recurDone은 '오늘 인스턴스'만 task로 만들고,
+     여기서는 (오늘, +28일] 각 회차의 '캘린더 이벤트만' 미리 push한다 — blob에 미래 task는 안 만들어 앱 화면(오늘탭·유형별)은
+     안 길어지고 carry-forward·측정도 무변경. 회차키(recurringId@period)라 그날이 와서 당일 인스턴스가 생기면 그 이벤트에
+     재연결(중복 0). 이미 만든 구간은 recurring.futureThrough로 추적해 매 로드 전량 재push를 피한다(롤링=먼 가장자리만 추가).
+     GAS 무변경(기존 tmk findByKey 재사용). 반복규칙(RRULE) 미사용이라 '매월 말일'도 앱 계산으로 정확히 얹힌다. */
+  const futureEvtDone = useRef(false);
+  useEffect(() => {
+    if (!cloudLoaded || futureEvtDone.current) return;
+    futureEvtDone.current = true;
+    const wsSnap = WS; /* ★E1 대칭(2026-07-06): 아래 async push 중 워크스페이스 전환되면 새 prefix 오염 방지 */
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const todayStr = dateStrOf(today);
+    const end = new Date(today); end.setDate(end.getDate() + FUTURE_WINDOW_DAYS);
+    const endStr = dateStrOf(end);
+    const jobs = [];
+    recurrings.forEach(r => {
+      if (r.disabled) return;
+      const fromStr = (r.futureThrough && r.futureThrough > todayStr) ? r.futureThrough : todayStr; /* 이미 얹은 구간 이후만(과거로 안 감) */
+      recurOccurrences(r, fromStr, end).forEach(occ => jobs.push({ r, occ }));
+    });
+    if (!jobs.length) return;
+    loadCalToken().then(async () => {
+      if (WS !== wsSnap) return; /* ★E1 대칭: 토큰 대기 중 워크스페이스 전환됨 → 미래 push 중단(오염 방지) */
+      const CAP = 5;
+      const ridOk = {}; /* rid → 전부 성공 시에만 futureThrough 전진(부분 실패는 다음 로드 재시도, 회차키라 중복 안 남) */
+      for (let i = 0; i < jobs.length; i += CAP) {
+        await Promise.all(jobs.slice(i, i + CAP).map(async ({ r, occ }) => {
+          const cp = calMakeParams({ id: "", recurringId: r.id, recurringPeriod: occ.period, text: r.text, project: r.project, planDate: occ.date, planTime: r.time || "", protocol: r.protocol || "", notes: "" }, projects);
+          if (!cp) return;
+          const res = await calSync("add", cp);
+          if (!(res && res.eventId)) ridOk[r.id] = false;
+          else if (ridOk[r.id] === undefined) ridOk[r.id] = true;
+        }));
+      }
+      const advance = Object.keys(ridOk).filter(rid => ridOk[rid] === true);
+      if (advance.length) setRecurrings(prev => prev.map(r => advance.includes(r.id) ? { ...r, futureThrough: endStr } : r));
+    });
+  }, [cloudLoaded]); /* eslint-disable-line */
+
   /* 자동 저장 — ⚠️ 두 가지 유실 방지 장치:
      ① 마운트 1회차 skip: 편집 없이 열람만 한 세션이 savedAt을 재도장하면, stale 로컬이
         다음 세션의 화해 비교를 이겨 클라우드를 덮는다(2026-06-10 사고와 동일 클래스).
@@ -1976,7 +2058,8 @@ function App({ onSwitchWs }) {
   const updateTaskRecaps = (id, recaps) => setTasks(p => p.map(t => t.id === id ? { ...t, recaps, recap: joinRecaps(recaps) } : t));
   /* 반복 정의 수정(실행방법·시간) + 진행중 인스턴스에 전파 + 연결된 캘린더 이벤트 갱신(2026-07-01) */
   const updateRecurring = (id, patch) => {
-    setRecurrings(p => p.map(r => r.id === id ? { ...r, ...patch } : r));
+    setRecurrings(p => p.map(r => r.id === id ? { ...r, ...patch, futureThrough: "" } : r));
+    deleteFuturePlaceholders(id); /* ★편집 반영(2026-07-06): 미래 placeholder 삭제+futureThrough 리셋 → 다음 로드에 새 정의(스케줄·시간·제목·과제)로 재-lay(스케줄 변경도 반영·시간편집 stale 제거) */
     /* 인스턴스+캘린더 전파 키(text/project/time/protocol). dows·type은 정의만 바꾸고 미래 생성에 반영 */
     if (!["protocol", "time", "text", "project"].some(k => k in patch)) return;
     const merge = (t) => ({ ...t,
@@ -2315,7 +2398,7 @@ function App({ onSwitchWs }) {
           if (!listOk) { deferred++; continue; } /* 목록 없인 판정 불가 → 보류(블라인드 update 금지) */
           const o = it.kind === "task" ? it.t : it.s;
           /* 이벤트 재발견: 원 eid가 목록에 있으면 그것, 없으면 멱등키(=task.id)로(과거 recreate로 id 드리프트된 경우) */
-          const realId = (evStart[eid] !== undefined) ? eid : (keyIdx[o.id] || "");
+          const realId = (evStart[eid] !== undefined) ? eid : (keyIdx[calKey(o)] || ""); /* 반복은 회차키(recurringId@period)로 재발견 */
           if (!realId) {
             /* ★목록(창) 안에 없음 = 삭제 or 창밖 이동 — 판별 불가. 자동(silent)은 손대지 않고 카운트만
                (사용자의 캘린더 이동을 앱 옛 날짜로 yank-back하던 결함 차단·창내 이동은 calPull이 역동기).
@@ -2341,7 +2424,7 @@ function App({ onSwitchWs }) {
         }
         const cd = (cp.date || "").slice(0, 10);
         if (listOk) { /* 목록 성공 → 재연결로 중복 차단(멱등키 우선 → 제목+날짜) */
-          const myKey = it.kind === "task" ? it.t.id : it.s.id;
+          const myKey = calKey(it.kind === "task" ? it.t : it.s); /* 반복은 회차키(recurringId@period) — 미래 placeholder 이벤트에 재연결 */
           if (keyIdx[myKey] && !claimed.has(keyIdx[myKey])) { const eid2 = keyIdx[myKey]; claimed.add(eid2); if (evDate[eid2] === cd) { setEid(it, eid2, Date.now()); relinked++; } else { toSync.push({ it, cp, eid: eid2 }); } continue; } /* ★M6: 이벤트 날짜가 task와 다르면(이월 등) update로 옮김, 같으면 재연결만 */
           const free = (idx[norm(cp.title) + "|" + cd] || []).filter(id => !claimed.has(id));
           if (free.length === 1) { setEid(it, free[0], Date.now()); claimed.add(free[0]); relinked++; continue; }
