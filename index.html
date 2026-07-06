@@ -2056,7 +2056,7 @@ function App({ onSwitchWs }) {
     setTasks(p => p.map(x => x.id === id ? updated : x));
     const proj = projects.find(p => p.id === t.project);
     addHistItem({ type: "edited", text: t.text, projectName: proj?.name || "", detail: newDate ? `📆 ${newDate}로 변경` : "📆 오늘에서 내림(날짜 없앰)", time: nowTime() });
-    if (!t.recurringId && t.calEventId) {
+    if (t.calEventId) { /* ★반복 포함(2026-07-06): 반복도 calEventId를 가지므로 날짜 변경/제거 시 캘린더 이벤트 update/delete까지 대칭 처리(옛 !t.recurringId 제외는 고아 이벤트 유발) */
       const cp = calMakeParams(updated, projects);
       if (cp) calSync("update", { ...cp, eventId: t.calEventId }).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === id ? { ...x, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : x)); });
       else { calSync("delete", { eventId: t.calEventId }); setTasks(p => p.map(x => x.id === id ? { ...x, calEventId: "", calUpdated: 0 } : x)); }
@@ -2278,7 +2278,7 @@ function App({ onSwitchWs }) {
     const wsSnap = WS; /* ★E1(2026-07-05): 워크스페이스 스냅샷 — list 대기(15~19s) 중 전환되면 새 calPrefix로 push해 제목 오염되던 것 방지(아래 list 후 대조) */
     const targets = [];
     tasks.forEach(t => {
-      if (t.recurringId || t.status === "done") return; /* 반복/루틴·완료 제외(서브태스크도 함께) */
+      if (t.status === "done") return; /* 완료만 제외. ★반복/루틴도 포함(2026-07-06): 생성 시 push가 실패하면(GAS 타임아웃·RTDB잠금 등) 로드 때 자가복구 — 멱등키(tmk)가 중복 방지, 일반 task와 동일 경로. 날짜 없는 반복은 calMakeParams가 null이라 자연 제외. */
       if (t.planDate || t.scheduledDate) targets.push({ kind: "task", t });
       (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.planDate || s.scheduledDate)) targets.push({ kind: "sub", t, s }); });
     });
@@ -2372,7 +2372,7 @@ function App({ onSwitchWs }) {
   useEffect(() => {
     if (!cloudLoaded || calAutoDone.current) return;
     calAutoDone.current = true;
-    const hasDated = tasks.some(t => !t.recurringId && t.status !== "done" && (
+    const hasDated = tasks.some(t => t.status !== "done" && ( /* 반복 포함(2026-07-06): 반복만 있는 워크스페이스도 로드 자가복구 트리거 */
       (t.planDate || t.scheduledDate) ||
       (t.subtasks || []).some(s => s.status !== "done" && (s.planDate || s.scheduledDate))));
     /* ★C3 레이스 방지(2026-07-04): 토큰 게이트(TMTOKEN) 사용 시, 자동복구가 토큰 로드보다 먼저 돌면 unauthorized로 막힘
@@ -2393,7 +2393,7 @@ function App({ onSwitchWs }) {
   const unsyncedCnt = useMemo(() => {
     let c = 0;
     tasks.forEach(t => {
-      if (t.recurringId || t.status === "done") return; /* calSyncAll target과 동일: 반복·완료 제외 */
+      if (t.status === "done") return; /* calSyncAll target과 동일: 완료만 제외(★반복 포함 2026-07-06 — 미동기 반복도 배지로 가시화) */
       if ((t.planDate || t.scheduledDate) && !t.calEventId) c++; /* 날짜 있는데 미연동 (범위 제한 없음 — 멱등키가 어떤 날짜든 처리) */
       (t.subtasks || []).forEach(s => { if (s.status !== "done" && (s.planDate || s.scheduledDate) && !s.calEventId) c++; });
     });
@@ -2405,7 +2405,7 @@ function App({ onSwitchWs }) {
     if (!calMissingIds.length) return 0;
     const live = new Set();
     tasks.forEach(t => {
-      if (t.recurringId || t.status === "done") return;
+      if (t.status === "done") return; /* 완료만 제외(★반복 포함 2026-07-06 — calSyncAll·배지와 동일 스코프) */
       if (t.calEventId && (t.planDate || t.scheduledDate)) live.add(t.id);
       (t.subtasks || []).forEach(s => { if (s.calEventId && s.status !== "done" && (s.planDate || s.scheduledDate)) live.add(s.id); });
     });
