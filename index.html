@@ -831,7 +831,7 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
             <div style={S.lbl}>마감일 (선택)</div>
             <div className="plan-fields" style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <input type="date" style={{ ...S.fld, width: 160, flex: "none" }} value={f.scheduledDate || ""} onChange={e => u("scheduledDate", e.target.value)} />
-              <input style={{ ...S.fld, flex: 1 }} placeholder="메모 (예: 5월 2주, 하반기...)" value={f.scheduledLabel || ""} onChange={e => u("scheduledLabel", e.target.value)} />
+              <input style={{ ...S.fld, flex: 1 }} placeholder="시기 (예: 하반기, 9월 이후)" value={f.scheduledLabel || ""} onChange={e => u("scheduledLabel", e.target.value)} />
               {f.scheduledDate && (() => { const dl = deadlineInfo(f.scheduledDate); return dl ? <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span> : null; })()}
               {f.scheduledDate && <button style={{ ...S.gh, fontSize: 10, color: "#EF4444" }} onClick={() => { u("scheduledDate", ""); u("scheduledLabel", ""); }}>✕</button>}
             </div>
