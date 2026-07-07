@@ -1440,6 +1440,63 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
 };
 
 /* 지난 루틴 소급 체크 — 루틴 × 지난 N일 그리드. 칸 클릭 = 그날 완료 체크/해제(2026-07-01) */
+/* ─── 주N회 루틴(2026-07-07): 지정 요일이 유동적인 루틴(예: 보컬 월·수·토)을 '이번 주 N회 목표'로 추적.
+   목표=freqPerWeek 우선, 없으면 지정 요일 수(dows.length). 완료수=이번 주 done 회차(옮긴 날·➕추가 세션 포함).
+   현재 구조 유지: 요일별 예정 인스턴스·캘린더는 그대로, 위에 '주 N회' 카운트 층만 얹음. ─── */
+const routineWeekTarget = (r) => { if ((r.type || "weekly") !== "weekly") return 0; const d = r.dows || (r.dow != null ? [r.dow] : []); return r.freqPerWeek || d.length; };
+const routineDoneSet = (tasks, history) => { const s = new Set();
+  (tasks || []).forEach(t => { if (t.recurringId && t.status === "done") s.add(t.recurringId + "|" + (t.recurringPeriod || t.planDate)); });
+  (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && it.orig && it.orig.recurringId) s.add(it.orig.recurringId + "|" + (it.orig.recurringPeriod || day.date)); }));
+  return s; };
+const weekDoneCount = (doneSet, rid, wk) => { let n = 0; doneSet.forEach(k => { const i = k.indexOf("|"); const id = k.slice(0, i), per = k.slice(i + 1); if (id === rid && (per === wk || per.indexOf(wk + "-") === 0)) n++; }); return n; };
+/* 오늘 탭 상단 — 주N회 루틴(목표>=2)만 '이번 주 N/목표' + ➕(예정 외 추가 세션) */
+const WeeklyRoutineStrip = ({ recurrings, tasks, history, onAddSession }) => {
+  const wk = getWeekId();
+  const items = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) >= 2);
+  if (!items.length) return null;
+  const doneSet = routineDoneSet(tasks, history);
+  return (
+    <div style={{ ...S.card, marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "8px 10px" }}>
+      <span style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", flexShrink: 0 }}>🔁 이번 주</span>
+      {items.map(r => { const tgt = routineWeekTarget(r); const n = weekDoneCount(doneSet, r.id, wk); const hit = n >= tgt;
+        return (
+          <span key={r.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, background: hit ? "#ECFDF5" : "#FFFBEB", border: "1px solid " + (hit ? "#A7F3D0" : "#FDE68A"), borderRadius: 14, padding: "2px 4px 2px 9px" }}>
+            <span style={{ maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.text}</span>
+            <b style={{ color: hit ? "#059669" : "#D97706" }}>{n}/{tgt}</b>
+            <button onClick={() => onAddSession(r.id)} title="오늘도 했음 — 예정 외 추가 세션 기록(캘린더·카운트 반영)" style={{ ...S.gh, fontSize: 12, lineHeight: 1, padding: "1px 6px", borderRadius: 10 }}>➕</button>
+          </span>
+        );
+      })}
+    </div>
+  );
+};
+/* 회고 탭 — 주N회 루틴의 주별 완료수 히스토리(뒤돌아보기, 지난 4주) */
+const WeeklyRoutineHistory = ({ recurrings, tasks, history }) => {
+  const [open, setOpen] = useState(false);
+  const items = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) >= 2);
+  if (!items.length) return null;
+  const doneSet = routineDoneSet(tasks, history);
+  const base = new Date(TODAY + "T00:00:00").getTime();
+  const weeks = [];
+  for (let i = 0; i < 4; i++) { const d = new Date(base - i * 7 * 86400000); weeks.push({ wk: weekIdOf(d), label: i === 0 ? "이번주" : i === 1 ? "지난주" : i + "주전" }); }
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setOpen(!open)}>{open ? "▼" : "▶"} 🔁 주간 루틴 (주N회)</div>
+      {open && <div style={{ ...S.card, marginTop: 4, overflowX: "auto" }}>
+        {items.map(r => (
+          <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 12 }}>
+            <span style={{ width: 100, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.text}</span>
+            {weeks.map(w => { const tgt = routineWeekTarget(r); const n = weekDoneCount(doneSet, r.id, w.wk); const hit = n >= tgt;
+              return <span key={w.wk} style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", minWidth: 46, flexShrink: 0 }}>
+                <b style={{ color: hit ? "#059669" : "#9ca3af" }}>{n}/{tgt}</b><span style={{ fontSize: 9, color: "#9ca3af" }}>{w.label}</span></span>;
+            })}
+          </div>
+        ))}
+        <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 6 }}>목표=지정 요일 수(옮긴 날·➕추가 세션 포함). 이번 주 진행·➕는 '오늘 할 일' 상단에서.</div>
+      </div>}
+    </div>
+  );
+};
 const RoutineStreak = ({ recurrings, tasks, history, onToggleDay }) => {
   const [open, setOpen] = useState(false);
   const routines = (recurrings || []).filter(r => (r.type || "weekly") === "daily");
@@ -1631,6 +1688,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
   return (
     <div style={{ marginTop: 12 }}>
       {!isWork && <RoutineStreak recurrings={recurrings} tasks={tasks} history={history} onToggleDay={onToggleDay} />}
+      {!isWork && <WeeklyRoutineHistory recurrings={recurrings} tasks={tasks} history={history} />}
       <div style={{ display: "flex", gap: 4, marginBottom: 10, flexWrap: "wrap" }}>
         {targets.map(t => { const k = t.kind + ":" + t.key; const on = k === (cur.kind + ":" + cur.key);
           const pal = t.kind === "routine" ? { bg: "#EDE9FE", fg: "#6D28D9", bd: "#C4B5FD", dot: "#8B5CF6" }
@@ -2093,6 +2151,20 @@ function App({ onSwitchWs }) {
     }
   };
 
+  /* 주N회 ➕(2026-07-07): 예정 외 추가 세션 1건을 done으로 기록(카운트 반영) + 캘린더 등록. toggleRoutineDay와 동일 history 표현.
+     회차키=weekId-x<n>(예정 회차 weekId/weekId-dow와 안 겹침) → 주간 카운트에 잡히고 캘린더 중복 안 남. */
+  const addRoutineSession = (rid) => {
+    const rec = recurrings.find(r => r.id === rid); if (!rec) return;
+    const wk = getWeekId();
+    const period = wk + "-x" + gid(); /* ★고유 회차키(2026-07-07): 매 ➕마다 gid()로 유일 → 빠른 연타(state 미커밋)에도 중복키·언더카운트 레이스 없음(적대검증 C1b). 예정 회차(-dow=숫자)와 안 겹침, weekDoneCount는 wk+"-" 접두로 집계 */
+    const proj = projects.find(p => p.id === rec.project);
+    const orig = { id: gid(), text: rec.text, status: "done", project: rec.project || "proj_etc", recurringId: rid, recurringPeriod: period, notes: "", planDate: TODAY, planTime: rec.time || "", protocol: rec.protocol || "", createdAt: TODAY, subtasks: [], calEventId: "", calUpdated: 0 };
+    setHistory(prev => { const item = { type: "done", text: orig.text, projectName: proj ? proj.name : "", project: orig.project, orig, time: nowTime() };
+      const ex = prev.find(h => h.date === TODAY); if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, item] } : h); return [...prev, { date: TODAY, items: [item] }]; });
+    const cp = calMakeParams(orig, projects); if (cp) calSync("add", cp); /* 추가 세션도 캘린더에 기록(소유자 결정) — 회차키라 중복 0 */
+    showT(`"${rec.text}" 추가 세션 기록 ✅ (이번 주 카운트+1)`, null);
+  };
+
   const addTask = ({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => {
     const proj = projects.find(p => p.id === project);
     const tid = gid();
@@ -2522,7 +2594,7 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
+        {tab === "today" && <><WeeklyRoutineStrip recurrings={recurrings} tasks={tasks} history={history} onAddSession={addRoutineSession} /><TodayView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
         {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecaps={updateHistRecaps} onUpdateTaskRecaps={updateTaskRecaps} recurrings={recurrings} onToggleDay={toggleRoutineDay} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
