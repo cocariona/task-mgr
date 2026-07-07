@@ -1977,6 +1977,7 @@ function App({ onSwitchWs }) {
           else if (ridOk[r.id] === undefined) ridOk[r.id] = true;
         }));
       }
+      if (WS !== wsSnap) return; /* ★C5 대칭(2026-07-07): 루프(15~45s) 중 워크스페이스 전환됐으면 futureThrough 전진(setRecurrings) 스킵. 안 그러면 setRecurrings→자동저장 effect가 cloudSave를 라이브 WS.fbPath(전환된 반대편 /data↔/personal)로 호출해 옛 인스턴스 상태를 엉뚱한 블롭에 쓸 수 있음. 현재는 key-리마운트로 옛 App이 언마운트돼 setRecurrings가 no-op이라 미발현이나, 그 안전은 암묵적(레거시 동기 언마운트 의존)이라 명시 가드로 고정. 스킵해도 tmk 회차키 멱등→다음 로드서 재push+전진(중복 0). L1968·calSyncAll L2378과 대칭 */
       const advance = Object.keys(ridOk).filter(rid => ridOk[rid] === true);
       if (advance.length) setRecurrings(prev => prev.map(r => advance.includes(r.id) ? { ...r, futureThrough: endStr } : r));
     });
