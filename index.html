@@ -2232,7 +2232,6 @@ function App({ onSwitchWs }) {
 
   /* 주N회 ➕(2026-07-07): 예정 외 추가 세션 1건을 done으로 기록(카운트 반영) + 캘린더 등록. toggleRoutineDay와 동일 history 표현.
      회차키=weekId-x<n>(예정 회차 weekId/weekId-dow와 안 겹침) → 주간 카운트에 잡히고 캘린더 중복 안 남. */
-  const removedSessionIds = useRef(new Set()); /* ➕ eventId 백필 도착 전 −로 취소된 세션 orig.id → add.then이 방금 만든 캘린더 이벤트를 삭제(고아 방지·적대검증 R2) */
   /* 주N회 ＋(옵션B 2026-07-07): 세션 1건 done 기록(카운트+1) + 메모(선택). 캘린더 별도 done 이벤트는 안 만듦
      (권장요일 이벤트가 캘린더 자리). 메모 있으면 루틴 이월메모(notes)에 날짜태그로 누적(최근 8줄 cap)+권장요일 이벤트 desc 재-lay→다음 glance에 반영. */
   const addRoutineSession = (rid, memo) => {
@@ -2259,16 +2258,18 @@ function App({ onSwitchWs }) {
     const wk = getWeekId();
     const inWk = (per) => per === wk || (per || "").indexOf(wk + "-") === 0;
     let target = null, bestKey = "";
-    (history || []).forEach(h => (h.items || []).forEach(it => { if (it.type === "done" && it.orig && it.orig.recurringId === rid && inWk(it.orig.recurringPeriod)) { const key = (h.date || "") + "T" + (it.time || "00:00"); if (key >= bestKey) { bestKey = key; target = { kind: "hist", date: h.date, origId: it.orig.id, calEventId: it.orig.calEventId || "" }; } } }));
-    if (!target) { const td = (tasks || []).filter(t => t.recurringId === rid && t.status === "done" && inWk(t.recurringPeriod || t.planDate)); if (td.length) { const t = td[td.length - 1]; target = { kind: "task", taskId: t.id, calEventId: t.calEventId || "" }; } }
+    (history || []).forEach(h => (h.items || []).forEach(it => { if (it.type === "done" && it.orig && it.orig.recurringId === rid && inWk(it.orig.recurringPeriod)) { const key = (h.date || "") + "T" + (it.time || "00:00"); if (key >= bestKey) { bestKey = key; target = { kind: "hist", date: h.date, origId: it.orig.id, item: it }; } } })); /* item=복원용 실제 항목 */
+    if (!target) { const td = (tasks || []).filter(t => t.recurringId === rid && t.status === "done" && inWk(t.recurringPeriod || t.planDate)); if (td.length) { target = { kind: "task", task: td[td.length - 1] }; } }
     if (!target) { showT("이번 주 취소할 완료 기록이 없습니다", null); return; }
-    if (target.kind === "hist") { removedSessionIds.current.add(target.origId); /* ➕ 백필 도착 전 취소면 add.then이 이벤트 삭제 */
-      setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).filter(it => !(it.orig && it.orig.id === target.origId)) } : h).filter(h => (h.items || []).length)); }
-    else setTasks(prev => prev.filter(t => t.id !== target.taskId));
-    /* ★RC-2(적대검증 F3): count 루틴의 −는 캘린더 이벤트를 절대 안 지움. 권장요일 이벤트는 futureThrough 재-lay가 소유(개별 done 기록 소유 아님).
-       전환 전 weekly done 인스턴스의 calEventId(실 이벤트)를 −가 지우던 것 차단. count는 카운트/history 롤백만. */
-    if (target.calEventId && (recurrings.find(r => r.id === rid) || {}).type !== "count") calSync("delete", { eventId: target.calEventId });
-    showT("이번 주 완료 1건 취소됨", null);
+    /* ★RC-2(적대검증 F3): count 루틴의 −는 캘린더 이벤트를 절대 안 건드림(권장요일 이벤트는 futureThrough 재-lay 소유).
+       ★되돌리기(2026-07-07): 실수로 눌러도 토스트의 '되돌리기'로 그 기록 그대로 복원(doneTask 완료 undo와 동일 패턴). */
+    if (target.kind === "hist") {
+      setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).filter(it => !(it.orig && it.orig.id === target.origId)) } : h).filter(h => (h.items || []).length));
+      showT("이번 주 완료 1건 취소됨", () => { setHistory(prev => { const ex = prev.find(h => h.date === target.date); if (ex) return prev.map(h => h.date === target.date ? { ...h, items: [...h.items, target.item] } : h); return [...prev, { date: target.date, items: [target.item] }]; }); hideT(); });
+    } else {
+      setTasks(prev => prev.filter(t => t.id !== target.task.id));
+      showT("이번 주 완료 1건 취소됨", () => { setTasks(prev => [...prev, target.task]); hideT(); });
+    }
   };
 
   const addTask = ({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => {
