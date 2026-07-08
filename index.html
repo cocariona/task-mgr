@@ -584,7 +584,7 @@ const projSortKey = (p) => (p && p.kind === "routine") ? 0 : (p && p.kind === "p
 const sortProjsForSelect = (projects) => [...(projects || [])].sort((a, b) => projSortKey(a) - projSortKey(b));
 const PrSel = ({ value, onChange, projects, highlight }) => (
   <select style={{ ...S.sel, ...(highlight ? { borderColor: "#F59E0B", background: "#FFFBEB" } : {}) }} value={value || ""} onChange={e => onChange(e.target.value)}>
-    <option value="">과제 선택…</option>
+    <option value="">{WS.key === "personal" ? "주제 선택…" : "과제 선택…"}</option>{/* 개인=주제(영역), 업무=과제(정부과제) 2026-07-08 */}
     {sortProjsForSelect(projects).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
   </select>
 );
@@ -863,7 +863,7 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
           <input style={{ ...S.inp, flex: "none" }} value={f.text} onChange={e => u("text", e.target.value)} />
           <div className="modal-row" style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 100 }}><div style={S.lbl}>상태</div><StSel value={f.status} onChange={v => u("status", v)} /></div>
-            {!isSubtask && <div style={{ flex: 1, minWidth: 100 }}><div style={S.lbl}>과제</div><PrSel value={f.project} onChange={v => u("project", v)} projects={projects} /></div>}
+            {!isSubtask && <div style={{ flex: 1, minWidth: 100 }}><div style={S.lbl}>{WS.key === "personal" ? "주제" : "과제"}</div><PrSel value={f.project} onChange={v => u("project", v)} projects={projects} /></div>}
             <button style={{ ...S.star(f.focus), border: "1px solid #e5e7eb", borderRadius: 5, width: 32, height: 32 }} onClick={() => u("focus", !f.focus)} title="집중 업무">
               {f.focus ? "★" : "☆"}
             </button>
