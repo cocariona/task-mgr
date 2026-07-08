@@ -1265,7 +1265,7 @@ const HTYPE = {
   edited: { icon: "✏️", color: "#8B5CF6", label: "수정" },
   deleted: { icon: "🗑", color: "#EF4444", label: "삭제" },
 };
-const HistoryView = ({ history, onRestore }) => {
+const HistoryView = ({ history, onRestore, onUncancel }) => {
   const sorted = useMemo(() => [...history].sort((a, b) => b.date.localeCompare(a.date)), [history]);
   const [filter, setFilter] = useState("all");
   return (
@@ -1281,7 +1281,7 @@ const HistoryView = ({ history, onRestore }) => {
       {sorted.map(day => {
         const filtered = filter === "all" ? day.items : day.items.filter(i => i.type === filter);
         if (!filtered.length) return null;
-        const doneCnt = day.items.filter(i => i.type === "done").length;
+        const doneCnt = day.items.filter(i => i.type === "done" && !i.cancelled).length;
         const addCnt = day.items.filter(i => i.type === "added").length;
         const stsCnt = day.items.filter(i => i.type === "status").length;
         const editCnt = day.items.filter(i => i.type === "edited").length;
@@ -1296,14 +1296,14 @@ const HistoryView = ({ history, onRestore }) => {
               {stsCnt > 0 && <span>🔄 {stsCnt}건 변경</span>}
               {editCnt > 0 && <span>✏️ {editCnt}건 수정</span>}
             </div>
-            {filtered.map((item, i) => <HistRow key={i} item={item} date={day.date} idx={day.items.indexOf(item)} onRestore={onRestore} />)}
+            {filtered.map((item, i) => <HistRow key={i} item={item} date={day.date} idx={day.items.indexOf(item)} onRestore={onRestore} onUncancel={onUncancel} />)}
           </div>
         );
       })}
     </div>
   );
 };
-const HistRow = ({ item, date, idx, onRestore }) => {
+const HistRow = ({ item, date, idx, onRestore, onUncancel }) => {
   const [h, setH] = useState(false);
   const [open, setOpen] = useState(false);
   const t = HTYPE[item.type] || HTYPE.done;
@@ -1315,13 +1315,15 @@ const HistRow = ({ item, date, idx, onRestore }) => {
         <span style={{ fontSize: 12, flexShrink: 0 }}>{t.icon}</span>
         <span style={{ color: "#9ca3af", fontSize: 11, flexShrink: 0 }}>#{item.projectName}</span>
         {item.isSub && <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }} title={item.parentText ? "↳ " + item.parentText : "하위 할일"}>↳</span>}
-        <span style={{ flex: 1 }}>{item.text}</span>
+        <span style={{ flex: 1, ...(item.cancelled ? { textDecoration: "line-through", color: "#9ca3af" } : {}) }}>{item.text}</span>
+        {item.cancelled && <span style={{ fontSize: 9, color: "#DC2626", background: "#FEF2F2", border: "1px solid #FECACA", padding: "0 4px", borderRadius: 4, flexShrink: 0 }}>취소됨</span>}
         {hasCtx && <span onClick={() => setOpen(!open)} title="메모·회고 보기" style={{ cursor: "pointer", fontSize: 10, color: open ? "#92400E" : "#B45309", background: open ? "#FEF3C7" : "#FFFBEB", border: "1px solid #FDE68A", padding: "1px 5px", borderRadius: 4, userSelect: "none", flexShrink: 0 }}>{orig.notes ? "📝" : ""}{orig.recap ? "🪞" : ""}</span>}
         {item.type === "status" && item.from && <span style={{ fontSize: 10, color: "#9ca3af" }}>{STATUSES[item.from]?.label || item.from}→{STATUSES[item.to]?.label || item.to}</span>}
         {item.detail && <span style={{ fontSize: 10, color: "#8B5CF6" }}>{item.detail}</span>}
         {item.subCount > 0 && <span style={{ fontSize: 10, color: "#9ca3af" }}>+{item.subCount} sub</span>}
         {item.time && <span style={{ fontSize: 10, color: "#c0c0c0", flexShrink: 0 }}>{item.time}</span>}
-        {h && item.type === "done" && !item.routineKey && !item.isSub && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
+        {item.cancelled && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", color: "#059669", borderColor: "#A7F3D0" }} onClick={() => onUncancel(date, idx)} title="취소 복원 — 다시 이번 주 카운트에 포함">↺ 복원</button>}
+        {h && item.type === "done" && !item.cancelled && !item.routineKey && !item.isSub && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
       </div>
       {hasCtx && open && <div style={{ marginLeft: 28, marginBottom: 6 }}>
         {orig.notes && <div style={{ ...S.note, marginTop: 2 }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.6, marginRight: 5 }}>📝 메모</span>{orig.notes}</div>}
@@ -1462,8 +1464,8 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
    현재 구조 유지: 요일별 예정 인스턴스·캘린더는 그대로, 위에 '주 N회' 카운트 층만 얹음. ─── */
 const routineWeekTarget = (r) => r.type === "count" ? (r.freqPerWeek || 1) : 0; /* ★주N회 유형만 카운터 대상(2026-07-07): freqPerWeek 목표. 특정일(weekly)·매일·매월은 0=스트립 제외 */
 const routineDoneSet = (tasks, history) => { const s = new Set();
-  (tasks || []).forEach(t => { if (t.recurringId && t.status === "done") s.add(t.recurringId + "|" + (t.recurringPeriod || t.planDate)); });
-  (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && it.orig && it.orig.recurringId) s.add(it.orig.recurringId + "|" + (it.orig.recurringPeriod || day.date)); }));
+  (tasks || []).forEach(t => { if (t.recurringId && t.status === "done" && !t.cancelled) s.add(t.recurringId + "|" + (t.recurringPeriod || t.planDate)); });
+  (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && !it.cancelled && it.orig && it.orig.recurringId) s.add(it.orig.recurringId + "|" + (it.orig.recurringPeriod || day.date)); })); /* ★취소(cancelled)된 세션은 카운트 제외(2026-07-07·B안): −는 삭제 대신 취소표시, 히스토리서 복원 가능 */
   return s; };
 const weekDoneCount = (doneSet, rid, wk) => { let n = 0; doneSet.forEach(k => { const i = k.indexOf("|"); const id = k.slice(0, i), per = k.slice(i + 1); if (id === rid && (per === wk || per.indexOf(wk + "-") === 0)) n++; }); return n; };
 /* 오늘 탭 상단 — 주N회 루틴 '이번 주 N/목표' + ＋(세션 기록+메모)/−(최근 1건 취소).
@@ -2258,17 +2260,17 @@ function App({ onSwitchWs }) {
     const wk = getWeekId();
     const inWk = (per) => per === wk || (per || "").indexOf(wk + "-") === 0;
     let target = null, bestKey = "";
-    (history || []).forEach(h => (h.items || []).forEach(it => { if (it.type === "done" && it.orig && it.orig.recurringId === rid && inWk(it.orig.recurringPeriod)) { const key = (h.date || "") + "T" + (it.time || "00:00"); if (key >= bestKey) { bestKey = key; target = { kind: "hist", date: h.date, origId: it.orig.id, item: it }; } } })); /* item=복원용 실제 항목 */
-    if (!target) { const td = (tasks || []).filter(t => t.recurringId === rid && t.status === "done" && inWk(t.recurringPeriod || t.planDate)); if (td.length) { target = { kind: "task", task: td[td.length - 1] }; } }
+    (history || []).forEach(h => (h.items || []).forEach(it => { if (it.type === "done" && !it.cancelled && it.orig && it.orig.recurringId === rid && inWk(it.orig.recurringPeriod)) { const key = (h.date || "") + "T" + (it.time || "00:00"); if (key >= bestKey) { bestKey = key; target = { kind: "hist", date: h.date, origId: it.orig.id }; } } }));
+    if (!target) { const td = (tasks || []).filter(t => t.recurringId === rid && t.status === "done" && !t.cancelled && inWk(t.recurringPeriod || t.planDate)); if (td.length) { target = { kind: "task", taskId: td[td.length - 1].id }; } }
     if (!target) { showT("이번 주 취소할 완료 기록이 없습니다", null); return; }
-    /* ★RC-2(적대검증 F3): count 루틴의 −는 캘린더 이벤트를 절대 안 건드림(권장요일 이벤트는 futureThrough 재-lay 소유).
-       ★되돌리기(2026-07-07): 실수로 눌러도 토스트의 '되돌리기'로 그 기록 그대로 복원(doneTask 완료 undo와 동일 패턴). */
+    /* ★B안(2026-07-07): −는 기록을 삭제하지 않고 cancelled 표시 → 카운트만 −1, 히스토리엔 취소선으로 남아 '↺ 복원'으로 언제든 되살림.
+       count 루틴 −는 캘린더 이벤트 안 건드림(권장요일=futureThrough 재-lay 소유). 토스트 '되돌리기'=즉시 복원(=cancelled 해제). */
     if (target.kind === "hist") {
-      setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).filter(it => !(it.orig && it.orig.id === target.origId)) } : h).filter(h => (h.items || []).length));
-      showT("이번 주 완료 1건 취소됨", () => { setHistory(prev => { const ex = prev.find(h => h.date === target.date); if (ex) return prev.map(h => h.date === target.date ? { ...h, items: [...h.items, target.item] } : h); return [...prev, { date: target.date, items: [target.item] }]; }); hideT(); });
+      setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: true } : it) } : h));
+      showT("이번 주 완료 1건 취소 — 히스토리서 복원 가능", () => { setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: false } : it) } : h)); hideT(); });
     } else {
-      setTasks(prev => prev.filter(t => t.id !== target.task.id));
-      showT("이번 주 완료 1건 취소됨", () => { setTasks(prev => [...prev, target.task]); hideT(); });
+      setTasks(prev => prev.map(t => t.id === target.taskId ? { ...t, cancelled: true } : t));
+      showT("이번 주 완료 1건 취소 — 복원 가능", () => { setTasks(prev => prev.map(t => t.id === target.taskId ? { ...t, cancelled: false } : t)); hideT(); });
     }
   };
 
@@ -2451,6 +2453,8 @@ function App({ onSwitchWs }) {
     });
     showT("할일로 복원됨", null);
   };
+  /* 주N회 −취소 복원(2026-07-07·B안): cancelled 표시된 히스토리 완료를 되살림 → 다시 이번 주 카운트에 포함 */
+  const uncancelHist = (date, idx) => { setHistory(prev => prev.map(h => h.date === date ? { ...h, items: (h.items || []).map((it, i) => i === idx ? { ...it, cancelled: false } : it) } : h)); showT("복원됨 — 카운트 +1", null); };
 
   const addProj = (name, kind = "project") => {
     const id = (kind === "bucket" ? "b_" : "p_") + gid();
@@ -2705,7 +2709,7 @@ function App({ onSwitchWs }) {
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
         {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecaps={updateHistRecaps} onUpdateTaskRecaps={updateTaskRecaps} recurrings={recurrings} onToggleDay={toggleRoutineDay} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
-        {tab === "history" && <HistoryView history={history} onRestore={restoreHist} />}
+        {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} />}
       </div>
       {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} isWork={isWork} />}
       {clearTarget && <ClearTodayModal task={clearTarget} onApply={(nd) => applyClearToday(clearTarget.id, nd)} onCancel={() => setClearTarget(null)} />}
