@@ -1468,6 +1468,15 @@ const routineDoneSet = (tasks, history) => { const s = new Set();
   (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && !it.cancelled && it.orig && it.orig.recurringId) s.add(it.orig.recurringId + "|" + (it.orig.recurringPeriod || day.date)); })); /* ★취소(cancelled)된 세션은 카운트 제외(2026-07-07·B안): −는 삭제 대신 취소표시, 히스토리서 복원 가능 */
   return s; };
 const weekDoneCount = (doneSet, rid, wk) => { let n = 0; doneSet.forEach(k => { const i = k.indexOf("|"); const id = k.slice(0, i), per = k.slice(i + 1); if (id === rid && (per === wk || per.indexOf(wk + "-") === 0)) n++; }); return n; };
+/* ★루틴 이월메모(2026-07-07·B안): 취소 안 된 세션 메모(orig.notes)를 히스토리서 도출 → 캘린더 권장요일 이벤트 설명에 최근 n줄.
+   취소(−)하면 그 세션이 자동 제외돼 메모도 캘린더서 사라짐. 별도 누적 저장 없음(=단일진실). n=최근 몇 개(늘어남=히스토리에 다 남음).
+   opts.excludeId=이 세션 메모 제외(−직후), opts.includeId=취소된 이 세션도 강제 포함(히스토리탭 복원 시 closure history가 아직 cancelled라서). */
+const routineMemoText = (rid, history, n = 10, opts = {}) => {
+  const out = [];
+  (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && it.orig && it.orig.recurringId === rid && (it.orig.notes || "").trim() && it.orig.id !== opts.excludeId && (!it.cancelled || it.orig.id === opts.includeId)) out.push({ date: day.date || "", text: (it.orig.notes || "").trim() }); }));
+  out.sort((a, b) => a.date.localeCompare(b.date));
+  return out.slice(-n).map(m => "[" + (m.date || "").slice(5) + "] " + m.text).join("\n");
+};
 /* 오늘 탭 상단 — 주N회 루틴 '이번 주 N/목표' + ＋(세션 기록+메모)/−(최근 1건 취소).
    요일 무관 주간 카운트: 옮겨 간 날·예정 외·지난 날 = 전부 ＋로 +1. ＋ 누르면 메모 입력창(선택)이 열림 → 발견을 적으면 루틴 이월메모에 누적되고 다음 실행 때 캘린더 권장요일 이벤트 설명에 보임(glance). */
 const WeeklyRoutineStrip = ({ recurrings, tasks, history, onAddSession, onRemoveSession }) => {
@@ -1495,13 +1504,14 @@ const WeeklyRoutineStrip = ({ recurrings, tasks, history, onAddSession, onRemove
           );
         })}
       </div>
-      {active && <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 11, color: "#4338CA", flexShrink: 0 }}>{active.text} 기록</span>
-        <input autoFocus value={memoText} onChange={e => setMemoText(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter") submit(active.id); if (e.key === "Escape") cancel(); }}
-          placeholder="메모(선택) — 발견/느낀 점. 다음에 캘린더서 보임. 빈칸이면 카운트만" style={{ ...S.inp, fontSize: 12, flex: 1, minWidth: 160 }} />
-        <button style={{ ...S.btn("#4338CA"), fontSize: 11 }} onClick={() => submit(active.id)}>기록 +1</button>
-        <button style={{ ...S.gh, fontSize: 11 }} onClick={cancel}>취소</button>
+      {active && <div style={{ display: "flex", alignItems: "flex-start", gap: 6, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, color: "#4338CA", flexShrink: 0, marginTop: 5 }}>{active.text} 기록</span>
+        <textarea autoFocus value={memoText} onChange={e => setMemoText(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(active.id); } if (e.key === "Escape") cancel(); }}
+          rows={Math.min(8, (memoText.match(/\n/g) || []).length + 1)}
+          placeholder="메모(선택·여러 줄 가능) — 발견/느낀 점. 다음 실행 때 캘린더서 보임. Ctrl+Enter=기록, 빈칸이면 카운트만" style={{ ...S.ta, fontSize: 12, flex: 1, minWidth: 180, minHeight: 0, resize: "vertical" }} />
+        <button style={{ ...S.btn("#4338CA"), fontSize: 11, marginTop: 2 }} onClick={() => submit(active.id)}>기록 +1</button>
+        <button style={{ ...S.gh, fontSize: 11, marginTop: 2 }} onClick={cancel}>취소</button>
       </div>}
     </div>
   );
@@ -2080,7 +2090,7 @@ function App({ onSwitchWs }) {
       const ridOk = {}; /* rid → 전부 성공 시에만 futureThrough 전진(부분 실패는 다음 로드 재시도, 회차키라 중복 안 남) */
       for (let i = 0; i < jobs.length; i += CAP) {
         await Promise.all(jobs.slice(i, i + CAP).map(async ({ r, occ }) => {
-          const cp = calMakeParams({ id: "", recurringId: r.id, recurringPeriod: occ.period, text: r.text, project: r.project, planDate: occ.date, planTime: r.time || "", protocol: r.protocol || "", notes: r.notes || "" }, projects, wsSnap.calPrefix); /* prefix 스냅샷(오염 방지) + notes=이월 메모(옵션B: 권장요일 이벤트 설명에 실행방법+최근 메모 표시→glance) */
+          const cp = calMakeParams({ id: "", recurringId: r.id, recurringPeriod: occ.period, text: r.text, project: r.project, planDate: occ.date, planTime: r.time || "", protocol: r.protocol || "", notes: routineMemoText(r.id, history) }, projects, wsSnap.calPrefix); /* prefix 스냅샷 + notes=취소 안 된 세션 메모 도출(옵션B: 권장요일 desc=실행방법+최근 메모→glance) */
           if (!cp) return;
           const res = await calSync("add", cp);
           if (!(res && res.eventId)) ridOk[r.id] = false;
@@ -2169,9 +2179,10 @@ function App({ onSwitchWs }) {
   const updateTaskRecaps = (id, recaps) => setTasks(p => p.map(t => t.id === id ? { ...t, recaps, recap: joinRecaps(recaps) } : t));
   /* 반복 정의 수정(실행방법·시간) + 진행중 인스턴스에 전파 + 연결된 캘린더 이벤트 갱신(2026-07-01) */
   /* 미래 회차 재-lay(단일 반복, 편집 즉시 반영용 — 다음 로드 안 기다림). add=회차키(tmk)라 이벤트 있으면 제목·설명 in-place 갱신(사라짐 0), 없으면 생성. 워크스페이스 스냅샷으로 접두사 오염 방지(e429026 대칭). */
-  const layFutureForRecurring = async (rec, wsArg) => {
-    if (!rec || rec.disabled) return; /* 옵션B: count도 권장요일 이벤트 lay(재-lay=desc 갱신·메모 이월) */
+  const layFutureForRecurring = async (rec, wsArg, notesOverride) => {
+    if (!rec || rec.disabled) return; /* 옵션B: count도 권장요일 이벤트 lay(재-lay=desc 갱신·메모 이월). notesOverride=＋/− 직후 fresh 메모 전달(stale closure 회피) */
     const wsSnap = wsArg || WS, wsPrefix = wsSnap.calPrefix; /* ★wsArg=클릭 시점 스냅샷(setTimeout 경로가 ~20s 뒤 늦게 읽어 오염되던 것 방지·e429026 대칭) */
+    const memoTxt = notesOverride != null ? notesOverride : routineMemoText(rec.id, history);
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const end = new Date(today); end.setDate(end.getDate() + FUTURE_WINDOW_DAYS);
     const occs = recurOccurrences(rec, dateStrOf(today), end);
@@ -2181,7 +2192,7 @@ function App({ onSwitchWs }) {
     let ok = true;
     for (let i = 0; i < occs.length; i += 5) {
       await Promise.all(occs.slice(i, i + 5).map(async occ => {
-        const cp = calMakeParams({ id: "", recurringId: rec.id, recurringPeriod: occ.period, text: rec.text, project: rec.project, planDate: occ.date, planTime: rec.time || "", protocol: rec.protocol || "", notes: rec.notes || "" }, projects, wsPrefix); /* notes=이월 메모(옵션B) */
+        const cp = calMakeParams({ id: "", recurringId: rec.id, recurringPeriod: occ.period, text: rec.text, project: rec.project, planDate: occ.date, planTime: rec.time || "", protocol: rec.protocol || "", notes: memoTxt }, projects, wsPrefix); /* notes=취소 안 된 세션 메모 도출(옵션B) */
         if (!cp) return;
         const res = await calSync("add", cp);
         if (!(res && res.eventId)) ok = false;
@@ -2245,11 +2256,9 @@ function App({ onSwitchWs }) {
     const orig = { id: gid(), text: rec.text, status: "done", project: rec.project || "proj_etc", recurringId: rid, recurringPeriod: period, notes: memoTrim, planDate: TODAY, planTime: rec.time || "", protocol: rec.protocol || "", createdAt: TODAY, subtasks: [], calEventId: "", calUpdated: 0 };
     setHistory(prev => { const item = { type: "done", text: orig.text, projectName: proj ? proj.name : "", project: orig.project, orig, time: nowTime() };
       const ex = prev.find(h => h.date === TODAY); if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, item] } : h); return [...prev, { date: TODAY, items: [item] }]; });
-    if (memoTrim) {
-      const line = "[" + TODAY.slice(5) + "] " + memoTrim;
-      const newNotes = (((rec.notes || "").trim() ? rec.notes.trim() + "\n" : "") + line).split("\n").slice(-8).join("\n"); /* 최근 8줄만 유지 */
-      setRecurrings(prev => prev.map(r => r.id === rid ? { ...r, notes: newNotes } : r));
-      layFutureForRecurring({ ...rec, notes: newNotes }, WS); /* 권장요일 이벤트 desc(실행방법+메모) 갱신 → 캘린더 glance에 이월 */
+    if (memoTrim) { /* 메모는 세션(orig.notes)에만 저장 → routineMemoText가 취소 안 된 세션서 도출. 즉시 반영 위해 새 메모 포함해 재-lay(fresh override). */
+      const withNew = ((routineMemoText(rid, history, 9) ? routineMemoText(rid, history, 9) + "\n" : "") + "[" + TODAY.slice(5) + "] " + memoTrim);
+      layFutureForRecurring(rec, WS, withNew); /* 권장요일 이벤트 desc(실행방법+메모) 즉시 갱신 → 캘린더 glance 이월 */
     }
     showT("\"" + rec.text + "\" 기록 ✅ (이번 주 +1" + (memoTrim ? " · 메모 저장" : "") + ")", null);
   };
@@ -2267,7 +2276,9 @@ function App({ onSwitchWs }) {
        count 루틴 −는 캘린더 이벤트 안 건드림(권장요일=futureThrough 재-lay 소유). 토스트 '되돌리기'=즉시 복원(=cancelled 해제). */
     if (target.kind === "hist") {
       setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: true } : it) } : h));
-      showT("이번 주 완료 1건 취소 — 히스토리서 복원 가능", () => { setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: false } : it) } : h)); hideT(); });
+      const rec0 = recurrings.find(r => r.id === rid);
+      if (rec0 && rec0.type === "count") layFutureForRecurring(rec0, WS, routineMemoText(rid, history, 10, { excludeId: target.origId })); /* 취소한 세션 메모를 캘린더 desc서 즉시 제거 */
+      showT("이번 주 완료 1건 취소 — 히스토리서 복원 가능", () => { setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: false } : it) } : h)); if (rec0 && rec0.type === "count") layFutureForRecurring(rec0, WS, routineMemoText(rid, history, 10)); hideT(); }); /* R1(2026-07-08): 되돌리기=능동 재-lay(closure history엔 target 아직 non-cancelled→excludeId 없이 메모 포함)로 즉시 캘린더 복귀. futureThrough:"" 리셋 레이스·once-per-mount futureEvtDone 의존 제거 */
     } else {
       setTasks(prev => prev.map(t => t.id === target.taskId ? { ...t, cancelled: true } : t));
       showT("이번 주 완료 1건 취소 — 복원 가능", () => { setTasks(prev => prev.map(t => t.id === target.taskId ? { ...t, cancelled: false } : t)); hideT(); });
@@ -2454,7 +2465,13 @@ function App({ onSwitchWs }) {
     showT("할일로 복원됨", null);
   };
   /* 주N회 −취소 복원(2026-07-07·B안): cancelled 표시된 히스토리 완료를 되살림 → 다시 이번 주 카운트에 포함 */
-  const uncancelHist = (date, idx) => { setHistory(prev => prev.map(h => h.date === date ? { ...h, items: (h.items || []).map((it, i) => i === idx ? { ...it, cancelled: false } : it) } : h)); showT("복원됨 — 카운트 +1", null); };
+  const uncancelHist = (date, idx) => {
+    setHistory(prev => prev.map(h => h.date === date ? { ...h, items: (h.items || []).map((it, i) => i === idx ? { ...it, cancelled: false } : it) } : h));
+    const day = (history || []).find(h => h.date === date); const it0 = day && day.items[idx]; const rid = it0 && it0.orig && it0.orig.recurringId;
+    const rec0 = rid && recurrings.find(r => r.id === rid);
+    if (rec0 && rec0.type === "count") layFutureForRecurring(rec0, WS, routineMemoText(rid, history, 10, { includeId: it0.orig.id })); /* R1(2026-07-08): 복원=능동 재-lay. closure history엔 이 세션이 아직 cancelled라 includeId로 강제 포함→즉시 캘린더 desc 복귀(futureThrough:"" 리셋·once-per-mount 의존 제거) */
+    showT("복원됨 — 카운트 +1", null);
+  };
 
   const addProj = (name, kind = "project") => {
     const id = (kind === "bucket" ? "b_" : "p_") + gid();
