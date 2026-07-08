@@ -300,6 +300,10 @@ const DAYS_KO = ["일", "월", "화", "수", "목", "금", "토"];
 const getTodayDow = () => new Date().getDay(); /* 0=일 ~ 6=토 */
 const getWeekId = () => { const d = new Date(); d.setHours(0,0,0,0); const jan1 = new Date(d.getFullYear(),0,1); return `${d.getFullYear()}-W${Math.ceil(((d-jan1)/86400000+jan1.getDay()+1)/7)}`; }; /* ★자정 정규화(2026-07-06): 시각 의존 weekId 경계 흔들림 제거 → 당일 인스턴스 period가 미래 placeholder(자정 계산 weekIdOf)와 항상 일치(주간 중복 방지) */
 const getMonthId = () => { const d = new Date(); return `${d.getFullYear()}-M${d.getMonth()+1}`; };
+/* ★주N회 전환 대상 id(2026-07-07): 마이그레이션이 count로 바꾸는 5개. 전환 직후 로드 tick에서 상태(type)가 아직 안 퍼져
+   generateRecurringTasks·futureEvtDone가 stale하게 weekly/daily로 읽어 인스턴스·예정이벤트를 만드는 레이스 방지 —
+   이 id는 '영구 count'라 type 무관하게 항상 스킵(적대검증 R1/R3). */
+const COUNT_MIG_IDS = new Set(["q1omsdk", "h7gayxj", "w02xa9w", "dcfei54", "rt_english"]);
 const generateRecurringTasks = (recurrings, tasks, projects, history) => {
   const dow = getTodayDow();
   const weekId = getWeekId();
@@ -315,6 +319,7 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
   const newTasks = [];
   recurrings.forEach(r => {
     if (r.disabled) return; /* ★M5: 삭제 표식된 시드 루틴은 인스턴스 생성 안 함 */
+    if (r.type === "count" || COUNT_MIG_IDS.has(r.id)) return; /* ★주N회(2026-07-07): 오늘 할 일에 요일별 인스턴스 안 만듦 — 오늘 탭 카운터(＋/−)에서만. id-스킵=전환 tick 레이스 방지 */
     const type = r.type || "weekly";
     let period;
     if (type === "daily") {
@@ -1341,12 +1346,13 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
   const [tm, setTm] = useState(r.time || "");
   const [prj, setPrj] = useState(r.project || "");
   const [dws, setDws] = useState(wdays);
-  useEffect(() => { setD(r.protocol || ""); setTxt(r.text || ""); setTm(r.time || ""); setPrj(r.project || ""); setDws(r.dows || (r.dow != null ? [r.dow] : [])); }, [r.id, r.protocol, r.text, r.time, r.project, r.dow]); /* eslint-disable-line */
+  const [fq, setFq] = useState(r.freqPerWeek || 1); /* 주N회 목표 편집(2026-07-07) */
+  useEffect(() => { setD(r.protocol || ""); setTxt(r.text || ""); setTm(r.time || ""); setPrj(r.project || ""); setDws(r.dows || (r.dow != null ? [r.dow] : [])); setFq(r.freqPerWeek || 1); }, [r.id, r.protocol, r.text, r.time, r.project, r.dow, r.freqPerWeek]); /* eslint-disable-line */
   const dirty = d !== (r.protocol || "");
   const sortJoin = (a) => [...a].sort((x, y) => x - y).join(",");
-  const dirtySched = txt.trim() !== (r.text || "") || tm !== (r.time || "") || prj !== (r.project || "") || (type === "weekly" && sortJoin(dws) !== sortJoin(wdays));
-  const saveSched = () => { const patch = { text: txt.trim() || r.text, time: tm, project: prj || r.project }; if (type === "weekly") { if (!dws.length) return; patch.dows = [...dws].sort((a, b) => a - b); } onUpdate(r.id, patch); };
-  const label = type === "daily" ? "매일" : type === "weekly" ? `매주 ${wdays.map(x => DAYS_KO[x]).join("·")}` : r.lastDay ? "매월 마지막일" : `매월 ${r.dom}일`;
+  const dirtySched = txt.trim() !== (r.text || "") || tm !== (r.time || "") || prj !== (r.project || "") || (type === "weekly" && sortJoin(dws) !== sortJoin(wdays)) || (type === "count" && String(fq) !== String(r.freqPerWeek || 1));
+  const saveSched = () => { const patch = { text: txt.trim() || r.text, time: tm, project: prj || r.project }; if (type === "weekly") { if (!dws.length) return; patch.dows = [...dws].sort((a, b) => a - b); } if (type === "count") patch.freqPerWeek = Math.max(1, parseInt(fq) || 1); onUpdate(r.id, patch); };
+  const label = type === "count" ? `주 ${r.freqPerWeek || 1}회` : type === "daily" ? "매일" : type === "weekly" ? `매주 ${wdays.map(x => DAYS_KO[x]).join("·")}` : r.lastDay ? "매월 마지막일" : `매월 ${r.dom}일`;
   return (
     <div style={{ borderBottom: "1px solid #f3f4f6", padding: "6px 4px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
@@ -1361,6 +1367,7 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
           <input value={txt} onChange={e => setTxt(e.target.value)} placeholder="이름" style={{ ...S.inp, fontSize: 12, maxWidth: 180 }} />
           <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>🕒</span><input type="time" value={tm} onChange={e => setTm(e.target.value)} style={{ ...S.fld, width: 110, flex: "none", fontSize: 11 }} title="시간(선택) — 캘린더 타임드" /></div>
           <PrSel value={prj} onChange={setPrj} projects={projects} />
+          {type === "count" && <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 11, color: "#6b7280" }}>주</span><input type="number" min={1} max={14} value={fq} onChange={e => setFq(e.target.value)} style={{ ...S.fld, width: 48, fontSize: 11, flexShrink: 0 }} title="주 목표 횟수" /><span style={{ fontSize: 11, color: "#6b7280" }}>회</span></div>}
           {type === "weekly" && <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
             {DAYS_KO.map((dn, i) => { const on = dws.includes(i); return <button key={i} type="button" onClick={() => setDws(on ? dws.filter(x => x !== i) : [...dws, i])} style={{ ...S.gh, fontSize: 11, padding: "3px 7px", background: on ? "#EEF2FF" : "#fff", color: on ? "#4338CA" : "#9ca3af", borderColor: on ? "#A5B4FC" : "#e5e7eb", fontWeight: on ? 700 : 400 }}>{dn}</button>; })}
           </div>}
@@ -1380,13 +1387,16 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
 const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurring }) => {
   const [show, setShow] = useState(false);
   const [nt, setNt] = useState(""); const [ndows, setNdows] = useState([]); const [np, setNp] = useState("proj_etc");
-  const [rType, setRType] = useState("weekly"); const [dom, setDom] = useState(1); const [lastDay, setLastDay] = useState(false);
+  const [rType, setRType] = useState("count"); const [dom, setDom] = useState(1); const [lastDay, setLastDay] = useState(false);
   const [rTime, setRTime] = useState(""); /* 선택 시간 HH:MM (2026-07-01) */
+  const [freqN, setFreqN] = useState(3); /* 주 N회 목표(2026-07-07) */
   const [rProto, setRProto] = useState(""); /* 실행 방법(선택, 2026-07-01) */
   const addR = () => {
     if (!nt.trim()) return;
     const base = { id: gid(), text: nt.trim(), project: np, time: rTime || "", protocol: rProto.trim() };
-    if (rType === "daily") {
+    if (rType === "count") {
+      setRecurrings(p => [...p, { ...base, type: "count", freqPerWeek: Math.max(1, parseInt(freqN) || 1) }]); /* 주N회=요일자유·오늘탭 카운터 */
+    } else if (rType === "daily") {
       setRecurrings(p => [...p, { ...base, type: "daily" }]);
     } else if (rType === "weekly") {
       if (!ndows.length) return; /* 요일 최소 1개 선택 필요 */
@@ -1394,7 +1404,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
     } else {
       setRecurrings(p => [...p, { ...base, type: "monthly", dom: lastDay ? 0 : parseInt(dom), lastDay }]);
     }
-    setNt(""); setNdows([]); setDom(1); setLastDay(false); setRTime(""); setRProto("");
+    setNt(""); setNdows([]); setDom(1); setLastDay(false); setRTime(""); setFreqN(3); setRProto("");
   };
   /* ★M5: 시드 루틴은 제거 대신 disabled 표식(재시드 부활 방지). 사용자 생성 반복은 완전 제거. */
   const delR = (id) => { deleteFuturePlaceholders(id); setRecurrings(p => SEED_ROUTINE_IDS.has(id) ? p.map(r => r.id === id ? { ...r, disabled: true, futureThrough: "" } : r) : p.filter(r => r.id !== id)); }; /* 삭제/비활성 시 미래 placeholder 고아 제거(2026-07-06) */
@@ -1410,9 +1420,15 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
         <div style={S.div} />
         <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
           <select style={{ ...S.sel, fontSize: 12 }} value={rType} onChange={e => setRType(e.target.value)}>
-            <option value="daily">매일</option><option value="weekly">매주</option><option value="monthly">매월</option>
+            <option value="count">주 N회</option><option value="weekly">매주 특정요일</option><option value="daily">매일</option><option value="monthly">매월</option>
           </select>
-          {rType === "daily" ? null : rType === "weekly" ? (
+          {rType === "count" ? (
+            <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
+              <span style={{ fontSize: 12, color: "#6b7280" }}>주</span>
+              <input type="number" min={1} max={14} value={freqN} onChange={e => setFreqN(e.target.value)} style={{ ...S.fld, width: 50, fontSize: 12, flexShrink: 0 }} title="주 목표 횟수 — 요일 자유, 오늘 탭 카운터에서 ＋/−" />
+              <span style={{ fontSize: 11, color: "#6b7280" }}>회 (요일 자유)</span>
+            </div>
+          ) : rType === "daily" ? null : rType === "weekly" ? (
             <div style={{ display: "flex", gap: 2, flexWrap: "wrap", flexShrink: 0 }}>
               {DAYS_KO.map((d, i) => { const on = ndows.includes(i);
                 return <button key={i} type="button" onClick={() => setNdows(on ? ndows.filter(x => x !== i) : [...ndows, i])}
@@ -1443,7 +1459,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
 /* ─── 주N회 루틴(2026-07-07): 지정 요일이 유동적인 루틴(예: 보컬 월·수·토)을 '이번 주 N회 목표'로 추적.
    목표=freqPerWeek 우선, 없으면 지정 요일 수(dows.length). 완료수=이번 주 done 회차(옮긴 날·➕추가 세션 포함).
    현재 구조 유지: 요일별 예정 인스턴스·캘린더는 그대로, 위에 '주 N회' 카운트 층만 얹음. ─── */
-const routineWeekTarget = (r) => { if ((r.type || "weekly") !== "weekly") return 0; const d = r.dows || (r.dow != null ? [r.dow] : []); return r.freqPerWeek || d.length; };
+const routineWeekTarget = (r) => r.type === "count" ? (r.freqPerWeek || 1) : 0; /* ★주N회 유형만 카운터 대상(2026-07-07): freqPerWeek 목표. 특정일(weekly)·매일·매월은 0=스트립 제외 */
 const routineDoneSet = (tasks, history) => { const s = new Set();
   (tasks || []).forEach(t => { if (t.recurringId && t.status === "done") s.add(t.recurringId + "|" + (t.recurringPeriod || t.planDate)); });
   (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && it.orig && it.orig.recurringId) s.add(it.orig.recurringId + "|" + (it.orig.recurringPeriod || day.date)); }));
@@ -1453,7 +1469,7 @@ const weekDoneCount = (doneSet, rid, wk) => { let n = 0; doneSet.forEach(k => { 
    요일 무관 주간 카운트라: 옮겨 간 날·예정 외 추가·지나간 날 뒤늦게 = 전부 ➕로 +1, 잘못 체크는 −로 정정. */
 const WeeklyRoutineStrip = ({ recurrings, tasks, history, onAddSession, onRemoveSession }) => {
   const wk = getWeekId();
-  const items = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) >= 2);
+  const items = (recurrings || []).filter(r => !r.disabled && r.type === "count");
   if (!items.length) return null;
   const doneSet = routineDoneSet(tasks, history);
   return (
@@ -1475,7 +1491,7 @@ const WeeklyRoutineStrip = ({ recurrings, tasks, history, onAddSession, onRemove
 /* 회고 탭 — 주N회 루틴의 주별 완료수 히스토리(뒤돌아보기, 지난 4주) */
 const WeeklyRoutineHistory = ({ recurrings, tasks, history }) => {
   const [open, setOpen] = useState(false);
-  const items = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) >= 2);
+  const items = (recurrings || []).filter(r => !r.disabled && r.type === "count");
   if (!items.length) return null;
   const doneSet = routineDoneSet(tasks, history);
   const base = new Date(TODAY + "T00:00:00").getTime();
@@ -1689,7 +1705,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
 
   return (
     <div style={{ marginTop: 12 }}>
-      {!isWork && <RoutineStreak recurrings={recurrings} tasks={tasks} history={history} onToggleDay={onToggleDay} />}
+      {/* 지난 루틴 체크 그리드 폐지(2026-07-07): 루틴 체크는 오늘 탭 1곳(주N회 카운터/특정일 오늘할일)으로 일원화. 회고엔 읽기전용 주간 히스토리만 */}
       {!isWork && <WeeklyRoutineHistory recurrings={recurrings} tasks={tasks} history={history} />}
       <div style={{ display: "flex", gap: 4, marginBottom: 10, flexWrap: "wrap" }}>
         {targets.map(t => { const k = t.kind + ":" + t.key; const on = k === (cur.kind + ":" + cur.key);
@@ -1912,6 +1928,22 @@ function App({ onSwitchWs }) {
 
   /* 루틴 과제 교정(2026-06-30): B2 이전 데이터의 반복설정·루틴 인스턴스가 폐기된 'p_routine'에 묶여,
      루틴 할일 편집창의 '과제' 드롭다운이 실제값을 못 찾아 첫 항목(운동)으로 잘못 표시됐음 → 각 영역 과제(recurringId)로 remap. */
+  /* ★주N회 전환(2026-07-07, 소유자 지시): 지정 루틴을 count 유형으로. 레슨(목)·링글(월)은 특정일 유지.
+     type 전환(데이터) + 오늘 할일 미완료 인스턴스 제거 + 기존 예정 캘린더 이벤트 삭제(주N회=예정 이벤트 없음·＋한 날만).
+     need 게이트=아직 count 아닌 대상 존재 시만 → 1회. 이후 로드는 count라 futureEvtDone이 재-lay 안 함(예정 이벤트 0 유지). */
+  const countMigDone = useRef(false);
+  useEffect(() => {
+    if (isWork || !cloudLoaded || countMigDone.current) return;
+    countMigDone.current = true;
+    const T = { q1omsdk: 3, h7gayxj: 5, w02xa9w: 1, dcfei54: 1, rt_english: 7 };
+    if (!recurrings.some(r => T[r.id] && r.type !== "count")) return;
+    setRecurrings(prev => prev.map(r => (T[r.id] && r.type !== "count") ? { ...r, type: "count", freqPerWeek: T[r.id], futureThrough: "" } : r));
+    const doomed = tasks.filter(t => T[t.recurringId] && t.status !== "done");
+    doomed.forEach(t => { if (t.calEventId) calSync("delete", { eventId: t.calEventId }); });
+    if (doomed.length) setTasks(prev => prev.filter(t => !doomed.some(d => d.id === t.id)));
+    Object.keys(T).forEach(id => deleteFuturePlaceholders(id)); /* 기존 요일별 예정 이벤트(보컬 월수토·F45 평일·영어 매일 등) 정리 */
+  }, [cloudLoaded]); /* eslint-disable-line */
+
   const routineProjFixDone = useRef(false);
   useEffect(() => {
     if (isWork || !cloudLoaded || routineProjFixDone.current) return;
@@ -2019,7 +2051,7 @@ function App({ onSwitchWs }) {
     const endStr = dateStrOf(end);
     const jobs = [];
     recurrings.forEach(r => {
-      if (r.disabled) return;
+      if (r.disabled || r.type === "count" || COUNT_MIG_IDS.has(r.id)) return; /* ★주N회는 예정 캘린더 이벤트 안 얹음(2026-07-07·＋한 날만). id-스킵=전환 tick 레이스 방지 */
       const fromStr = (r.futureThrough && r.futureThrough > todayStr) ? r.futureThrough : todayStr; /* 이미 얹은 구간 이후만(과거로 안 감) */
       recurOccurrences(r, fromStr, end).forEach(occ => jobs.push({ r, occ }));
     });
@@ -2120,7 +2152,7 @@ function App({ onSwitchWs }) {
   /* 반복 정의 수정(실행방법·시간) + 진행중 인스턴스에 전파 + 연결된 캘린더 이벤트 갱신(2026-07-01) */
   /* 미래 회차 재-lay(단일 반복, 편집 즉시 반영용 — 다음 로드 안 기다림). add=회차키(tmk)라 이벤트 있으면 제목·설명 in-place 갱신(사라짐 0), 없으면 생성. 워크스페이스 스냅샷으로 접두사 오염 방지(e429026 대칭). */
   const layFutureForRecurring = async (rec, wsArg) => {
-    if (!rec || rec.disabled) return;
+    if (!rec || rec.disabled || rec.type === "count" || COUNT_MIG_IDS.has(rec.id)) return; /* 주N회는 예정 이벤트 없음 */
     const wsSnap = wsArg || WS, wsPrefix = wsSnap.calPrefix; /* ★wsArg=클릭 시점 스냅샷(setTimeout 경로가 ~20s 뒤 늦게 읽어 오염되던 것 방지·e429026 대칭) */
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const end = new Date(today); end.setDate(end.getDate() + FUTURE_WINDOW_DAYS);
