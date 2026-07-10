@@ -2739,8 +2739,8 @@ function App({ onSwitchWs }) {
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span id="sync-status" style={{ fontSize: 10, color: "#9ca3af" }}>☁️</span>
           <span style={{ fontSize: 10, color: "#10B981" }}>● 자동 저장</span>
-          {(unsyncedCnt > 0 || calMissingCnt > 0) && <button disabled={calBusy} style={{ ...S.gh, background: "#FEF3C7", borderColor: "#FCD34D", color: "#B45309", fontWeight: 700, opacity: calBusy ? 0.5 : 1 }} onClick={() => calSyncAll({})} title={calMissingCnt > 0 ? `미동기 ${unsyncedCnt}건 + 캘린더에서 삭제된 연결 ${calMissingCnt}건 — 클릭해 재등록/동기화` : "캘린더 미동기 태스크 — 클릭해 지금 동기화"}>⚠️ 미동기 {unsyncedCnt + calMissingCnt}</button>}
-          <button disabled={calBusy} style={{ ...S.gh, opacity: calBusy ? 0.5 : 1 }} onClick={() => calSyncAll({})} title="캘린더와 대조해 맞춤 — 미동기는 추가, 연결됐어도 날짜가 어긋났거나 캘린더서 지워진 건 복구(일치분은 건드리지 않음)">{calBusy ? "📅 동기화 중…" : "📅 일괄동기화"}</button>
+          {(unsyncedCnt > 0 || calMissingCnt > 0) && <button disabled={calBusy} style={{ ...S.gh, background: "#FEF3C7", borderColor: "#FCD34D", color: "#B45309", fontWeight: 700, opacity: calBusy ? 0.5 : 1 }} onClick={() => loadCalToken().then(() => calSyncAll({}))} title={calMissingCnt > 0 ? `미동기 ${unsyncedCnt}건 + 캘린더에서 삭제된 연결 ${calMissingCnt}건 — 클릭해 재등록/동기화` : "캘린더 미동기 태스크 — 클릭해 지금 동기화"}>⚠️ 미동기 {unsyncedCnt + calMissingCnt}</button>}
+          <button disabled={calBusy} style={{ ...S.gh, opacity: calBusy ? 0.5 : 1 }} onClick={() => loadCalToken().then(() => calSyncAll({}))} title="캘린더와 대조해 맞춤 — 미동기는 추가, 연결됐어도 날짜가 어긋났거나 캘린더서 지워진 건 복구(일치분은 건드리지 않음)">{calBusy ? "📅 동기화 중…" : "📅 일괄동기화"}</button>
           <button style={S.gh} onClick={() => calPull(false)} title="캘린더에서 변경된 날짜 가져오기">📅 가져오기</button>
           <button style={S.gh} onClick={exportData}>📤 백업</button>
           <button style={S.gh} onClick={() => fileRef.current?.click()}>📂 불러오기</button>
