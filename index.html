@@ -1133,7 +1133,7 @@ const ProjectsView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, 
       </div>
     );
   };
-  const mainProjs = projects.filter(p => !isBucketProj(p));
+  const mainProjs = projects.filter(p => !isBucketProj(p)).sort((a, b) => projSortKey(a) - projSortKey(b)); /* 루틴(kind:routine) 먼저 그룹핑 = 드롭다운·회고탭과 일관(2026-07-12·휴식 루틴 승격). JS 안정정렬→같은 kind 내 기존순서 보존. 업무=kind 균일→무변경 */
   const bucketProjs = projects.filter(p => isBucketProj(p));
   return (
     <div style={{ marginTop: 12 }}>
