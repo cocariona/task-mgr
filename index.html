@@ -1251,10 +1251,8 @@ const recFetch = (base) => async (path, opt) => {
 };
 const sdFetch = recFetch("selfdev"); /* RecapView가 과거 /selfdev 기록(logs·notes)을 표시 */
 
-/* (cleanup 2026-06-23 ④-b) RoutineSection·sdToday·setRoutineHist·RecordStreamView·SD_CAP_TYPES·SD_FB_TARGETS·SELFDEV_CFG 제거 — 루틴=daily 반복 할일(TodayView). SD_ROUTINES·SD_ROUTINE_RID은 RecapView 라이브 → 유지. */
-const SD_ROUTINES = ["운동", "영어", "보컬", "글쓰기"];
-/* B: 회고탭 루틴명 → 반복 할일 recurringId 매핑 (PERSONAL_ROUTINES와 일치). 회고가 tasks/history.orig에서 루틴 활동을 읽음 */
-const SD_ROUTINE_RID = { "운동": "rt_workout", "영어": "rt_english", "보컬": "rt_vocal", "글쓰기": "rt_writing" };
+/* (cleanup 2026-06-23 ④-b) RoutineSection·sdToday·setRoutineHist·RecordStreamView·SD_CAP_TYPES·SD_FB_TARGETS·SELFDEV_CFG 제거 — 루틴=daily 반복 할일(TodayView). */
+/* SD_ROUTINES·SD_ROUTINE_RID 폐지(2026-07-12): 회고탭 루틴 분류·기록을 하드코딩 목록·단일 rid 매핑에서 라이브 recurrings(프로젝트별 그룹) 도출로 전환 — 스테일 rt_workout/rt_vocal/rt_writing(disabled) 매핑 제거, 다중 반복(운동=F45+헬스 등) 집계, 반복 붙은 프로젝트=루틴 자동 분류(휴식 승격). RecapView 참조. */
 /* (cleanup 2026-06-16) RoutineMemosView·FilesView 제거 — 회고 탭(RecapView)이 일지/노트/파일을 통합 제공. */
 
 /* ═══ 히스토리 뷰 (일일 활동 로그) ═══ */
@@ -1681,10 +1679,13 @@ const ActiveRecapRow = ({ t, isWork, pname, onEdit, onSaveRecaps, files, setFile
 const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, onUpdateHistRecaps, onUpdateTaskRecaps, recurrings, onToggleDay }) => {
   /* 완료(alldone) 칩 제거(2026-07-04, 소유자): 완료 회고는 각 프로젝트 칩의 '완료(N)' 섹션 + 루틴 칩에서 이미 보임 → 중복 제거.
      업무=프로젝트별 / 개인=루틴별+프로젝트별. 완료 task는 해당 프로젝트 칩 하단 완료 섹션에 뜸. */
+  /* 회고탭 루틴 분류 = 라이브 도출(2026-07-12): 반복(recurrings)이 하나라도 붙은 프로젝트 = 루틴(보라칩). 하드코딩 SD_ROUTINES 폐지 → 운동/보컬/글쓰기 칩의 F45·헬스·q1omsdk·dcfei54 매핑 복구 + 휴식(mm2tdvi 소속) 루틴 승격. */
+  const routineProjIds = new Set((recurrings || []).filter(r => !r.disabled && r.project).map(r => r.project));
+  const isRoutineTarget = (p) => isRoutineProj(p) || routineProjIds.has(p.id);
   const targets = (isWork
     ? (projects || []).map(p => ({ kind: "project", key: p.id, label: p.name }))
-    : [...SD_ROUTINES.map(r => ({ kind: "routine", key: r, label: r })),
-       ...(projects || []).filter(p => !isBucketProj(p) && !isRoutineProj(p)).map(p => ({ kind: "project", key: p.id, label: p.name }))]);
+    : [...(projects || []).filter(p => isRoutineTarget(p)).sort((a, b) => (a.order || 0) - (b.order || 0)).map(p => ({ kind: "routine", key: p.id, label: p.name })),
+       ...(projects || []).filter(p => !isBucketProj(p) && !isRoutineTarget(p)).sort((a, b) => (a.order || 0) - (b.order || 0)).map(p => ({ kind: "project", key: p.id, label: p.name }))]);
   const [selKey, setSelKey] = useState(targets[0] ? targets[0].kind + ":" + targets[0].key : "");
   const cur = targets.find(t => (t.kind + ":" + t.key) === selKey) || targets[0] || { kind: "none", key: "", label: "" };
   const pname = (id) => projects.find(p => p.id === id)?.name || "";
@@ -1721,17 +1722,18 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
   const routineEntries = useMemo(() => {
     if (cur.kind !== "routine") return [];
     const out = [];
-    /* B: 루틴=daily 반복 할일 → 진행중(tasks)·완료(history.orig) 인스턴스의 note/done */
-    const rid = SD_ROUTINE_RID[cur.key];
-    if (rid) {
-      tasks.forEach(t => { if (t.recurringId === rid && (t.notes || t.status === "done")) out.push({ key: "t" + t.id, date: t.recurringPeriod || t.planDate || "", text: t.notes || "✓ 예정", src: t.status === "done" ? "done" : "" }); });
-      (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && !it.memoOnly && !it.cancelled && it.orig && it.orig.recurringId === rid) out.push({ key: "h" + (it.orig.id || "") + day.date, date: it.orig.recurringPeriod || day.date, text: it.orig.notes || "✓ 완료", src: "done" }); })); /* ★memoOnly(📝메모만)·cancelled(취소)는 '기록·노트'서 제외(2026-07-08)=다른 4개 카운트경로와 정합 */
+    /* B: 루틴 = 그 영역 프로젝트(cur.key=프로젝트 id)에 붙은 모든 반복의 인스턴스 집계(운동=F45+헬스 등, 2026-07-12).
+       ★메모 있는 세션만 표시(소유자 2026-07-12) — done만 있고 메모 없는 세션은 제외(완료 수는 상단 '주간 루틴' 스트립·/sweep이 측정). done/완료 라벨(src)·"✓예정/✓완료" 플레이스홀더 폐지. */
+    const ridSet = new Set((recurrings || []).filter(r => r.project === cur.key).map(r => r.id));
+    if (ridSet.size) {
+      tasks.forEach(t => { if (t.recurringId && ridSet.has(t.recurringId) && t.notes && !t.cancelled) out.push({ key: "t" + t.id, date: t.recurringPeriod || t.planDate || "", text: t.notes }); });
+      (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && !it.cancelled && it.orig && ridSet.has(it.orig.recurringId) && it.orig.notes) out.push({ key: "h" + (it.orig.id || "") + day.date, date: it.orig.recurringPeriod || day.date, text: it.orig.notes }); })); /* ★memoOnly(📝메모만)=순수 메모 세션이므로 포함(요청2=메모 있는 세션 표시, 카운트만 중립). 취소·무메모만 제외 */
     }
-    /* 과거(B 전) /selfdev/logs·notes 보존 표시 */
-    Object.entries(logsAll).forEach(([date, day]) => { const r = day && day[cur.key]; if (r && (r.memo || r.done || r.tier)) out.push({ key: "l" + date, date, text: r.memo || (r.done ? "✓ 완료" : "기록"), src: [r.done ? "done" : "", r.tier ? "tier=" + r.tier : ""].filter(Boolean).join("·") }); });
-    Object.entries(notes).forEach(([id, n]) => { if (n && n.routine === cur.key) out.push({ key: "n" + id, date: n.date || "", text: n.text, src: "노트" }); });
+    /* 과거(B 전) /selfdev/logs·notes 보존 표시 — 영역명(cur.label) 키. 메모 있는 것만 */
+    Object.entries(logsAll).forEach(([date, day]) => { const r = day && day[cur.label]; if (r && r.memo) out.push({ key: "l" + date, date, text: r.memo }); });
+    Object.entries(notes).forEach(([id, n]) => { if (n && n.routine === cur.label && n.text) out.push({ key: "n" + id, date: n.date || "", text: n.text }); });
     return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  }, [logsAll, notes, tasks, history, cur.kind, cur.key]);
+  }, [logsAll, notes, tasks, history, recurrings, cur.kind, cur.key, cur.label]);
 
   const canUpload = FB_CONFIGURED && !!fbUser();
 
@@ -1760,10 +1762,10 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
 
       {cur.kind === "routine" && <div style={S.card}>
         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{cur.label} 기록·노트 ({routineEntries.length})</div>
-        {routineEntries.length === 0 && <div style={{ ...S.emp, padding: 12 }}>아직 기록 없음</div>}
+        {routineEntries.length === 0 && <div style={{ ...S.emp, padding: 12 }}>아직 남긴 메모 없음 · 완료 수는 위 '🔁 주간 루틴'에서</div>}
         {routineEntries.map(e => <div key={e.key} style={{ display: "flex", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
           <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0, marginTop: 2 }}>{(e.date || "").slice(5)}</span>
-          <span style={{ flex: 1, whiteSpace: "pre-wrap" }}>{e.text}{e.src && <span style={{ fontSize: 9, color: "#c4b5fd", marginLeft: 6 }}>{e.src}</span>}</span>
+          <span style={{ flex: 1, whiteSpace: "pre-wrap" }}>{e.text}</span>
         </div>)}
       </div>}
 
@@ -1782,7 +1784,7 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
 
       {/* 프로젝트-회고 입력 박스 제거(2026-07-06 소유자): 회고는 과제별 🪞회고(task.recaps)로 일원화.
           옛 /selfdev/inbox write(addNote)·weekly-review §2 수거 폐지. 과거 /selfdev logs·notes read-only 표시는 아래 목록에 유지. */}
-      {!isWork && cur.kind === "routine" && <div style={{ ...S.card, fontSize: 11, color: "#6b7280", lineHeight: 1.6 }}>📝 <b>루틴 메모 = 회고</b> — 오늘탭에서 그 루틴 task의 메모 한 줄로 기록하세요(전날 상속·캘린더 동기). 주1 <b>/sweep</b>이 영역 일지로 수거합니다. 위 목록은 지난 기록 보기.</div>}
+      {!isWork && cur.kind === "routine" && <div style={{ ...S.card, fontSize: 11, color: "#6b7280", lineHeight: 1.6 }}>📝 <b>루틴 메모 = 회고</b> — 오늘탭 '주간 루틴' <b>＋</b>(세션 기록)에 메모를 남기면 여기·캘린더에 이월됩니다. 주1 <b>/sweep</b>이 영역 일지로 수거. 위 목록은 지난 메모 보기(완료 수는 상단 '주간 루틴').</div>}
 
       {/* (2026-06-18) 공용 파일 카드 제거 — 파일은 회고 단위(RecapFileBox)에 종속: 회고 입력 카드 + 각 완료 카드 안에 */}
       {err && <div style={{ fontSize: 11, color: "#EF4444" }}>{err}</div>}
