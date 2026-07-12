@@ -414,6 +414,10 @@ const ROUTINE_PROJ_IDS = ["rt_workout", "rt_english", "rt_vocal", "rt_writing"];
    kind 수동관리·DB 직접쓰기 없이 새 영역에 반복만 걸면 자동으로 루틴이 됨. isRoutineProj·projSortKey가 참조 →
    회고탭·과제별·드롭다운·오늘탭 정렬이 한 규칙 공유. (기존 kind:routine·시드 id는 명시 override로 계속 존중.) */
 let ROUTINE_REC_PROJ_IDS = new Set();
+/* ★sweptThrough(2026-07-12·PDS §14.7): 루틴별 '마지막 주간 정제 종료일'(YYYY-MM-DD). App이 recurrings서 매 렌더 동기 →
+   routineMemoText가 그 이후 세션 note만 캘린더 glance로 도출(정제된 note는 일지·운영원칙에 이미 있으니 glance서 정리).
+   "" = 미정제(전부 표시). /sweep이 주간 정제 후 완료 주 토요일로 write(+savedAt bump). */
+let ROUTINE_SWEPT = {};
 const isBucketProj = (p) => p && (p.kind === "bucket" || PERSONAL_BUCKET_IDS.includes(p.id));
 const isRoutineProj = (p) => p && (p.kind === "routine" || ROUTINE_PROJ_IDS.includes(p.id) || ROUTINE_REC_PROJ_IDS.has(p.id));
 /* 지난 미완료 daily 루틴 인스턴스 = '오늘'·'미수행' 목록서 제외(2026-06-28). 루틴은 매일 새 인스턴스가 생성돼
@@ -1476,8 +1480,9 @@ const weekDoneCount = (doneSet, rid, wk) => { let n = 0; doneSet.forEach(k => { 
    취소(−)하면 그 세션이 자동 제외돼 메모도 캘린더서 사라짐. 별도 누적 저장 없음(=단일진실). n=최근 몇 개(늘어남=히스토리에 다 남음).
    opts.excludeId=이 세션 메모 제외(−직후), opts.includeId=취소된 이 세션도 강제 포함(히스토리탭 복원 시 closure history가 아직 cancelled라서). */
 const routineMemoText = (rid, history, n = 10, opts = {}) => {
+  const sw = ROUTINE_SWEPT[rid] || ""; /* ★§14.7: 정제 완료일 이후 세션 note만 glance(sw="" → 전부 통과) */
   const out = [];
-  (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && it.orig && it.orig.recurringId === rid && (it.orig.notes || "").trim() && it.orig.id !== opts.excludeId && (!it.cancelled || it.orig.id === opts.includeId)) out.push({ date: day.date || "", text: (it.orig.notes || "").trim() }); }));
+  (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && it.orig && it.orig.recurringId === rid && (it.orig.notes || "").trim() && it.orig.id !== opts.excludeId && (!it.cancelled || it.orig.id === opts.includeId) && (day.date || "") > sw) out.push({ date: day.date || "", text: (it.orig.notes || "").trim() }); }));
   out.sort((a, b) => a.date.localeCompare(b.date));
   return out.slice(-n).map(m => "[" + (m.date || "").slice(5) + "] " + m.text).join("\n");
 };
@@ -1815,6 +1820,7 @@ function App({ onSwitchWs }) {
   /* "반복 붙은 프로젝트=루틴" 자동 도출 동기(2026-07-12): 매 렌더 recurrings에서 재계산해 모듈 집합에 반영(자식 렌더 前·동기). 새 영역에 반복 걸면 자동 루틴 — kind 수동관리·DB 직접쓰기 불필요.
      ★개인 워크스페이스 한정: 업무는 recurring이 proj_etc(기타)에 붙어 루틴 개념이 아님(도출하면 기타가 맨앞 오분류) → 업무는 빈 집합=정렬 무변경. */
   ROUTINE_REC_PROJ_IDS = isWork ? new Set() : new Set((recurrings || []).filter(r => !r.disabled && r.project).map(r => r.project));
+  ROUTINE_SWEPT = Object.fromEntries((recurrings || []).map(r => [r.id, r.sweptThrough || ""])); /* ★§14.7: 루틴별 정제 종료일 동기(routineMemoText glance 필터) */
   const [editTarget, setEditTarget] = useState(null);
   const [clearTarget, setClearTarget] = useState(null); /* 오늘에서 내리기 얼럿 대상(2026-07-04) */
   const [toast, setToast] = useState(null);
