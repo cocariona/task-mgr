@@ -1703,12 +1703,12 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
     catch (e) { setErr((e && e.message) || String(e)); }
   })(); }, []); /* eslint-disable-line */
 
-  const active = useMemo(() => cur.kind === "project" ? tasks.filter(t => t.status !== "done" && t.project === cur.key) : [], [tasks, cur.kind, cur.key]);
+  const active = useMemo(() => cur.kind === "project" ? tasks.filter(t => t.status !== "done" && t.project === cur.key) : cur.kind === "routine" ? tasks.filter(t => t.status !== "done" && t.project === cur.key && !t.recurringId) : [], [tasks, cur.kind, cur.key]); /* 루틴 칩=그 영역의 비반복 일회성 할일만(반복 인스턴스는 기록·노트/오늘탭 스트립서 봄) — 2026-07-12 */
   const doneHist = useMemo(() => {
     const out = [];
     (history || []).forEach(day => (day.items || []).forEach(it => {
       if (it.type !== "done" || !it.orig) return;
-      const ok = cur.kind === "alldone" ? !it.orig.recurringId : cur.kind === "project" ? it.orig.project === cur.key : false; /* 완료 칩=실제 과제만, 루틴 완료 제외(루틴 칩에서 봄)(2026-07-04) */
+      const ok = cur.kind === "alldone" ? !it.orig.recurringId : cur.kind === "project" ? it.orig.project === cur.key : cur.kind === "routine" ? (it.orig.project === cur.key && !it.orig.recurringId) : false; /* 루틴 칩도 그 영역의 비반복 일회성 완료+회고를 노출(반복 인스턴스 제외=기록·노트서 봄)(2026-07-12). project/alldone 칩은 불변 */
       if (ok) out.push({ key: (it.orig.id || it.text) + day.date, origId: it.orig.id, text: it.text, notes: it.orig.notes, recaps: it.orig.recaps || (it.orig.recap ? [{ id: "lg_" + (it.orig.id || ""), text: it.orig.recap, ts: day.date }] : []), proj: it.projectName || pname(it.orig.project), date: day.date, sub: it.isSub, parent: it.parentText });
     }));
     return out;
@@ -1756,12 +1756,6 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
         ); })}
       </div>
 
-      {cur.kind === "project" && <div style={S.card}>
-        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>진행중 ({active.length})</div>
-        {active.length === 0 && <div style={{ ...S.emp, padding: 12 }}>없음</div>}
-        {active.map(t => <ActiveRecapRow key={t.id} t={t} isWork={isWork} pname={pname} onEdit={onEdit} onSaveRecaps={onUpdateTaskRecaps} files={files} setFiles={setFiles} canUpload={canUpload} />)}
-      </div>}
-
       {cur.kind === "routine" && <div style={S.card}>
         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{cur.label} 기록·노트 ({routineEntries.length})</div>
         {routineEntries.length === 0 && <div style={{ ...S.emp, padding: 12 }}>아직 남긴 메모 없음 · 완료 수는 위 '🔁 주간 루틴'에서</div>}
@@ -1771,8 +1765,14 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
         </div>)}
       </div>}
 
-      {cur.kind !== "routine" && cur.kind !== "none" && <div>
-        <div style={{ fontSize: 12, fontWeight: 600, margin: "10px 2px 6px" }}>완료 ({doneView.total}){doneView.pending.length > 0 && <span style={{ fontSize: 10, color: "#7C3AED", fontWeight: 600 }}> · 회고 대기 {doneView.pending.length}</span>}</div>
+      {(cur.kind === "project" || (cur.kind === "routine" && active.length > 0)) && <div style={S.card}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>진행중 ({active.length}){cur.kind === "routine" && <span style={{ fontSize: 10, fontWeight: 400, color: "#9ca3af", marginLeft: 6 }}>· 일회성 할일</span>}</div>
+        {active.length === 0 && <div style={{ ...S.emp, padding: 12 }}>없음</div>}
+        {active.map(t => <ActiveRecapRow key={t.id} t={t} isWork={isWork} pname={pname} onEdit={onEdit} onSaveRecaps={onUpdateTaskRecaps} files={files} setFiles={setFiles} canUpload={canUpload} />)}
+      </div>}
+
+      {(cur.kind === "project" || (cur.kind === "routine" && doneView.total > 0)) && <div>
+        <div style={{ fontSize: 12, fontWeight: 600, margin: "10px 2px 6px" }}>완료 ({doneView.total}){cur.kind === "routine" && <span style={{ fontSize: 10, fontWeight: 400, color: "#9ca3af" }}> · 일회성 할일</span>}{doneView.pending.length > 0 && <span style={{ fontSize: 10, color: "#7C3AED", fontWeight: 600 }}> · 회고 대기 {doneView.pending.length}</span>}</div>
         {doneView.total === 0 && <div style={{ ...S.emp, padding: 12 }}>완료 기록 없음 (task 완료 시 모임)</div>}
         {doneView.pending.map(e => <RecapCompletionCard key={e.key} e={e} onSaveRecaps={onUpdateHistRecaps} files={files} setFiles={setFiles} canUpload={canUpload} />)}
         {doneView.recapped.length > 0 && <>
