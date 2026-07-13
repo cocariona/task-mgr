@@ -256,7 +256,7 @@ const fmtSize = (b) => b >= 1048576 ? (b/1048576).toFixed(1)+" MB" : b >= 1024 ?
 
 const GCAL_URL = GAS_URL;
 /* ─── 캘린더 JSONP 동기화 (add / update / delete) ─── */
-const calSync = (action, params) => new Promise((resolve) => {
+const calSyncOnce = (action, params) => new Promise((resolve) => {
   const cb = "_gcal_" + gid();
   const timer = setTimeout(() => { delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); }, 45000); /* GAS가 느림(실측 update~29s·list~15-19s) → 45s로(2026-07-03). 20s는 update가 타임아웃돼 '보류' 다발이었음 */
   window[cb] = (r) => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve(r || { success: false }); };
@@ -266,6 +266,17 @@ const calSync = (action, params) => new Promise((resolve) => {
   s.onerror = () => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); };
   document.body.appendChild(s);
 });
+/* ★재시도(2026-07-13·push 신뢰성): JSONP 실패(GAS 콜드스타트·onerror·45s 타임아웃)는 흔하고 조용해서 '만들었는데 캘린더 미반영'의 주범.
+   실패({success:false}) 시 최대 tries회 재시도(2s 간격). 멱등키(calKey)가 있어 add/update 재시도해도 GAS findByKey가 기존 이벤트 반환=중복 0. list/delete도 안전(읽기·멱등). 콜드스타트는 1차서 GAS 깨어나 2차 성공이 흔함. */
+const calSync = async (action, params, tries = 2) => {
+  let last = { success: false };
+  for (let i = 0; i < tries; i++) {
+    last = await calSyncOnce(action, params);
+    if (last && last.success !== false) return last; /* add=eventId 반환(success 무), list/delete=success:true → 통과. 실패만 재시도 */
+    if (i < tries - 1) await new Promise(res => setTimeout(res, 2000));
+  }
+  return last || { success: false };
+};
 /* 멱등키(2026-07-06 미래 롤링): 반복 인스턴스는 회차별 '안정 키'(recurringId@period)를 쓴다 —
    미래에 미리 얹은 placeholder 이벤트와, 그날이 와서 생성되는 당일 인스턴스가 같은 키를 공유해
    GAS findByKey가 재연결(중복 0). 일반 task는 기존대로 고유 id. */
@@ -321,13 +332,18 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
     if (r.disabled) return; /* ★M5: 삭제 표식된 시드 루틴은 인스턴스 생성 안 함 */
     if (r.type === "count" || COUNT_MIG_IDS.has(r.id)) return; /* ★주N회(2026-07-07): 오늘 할 일에 요일별 인스턴스 안 만듦 — 오늘 탭 카운터(＋/−)에서만. id-스킵=전환 tick 레이스 방지 */
     const type = r.type || "weekly";
-    let period;
+    let period; let effTime = r.time || ""; /* ★effTime: 회차 override 시각 반영(2026-07-13) */
     if (type === "daily") {
       period = TODAY;
     } else if (type === "weekly") {
       const days = r.dows || (r.dow != null ? [r.dow] : []); /* 복수 요일(dows) 지원 · 기존 dow 폴백(2026-07-04) */
-      if (!days.includes(dow)) return;
-      period = days.length > 1 ? weekId + "-" + dow : weekId; /* 복수면 요일별 인스턴스, 단일이면 기존 period 호환(중복 방지) */
+      const multi = days.length > 1;
+      const ovs = (!multi && r.overrides) ? r.overrides : null; /* ★회차 override(단일요일 weekly) */
+      /* ★cross-week 이동 지원(2026-07-13 적대검증): TODAY가 어떤 회차의 override 날짜면 그 회차키(원래 주)로 생성 → recurOccurrences가 얹은 placeholder(period=그 회차키)와 멱등 재연결.
+         아니면 정상 요일이되, 이번 주가 override로 옮겨졌으면(overrides[weekId] 있음) 원래 요일엔 인스턴스 skip. */
+      let ovKey = null; if (ovs) { for (const k in ovs) { if (ovs[k] && ovs[k].date === TODAY) { ovKey = k; break; } } }
+      if (ovKey) { period = ovKey; effTime = ovs[ovKey].time || effTime; }
+      else { if (!days.includes(dow)) return; if (ovs && ovs[weekId] && ovs[weekId].date) return; period = multi ? weekId + "-" + dow : weekId; }
     } else if (type === "monthly") {
       if (r.lastDay) { if (todayDom !== lastDom) return; }
       else { const effDom = Math.min(r.dom || 1, lastDom); if (todayDom !== effDom) return; } /* ★minor: 29·30·31일은 짧은 달에 말일로 클램프(결번 방지) */
@@ -346,7 +362,7 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
     newTasks.push({
       id: gid(), text: r.text, status: "action", project: r.project || "proj_etc",
       scheduledDate: "", scheduledLabel: "", planDate: TODAY,
-      createdAt: TODAY, notes: carried, focus: false, subtasks: [], calEventId: "", calUpdated: 0, planTime: r.time || "", protocol: r.protocol || "", /* focus=집중 · planTime=반복시간 · protocol=실행방법(선택, 2026-07-01) */
+      createdAt: TODAY, notes: carried, focus: false, subtasks: [], calEventId: "", calUpdated: 0, planTime: effTime, protocol: r.protocol || "", /* focus=집중 · planTime=반복시간(회차 override 반영) · protocol=실행방법(선택, 2026-07-01) */
       recurringId: r.id, recurringPeriod: period
     });
   });
@@ -370,13 +386,19 @@ const recurOccurrences = (r, afterStr, endDate) => {
   while (d <= endDate) {
     const ds = dateStrOf(d);
     if (type === "daily") out.push({ date: ds, period: ds });
-    else if (type === "weekly" || type === "count") { if (days.includes(d.getDay())) out.push({ date: ds, period: days.length > 1 ? weekIdOf(d) + "-" + d.getDay() : weekIdOf(d) }); } /* ★count(주N회)도 권장 요일(dows)로 캘린더 이벤트 lay=옵션B glance. 기존 weekly 회차키와 동일→재연결(desc만 갱신) */
+    else if (type === "weekly" || type === "count") { if (days.includes(d.getDay())) { const multi = days.length > 1; const wk = weekIdOf(d); const period = multi ? wk + "-" + d.getDay() : wk; const ov = (!multi && type === "weekly" && r.overrides) ? r.overrides[wk] : null; /* ★회차 override(2026-07-13·단일요일 weekly만): override 있는 주는 여기선 skip → 아래서 ov.date로 직접 emit(원래 요일 범위 밖이어도 lay 보장·회차키=wk 유지). 미설정=기존 dow */ if (!(ov && ov.date)) out.push({ date: ds, period }); } } /* ★count(주N회)도 권장 요일(dows)로 캘린더 이벤트 lay=옵션B glance. 기존 weekly 회차키와 동일→재연결(desc만 갱신) */
     else if (type === "monthly") {
       const lastDom = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
       const hit = r.lastDay ? (d.getDate() === lastDom) : (d.getDate() === Math.min(r.dom || 1, lastDom)); /* 말일·dom 클램프 = generateRecurringTasks와 동일 */
       if (hit) out.push({ date: ds, period: monthIdOf(d) });
     }
     d.setDate(d.getDate() + 1);
+  }
+  /* ★회차 override 직접 emit(2026-07-13·단일요일 weekly): 각 override를 ov.date로 직접 얹음(원래 요일이 범위 밖·지난 경우에도 lay 보장). 회차키=wk 유지→인스턴스와 멱등 재연결. afterStr 초과~endDate 이하·미래만. */
+  if (type === "weekly" && days.length === 1 && r.overrides) {
+    const afterS = afterStr || dateStrOf(new Date());
+    const endS = dateStrOf(endDate);
+    for (const wk in r.overrides) { const ov = r.overrides[wk]; if (ov && ov.date && ov.date > afterS && ov.date <= endS) out.push({ date: ov.date, period: wk, time: ov.time || "" }); }
   }
   return out;
 };
@@ -1357,7 +1379,14 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
   const [prj, setPrj] = useState(r.project || "");
   const [dws, setDws] = useState(wdays);
   const [fq, setFq] = useState(r.freqPerWeek || 1); /* 주N회 목표 편집(2026-07-07) */
+  const [ovWk, setOvWk] = useState(""); const [ovDate, setOvDate] = useState(""); const [ovTime, setOvTime] = useState(""); /* ★회차 override 편집(2026-07-13·단일요일 weekly) */
   useEffect(() => { setD(r.protocol || ""); setTxt(r.text || ""); setTm(r.time || ""); setPrj(r.project || ""); setDws(r.dows || (r.dow != null ? [r.dow] : [])); setFq(r.freqPerWeek || 1); }, [r.id, r.protocol, r.text, r.time, r.project, r.dow, r.freqPerWeek]); /* eslint-disable-line */
+  /* ★회차 이동(2026-07-13): 단일요일 weekly(링글·레슨)만. 앞으로의 4회차(그 요일 날짜+회차키 wk)를 보여주고 회차별 override 지정/해제 */
+  const isSingleWeekly = type === "weekly" && wdays.length === 1;
+  const upcoming = (() => { if (!isSingleWeekly) return []; const dowN = wdays[0]; const out = []; const dd = new Date(TODAY + "T00:00:00"); for (let i = 0; i < 35 && out.length < 4; i++) { if (dd.getDay() === dowN) out.push({ wk: weekIdOf(dd), defDate: dateStrOf(dd) }); dd.setDate(dd.getDate() + 1); } return out; })();
+  const pickOcc = (wk, defDate) => { const cur = (r.overrides || {})[wk]; setOvWk(wk); setOvDate((cur && cur.date) || defDate); setOvTime((cur && cur.time) || r.time || ""); };
+  const saveOv = () => { if (!ovWk || !ovDate || ovDate < TODAY) return; onUpdate(r.id, { overrides: { ...(r.overrides || {}), [ovWk]: { date: ovDate, time: ovTime } } }); setOvWk(""); }; /* ★과거 날짜 금지(2026-07-13 적대검증): 유실·stale 이벤트 방지 */
+  const clearOv = (wk) => { const o = { ...(r.overrides || {}) }; delete o[wk]; onUpdate(r.id, { overrides: o }); if (ovWk === wk) setOvWk(""); };
   const dirty = d !== (r.protocol || "");
   const sortJoin = (a) => [...a].sort((x, y) => x - y).join(",");
   const dirtySched = txt.trim() !== (r.text || "") || tm !== (r.time || "") || prj !== (r.project || "") || (type === "weekly" && sortJoin(dws) !== sortJoin(wdays)) || (type === "count" && (String(fq) !== String(r.freqPerWeek || 1) || sortJoin(dws) !== sortJoin(wdays)));
@@ -1383,6 +1412,23 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
           </div>}
           {dirtySched && <button style={{ ...S.btn("#4338CA"), fontSize: 11 }} onClick={saveSched}>일정 저장</button>}
         </div>
+        {isSingleWeekly && <div style={{ marginBottom: 6, background: "#F9FAFB", borderRadius: 6, padding: "5px 7px" }}>
+          <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 3 }}>📅 특정 회차 이동 <span style={{ color: "#9ca3af" }}>(그 주만 다른 날·시간으로 — 캘린더+할일 그 날로, 회차키 유지)</span></div>
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+            {upcoming.map(o => { const ov = (r.overrides || {})[o.wk]; const on = ovWk === o.wk; return (
+              <span key={o.wk} style={{ display: "inline-flex", alignItems: "center", gap: 1 }}>
+                <button type="button" onClick={() => pickOcc(o.wk, o.defDate)} style={{ ...S.gh, fontSize: 10, padding: "2px 6px", background: on ? "#EEF2FF" : ov ? "#FEF3C7" : "#fff", borderColor: on ? "#A5B4FC" : ov ? "#FDE68A" : "#e5e7eb", fontWeight: (on || ov) ? 700 : 400 }} title={ov ? ("이동됨 → " + ov.date + (ov.time ? " " + ov.time : "")) : (o.defDate + " (기본 요일)")}>{((ov && ov.date) || o.defDate).slice(5)}{ov ? " ↦" : ""}</button>
+                {ov && <button type="button" onClick={() => clearOv(o.wk)} style={{ ...S.gh, fontSize: 10, padding: "1px 4px", color: "#EF4444", lineHeight: 1 }} title="이 회차 이동 취소(기본 요일로)">×</button>}
+              </span>
+            ); })}
+          </div>
+          {ovWk && <div style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
+            <input type="date" min={TODAY} value={ovDate} onChange={e => setOvDate(e.target.value)} style={{ ...S.fld, fontSize: 11, width: 138, flex: "none" }} />
+            <input type="time" value={ovTime} onChange={e => setOvTime(e.target.value)} style={{ ...S.fld, fontSize: 11, width: 96, flex: "none" }} title="시간(선택)" />
+            <button type="button" style={{ ...S.btn("#4338CA"), fontSize: 10 }} onClick={saveOv}>이동 저장</button>
+            <button type="button" style={{ ...S.gh, fontSize: 10 }} onClick={() => setOvWk("")}>취소</button>
+          </div>}
+        </div>}
         <textarea value={d} onChange={e => setD(e.target.value)} rows={4} placeholder={"실행 방법 (고정 참고). 예:\n[실행] F45 클래스 참석\n[tier별] 최소=푸시업10+스쿼트10 / 보통=F45 / 최대=F45 그대로"}
           style={{ ...S.ta, minHeight: 0, fontSize: 12 }} />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
@@ -2107,7 +2153,7 @@ function App({ onSwitchWs }) {
       const ridOk = {}; /* rid → 전부 성공 시에만 futureThrough 전진(부분 실패는 다음 로드 재시도, 회차키라 중복 안 남) */
       for (let i = 0; i < jobs.length; i += CAP) {
         await Promise.all(jobs.slice(i, i + CAP).map(async ({ r, occ }) => {
-          const cp = calMakeParams({ id: "", recurringId: r.id, recurringPeriod: occ.period, text: r.text, project: r.project, planDate: occ.date, planTime: r.time || "", protocol: r.protocol || "", notes: routineMemoText(r.id, history) }, projects, wsSnap.calPrefix); /* prefix 스냅샷 + notes=취소 안 된 세션 메모 도출(옵션B: 권장요일 desc=실행방법+최근 메모→glance) */
+          const cp = calMakeParams({ id: "", recurringId: r.id, recurringPeriod: occ.period, text: r.text, project: r.project, planDate: occ.date, planTime: occ.time || r.time || "", protocol: r.protocol || "", notes: routineMemoText(r.id, history) }, projects, wsSnap.calPrefix); /* prefix 스냅샷 + notes=취소 안 된 세션 메모 도출(옵션B: 권장요일 desc=실행방법+최근 메모→glance). occ.time=회차 override 시각 */
           if (!cp) return;
           const res = await calSync("add", cp);
           if (!(res && res.eventId)) ridOk[r.id] = false;
@@ -2209,7 +2255,7 @@ function App({ onSwitchWs }) {
     let ok = true;
     for (let i = 0; i < occs.length; i += 5) {
       await Promise.all(occs.slice(i, i + 5).map(async occ => {
-        const cp = calMakeParams({ id: "", recurringId: rec.id, recurringPeriod: occ.period, text: rec.text, project: rec.project, planDate: occ.date, planTime: rec.time || "", protocol: rec.protocol || "", notes: memoTxt }, projects, wsPrefix); /* notes=취소 안 된 세션 메모 도출(옵션B) */
+        const cp = calMakeParams({ id: "", recurringId: rec.id, recurringPeriod: occ.period, text: rec.text, project: rec.project, planDate: occ.date, planTime: occ.time || rec.time || "", protocol: rec.protocol || "", notes: memoTxt }, projects, wsPrefix); /* notes=취소 안 된 세션 메모 도출(옵션B). occ.time=회차 override 시각 */
         if (!cp) return;
         const res = await calSync("add", cp);
         if (!(res && res.eventId)) ok = false;
@@ -2224,7 +2270,7 @@ function App({ onSwitchWs }) {
        요일·시간 변경=기존 이벤트 무효 → 삭제 후(전파 대기 2.5s) 재생성 / 설명·제목·과제만 → 삭제 없이 add로 in-place 갱신(사라짐 0) / 기타(freqPerWeek 등)=이벤트 무변경. */
     if (!newRec.disabled) {
       const wsSnap = WS; /* 클릭 시점 워크스페이스 고정 → setTimeout/async 지연 중 전환돼도 오염 안 됨 */
-      const schedChanged = ["time", "dows", "dow", "type", "dom", "lastDay"].some(k => k in patch);
+      const schedChanged = ["time", "dows", "dow", "type", "dom", "lastDay", "overrides"].some(k => k in patch); /* ★overrides(회차 이동)=schedule 변경 → 미래 placeholder 삭제 후 재-lay(2026-07-13) */
       if (schedChanged) deleteFuturePlaceholders(id).then(() => setTimeout(() => layFutureForRecurring(newRec, wsSnap), 2500));
       else if (["protocol", "text", "project"].some(k => k in patch)) layFutureForRecurring(newRec, wsSnap);
     } else deleteFuturePlaceholders(id);
