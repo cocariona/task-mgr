@@ -147,9 +147,30 @@ const loadCalToken = async () => {
   } catch {}
 };
 
+/* ★기기 계측(P0·2026-07-17·PDS §14.8 ⑤): "미동기가 회사 PC 에서만 나나?" 는 **기기 식별자가 없어 판정 불가**였다(§14.8 ③).
+   프록시 차단·GAS 콜드스타트·탭 닫힘·네트워크 글리치가 전부 동일 지문(savedAt 은 갱신됐는데 calEventId 만 빔)을 남겨 비진단적.
+   → devId(기기) + failMode(왜) 두 축을 심어 1주 관측으로 실증한다. ★관측 전 원인 단정 금지.
+   저장은 **blob 안**(/personal·/data)에만 — RTDB 규칙(SECURITY_SETUP.md §2)이 data·personal·files·calToken 4개만 잠그고
+   catch-all 이 없어 **기본 거부** → /calFailures 같은 신규 최상위 경로는 앱(idToken)이 못 쓴다(2026-07-17 실측 401).
+   blob 하위는 규칙이 상속되므로 소유자의 Firebase 콘솔 수동작업 0. */
+const DEV_ID = (() => {
+  try {
+    let d = localStorage.getItem("tm-devid");
+    if (!d) { d = "d_" + Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4); localStorage.setItem("tm-devid", d); }
+    return d;
+  } catch { return "eph_" + Math.random().toString(36).slice(2, 8); } /* localStorage 막힌 환경(L1896 주석) → 세션 한정 id. 무기록보다 나음 */
+})();
+const _calFailBuf = []; /* 실패 링버퍼(캡 20) — calSync 가 재시도 소진 후 push, cloudSave 가 blob 에 실어보냄(별도 write 경로 불필요) */
+const calLogFailure = (rec) => { try { _calFailBuf.push(rec); if (_calFailBuf.length > 20) _calFailBuf.splice(0, _calFailBuf.length - 20); } catch {} };
+
 /* 클라우드 저장: Firebase PUT (1회 요청, 2초 디바운스) */
 let _saveTimer = null, _pendingData = null, _pendingPath = null;
 const cloudSave = (data) => {
+  /* ★P0 계측 부착(2026-07-17·§14.8 ⑤): 이 blob 을 마지막으로 쓴 기기(lastWriter) + 이 기기가 겪은 최근 GAS 실패(calFailures).
+     백스톱이 45분마다 blob 을 읽어 로그에 영속시킨다. 한계(수용): ⓐ 실패는 *다음* 저장 때 실림(add 실패는 최대 45s 뒤라 직전
+     저장 이후일 수 있음 — 계속 쓰면 곧 실리고 탭닫기 flush 도 있음) ⓑ 다른 기기 저장이 LWW 로 덮어씀(단 **실패한 기기가 곧
+     쓰는 기기**다 = RTDB 는 통과하고 GAS 만 막히므로 실패는 실린다. 백스톱 로그가 영속 사본). */
+  data = { ...data, lastWriter: { devId: DEV_ID, at: new Date().toISOString() }, ...(_calFailBuf.length ? { calFailures: _calFailBuf.slice(-20) } : {}) };
   _pendingData = data; /* ★자정 리로드·탭닫기 flush용으로 대기 데이터 보관(2026-07-04) */
   /* ★E2(2026-07-05): 저장 대상 경로를 '예약 시점'에 고정(closure). 디바운스 2초 내 워크스페이스 전환 시
      flush가 fbDataUrl()로 새 WS.fbPath를 읽어 옛 워크스페이스 블롭을 반대편(/data↔/personal)에 덮어쓰던
@@ -256,14 +277,24 @@ const fmtSize = (b) => b >= 1048576 ? (b/1048576).toFixed(1)+" MB" : b >= 1024 ?
 
 const GCAL_URL = GAS_URL;
 /* ─── 캘린더 JSONP 동기화 (add / update / delete) ─── */
+/* ★P0 계측(2026-07-17·§14.8 ⑤): 세 실패 경로는 **원래도 코드에 구분돼 있었으나 전부 동일한 {success:false} 로 뭉개져 버려졌다**
+   — 그래서 "프록시냐 콜드스타트냐"가 판정 불가였다(§14.8 ③). failMode+ms 를 실어 진단 가능하게 만든다:
+     onerror = 스크립트 **로드 자체** 실패(네트워크/프록시 차단·보통 <1s) / timeout = 콜백 미도래(GAS 콜드스타트·45s) / gas = GAS 가 거절(토큰 게이트 등).
+   ★성공 객체는 **원본 그대로 통과**(호출측이 eventId/events/updated/idempotent 를 읽음 — 건드리면 안 됨). */
 const calSyncOnce = (action, params) => new Promise((resolve) => {
+  const t0 = Date.now();
   const cb = "_gcal_" + gid();
-  const timer = setTimeout(() => { delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); }, 45000); /* GAS가 느림(실측 update~29s·list~15-19s) → 45s로(2026-07-03). 20s는 update가 타임아웃돼 '보류' 다발이었음 */
-  window[cb] = (r) => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve(r || { success: false }); };
+  const fin = (r) => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve(r); };
+  const timer = setTimeout(() => fin({ success: false, failMode: "timeout", ms: Date.now() - t0 }), 45000); /* GAS가 느림(실측 update~29s·list~15-19s) → 45s로(2026-07-03). 20s는 update가 타임아웃돼 '보류' 다발이었음 */
+  window[cb] = (r) => {
+    if (!r) return fin({ success: false, failMode: "empty", ms: Date.now() - t0 });
+    if (r.success === false) return fin({ ...r, failMode: "gas", ms: Date.now() - t0 });
+    return fin(r); /* 성공 = 원본 무변경 */
+  };
   const qs = new URLSearchParams({ ...params, action, callback: cb, ...(_calToken ? { token: _calToken } : {}) });
   const s = document.createElement("script");
   s.src = `${GCAL_URL}?${qs}`;
-  s.onerror = () => { clearTimeout(timer); delete window[cb]; if (s.parentNode) s.remove(); resolve({ success: false }); };
+  s.onerror = () => fin({ success: false, failMode: "onerror", ms: Date.now() - t0 });
   document.body.appendChild(s);
 });
 /* ★재시도(2026-07-13·push 신뢰성): JSONP 실패(GAS 콜드스타트·onerror·45s 타임아웃)는 흔하고 조용해서 '만들었는데 캘린더 미반영'의 주범.
@@ -275,6 +306,12 @@ const calSync = async (action, params, tries = 2) => {
     if (last && last.success !== false) return last; /* add=eventId 반환(success 무), list/delete=success:true → 통과. 실패만 재시도 */
     if (i < tries - 1) await new Promise(res => setTimeout(res, 2000));
   }
+  /* ★P0(§14.8 ⑤): 재시도까지 소진한 **최종** 실패만 기록(중간 실패는 노이즈). 다음 cloudSave 가 blob 에 실어보냄.
+     절대 throw/블로킹 금지 — 진단용이지 기능이 여기 의존하지 않는다. key=멱등키(어느 task/회차인지 식별). */
+  try {
+    calLogFailure({ at: new Date().toISOString(), action, key: (params && params.key) || "", devId: DEV_ID,
+                    failMode: (last && last.failMode) || "unknown", ms: (last && last.ms) || 0, tries });
+  } catch {}
   return last || { success: false };
 };
 /* 멱등키(2026-07-06 미래 롤링): 반복 인스턴스는 회차별 '안정 키'(recurringId@period)를 쓴다 —
