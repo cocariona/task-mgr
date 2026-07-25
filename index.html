@@ -1460,7 +1460,14 @@ const HistRow = ({ item, date, idx, onRestore, onUncancel, onEditMemo, onDeleteM
   const t = HTYPE[item.type] || HTYPE.done;
   const orig = item.orig || {};
   const hasCtx = item.type === "done" && (orig.notes || orig.recap); /* 완료 할일의 맥락(메모)·회고를 히스토리서도 조회(2026-07-01) */
-  const isRoutineMemo = item.type === "done" && orig.recurringId && (orig.notes || "").trim(); /* 루틴 메모 항목(memoOnly + done-with-메모) → 수정/삭제 대상(2026-07-25) */
+  /* ★완료 메모 수정/삭제 대상(2026-07-25 확장·소유자): 루틴 세션 메모 한정 → **모든 완료 항목의 메모**(업무·개인 공통).
+     근거: doneTask 가 tasks[] 에서 제거하고 orig 에 full 스냅샷을 넣으므로(L2670·L2675) 최상위 완료 항목은
+     **history.orig 이 유일 정본** = 여기서 고치는 게 곧 원본 수정(되돌리기도 orig 에서 복원 → 정합).
+     ★서브태스크(isSub) 제외: 완료 서브는 부모 tasks[].subtasks[] 에 **살아있고** history.orig 은 스냅샷(L2370)이라
+     여기만 고치면 둘이 갈라진다. 실측(2026-07-25 전수) 완료 서브 메모 **0건** — 실사용 손실 없음.
+     필요해지면 부모 subtasks 까지 write-through 로 확장할 것(그 전엔 열지 말 것). */
+  const canEditMemo = item.type === "done" && !item.isSub && (orig.notes || "").trim();
+  const isRoutineMemo = canEditMemo && orig.recurringId; /* 루틴만 캘린더 글랜스 재-lay 대상 → 안내문구 분기 */
   return (
     <div onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 4px", fontSize: 13, borderRadius: 4, background: h ? "#f8fafc" : "transparent" }}>
@@ -1477,8 +1484,8 @@ const HistRow = ({ item, date, idx, onRestore, onUncancel, onEditMemo, onDeleteM
         {item.time && <span style={{ fontSize: 10, color: "#c0c0c0", flexShrink: 0 }}>{item.time}</span>}
         {item.cancelled && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", color: "#059669", borderColor: "#A7F3D0" }} onClick={() => onUncancel(date, idx)} title="취소 복원 — 다시 이번 주 카운트에 포함">↺ 복원</button>}
         {h && item.type === "done" && !item.cancelled && !item.memoOnly && !item.routineKey && !item.isSub && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
-        {h && isRoutineMemo && !item.cancelled && onEditMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => { setEt(orig.notes || ""); setEditing(true); setOpen(true); }} title="메모 수정 — 캘린더 글랜스에 반영">✏️</button>}
-        {h && isRoutineMemo && !item.cancelled && onDeleteMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", color: "#DC2626" }} onClick={() => onDeleteMemo(date, idx)} title={item.memoOnly ? "이 메모 삭제 — 캘린더 글랜스서 제거(↺ 복원 가능)" : "메모만 삭제 — 수행 카운트는 유지·캘린더서 제거(되돌리기 토스트로 복원)"}>🗑</button>}
+        {h && canEditMemo && !item.cancelled && onEditMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => { setEt(orig.notes || ""); setEditing(true); setOpen(true); }} title={isRoutineMemo ? "메모 수정 — 캘린더 글랜스에 반영" : "메모 수정 — 완료 기록은 그대로"}>✏️</button>}
+        {h && canEditMemo && !item.cancelled && onDeleteMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", color: "#DC2626" }} onClick={() => onDeleteMemo(date, idx)} title={item.memoOnly ? "이 메모 삭제 — 캘린더 글랜스서 제거(↺ 복원 가능)" : (isRoutineMemo ? "메모만 삭제 — 수행 카운트는 유지·캘린더서 제거(되돌리기 토스트로 복원)" : "메모만 삭제 — 완료 기록은 유지(되돌리기 토스트로 복원)")}>🗑</button>}
       </div>
       {hasCtx && open && <div style={{ marginLeft: 28, marginBottom: 6 }}>
         {editing && <div style={{ marginTop: 2 }}>
@@ -2491,7 +2498,7 @@ function App({ onSwitchWs }) {
 
   /* 주N회 '📝 메모만'(2026-07-08): 세션 카운트 없이 발견/메모만 기록 → 캘린더 권장요일 desc로 이월(다음 glance 적용).
      '수행은 안 했지만 남길 게 있는' 경우(예: 레슨만 받은 날) 자리. memoOnly=true → routineDoneSet·− 스캔·완료수서 제외(카운트 무관),
-     routineMemoText엔 포함(비취소 done+notes)돼 이월. 히스토리서 ✏️(editRoutineMemo)·🗑(deleteRoutineMemo)로 수정/삭제·↺복원 가능(2026-07-25). */
+     routineMemoText엔 포함(비취소 done+notes)돼 이월. 히스토리서 ✏️(editHistMemo)·🗑(deleteHistMemo)로 수정/삭제·↺복원 가능(2026-07-25). */
   const addRoutineMemo = (rid, memo) => {
     const rec = recurrings.find(r => r.id === rid); if (!rec) return;
     const memoTrim = (memo || "").trim();
@@ -2506,9 +2513,11 @@ function App({ onSwitchWs }) {
     layFutureForRecurring(rec, WS, withNew); /* 캘린더 desc 즉시 이월(카운트 변화 0) */
     showT("\"" + rec.text + "\" 메모 저장 ✅ (카운트 변화 없음)", null);
   };
-  /* 루틴 메모 삭제(2026-07-25 통일·소유자): memoOnly=항목 취소 / done-with-memo=메모만 클리어(★수행 카운트 유지). 재-lay로 캘린더 글랜스 반영. 되돌리기 토스트로 복원.
+  /* 완료 메모 삭제(2026-07-25 통일 → 같은 날 **전 완료항목으로 확장**·소유자: 업무·개인 공통):
+     memoOnly=항목 취소 / done-with-memo=메모만 클리어(루틴이면 ★수행 카운트 유지). 루틴일 때만 재-lay로 캘린더 글랜스 반영
+     (일반 완료 task 는 doneTask 가 이미 캘린더 이벤트를 지웠으므로 동기 대상 없음 = rec0 falsy 로 자연 스킵). 되돌리기 토스트로 복원.
      ★closure history 를 map(fn) 해 patched fresh 로 재-lay(setHistory 는 async 라 closure 는 아직 옛 상태). */
-  const deleteRoutineMemo = (date, idx) => {
+  const deleteHistMemo = (date, idx) => {
     const day = (history || []).find(h => h.date === date); const it0 = day && day.items[idx];
     if (!it0 || !it0.orig) return;
     const rid = it0.orig.recurringId; const rec0 = rid && recurrings.find(r => r.id === rid);
@@ -2517,7 +2526,7 @@ function App({ onSwitchWs }) {
         ? (wasMemoOnly ? { ...it, cancelled: true } : { ...it, orig: { ...it.orig, notes: "" } }) : it) } : h;
     setHistory(prev => prev.map(del));
     if (rec0 && !rec0.disabled) layFutureForRecurring(rec0, WS, routineMemoText(rid, (history || []).map(del), 10)); /* count/weekly 공통(적대검증·layFutureForRecurring는 disabled만 가드) */
-    showT(wasMemoOnly ? "메모 삭제 — 되돌리기" : "메모 삭제(카운트 유지) — 되돌리기", () => {
+    showT(wasMemoOnly ? "메모 삭제 — 되돌리기" : (rec0 ? "메모 삭제(카운트 유지) — 되돌리기" : "메모 삭제(완료 기록 유지) — 되돌리기"), () => {
       const undo = (h) => h.date === date ? { ...h, items: (h.items || []).map((it, i) => i === idx
           ? (wasMemoOnly ? { ...it, cancelled: false } : { ...it, orig: { ...it.orig, notes: oldNotes } }) : it) } : h;
       setHistory(prev => prev.map(undo));
@@ -2525,12 +2534,14 @@ function App({ onSwitchWs }) {
       hideT();
     });
   };
-  /* 루틴 메모 수정(2026-07-25 소유자): orig.notes 편집 → 재-lay로 캘린더 글랜스 반영. 빈 텍스트면 글랜스서 제외(사실상 삭제·카운트 유지). */
-  const editRoutineMemo = (date, idx, newText) => {
+  /* 완료 메모 수정(2026-07-25 소유자 · 같은 날 전 완료항목으로 확장): orig.notes 편집 = **원본 수정**
+     (최상위 완료 항목은 tasks[] 에서 빠지고 history.orig 이 유일 정본 — L2670·L2675). 루틴이면 재-lay 로 캘린더 글랜스 반영.
+     빈 텍스트면 삭제로 위임(사실상 삭제·완료 기록/카운트는 유지). */
+  const editHistMemo = (date, idx, newText) => {
     const day = (history || []).find(h => h.date === date); const it0 = day && day.items[idx];
     if (!it0 || !it0.orig) return;
     const txt = (newText || "").trim();
-    if (!txt) { deleteRoutineMemo(date, idx); return; } /* 빈 저장 = 삭제 위임(좀비 '📝메모만' 행 방지 + 되돌리기 제공·적대검증) */
+    if (!txt) { deleteHistMemo(date, idx); return; } /* 빈 저장 = 삭제 위임(좀비 '📝메모만' 행 방지 + 되돌리기 제공·적대검증) */
     const rid = it0.orig.recurringId; const rec0 = rid && recurrings.find(r => r.id === rid);
     const ed = (h) => h.date === date ? { ...h, items: (h.items || []).map((it, i) => i === idx ? { ...it, orig: { ...it.orig, notes: txt } } : it) } : h;
     setHistory(prev => prev.map(ed));
@@ -2993,7 +3004,7 @@ function App({ onSwitchWs }) {
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
         {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecaps={updateHistRecaps} onUpdateTaskRecaps={updateTaskRecaps} recurrings={recurrings} onToggleDay={toggleRoutineDay} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
-        {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editRoutineMemo} onDeleteMemo={deleteRoutineMemo} />}
+        {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} />}
       </div>
       {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} isWork={isWork} />}
       {clearTarget && <ClearTodayModal task={clearTarget} onApply={(nd) => applyClearToday(clearTarget.id, nd)} onCancel={() => setClearTarget(null)} />}
