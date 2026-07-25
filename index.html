@@ -187,6 +187,44 @@ const DEV_ID = (() => {
 const _calFailBuf = []; /* 실패 링버퍼(캡 20) — calSync 가 재시도 소진 후 push, cloudSave 가 blob 에 실어보냄(별도 write 경로 불필요) */
 const calLogFailure = (rec) => { try { _calFailBuf.push(rec); if (_calFailBuf.length > 20) _calFailBuf.splice(0, _calFailBuf.length - 20); } catch {} };
 
+/* ★결함 B 완화 — 외부 소유 필드 보존(2026-07-25·PDS §14.7): 아래 저장은 blob **전체를 PUT** 한다.
+   그래서 앱이 로드한 뒤에 외부 도구가 RTDB 에 직접 쓴 값은, 그 탭이 다음에 저장하는 순간 통째로 되돌아간다
+   (2026-07-19 sweptThrough 유실. 주원인이던 결함 A[savedAt 을 숫자로 bump → LWW 영구 false]는 normSavedAt 으로 막혔지만,
+    이건 **탭이 오래 열려 있기만 해도** 재발하는 구조적 경로다 — 일요일 /sweep 이 도는 동안 폰·PC 탭이 떠 있으면 그대로 걸린다).
+   → PUT 직전에 클라우드 recurrings 를 읽어 `sweptThrough` 만 **id 매칭**으로 되살린다.
+   ★대상이 이 필드 하나인 이유: 앱이 **읽기만 하고 절대 쓰지 않는** 유일한 필드다.
+     - `futureThrough` 는 앱이 futureEvtDone 에서 계속 쓰므로 **보존하면 안 된다**(앱이 정본).
+     - `calEventId` 는 백스톱이 ETag 조건부로 쓰고 45분마다 재수렴 = **자가치유**라 굳이 필요 없다.
+     - `sweptThrough` 만이 주1회·비자가치유 → 잃으면 다음 정제까지 일주일 내내 글랜스가 안 줄어든다(= §14.8 ⑥ URL 사고의 상류).
+   ★앱이 쓰지 않는 필드만 만지므로 '삭제 되살림' 위험이 없다 — 통짜 병합을 거부한 M2(2026-07-04) 판단과 충돌하지 않는다.
+   ★실패하면 조용히 원본 그대로 PUT. 저장 자체는 어떤 경우에도 막지 않는다(가드는 개선이지 의존 대상이 아님). */
+let _sweptCache = null; /* id → sweptThrough (마지막으로 관측한 클라우드 값) — 언로드 flush 는 네트워크를 못 타므로 이 캐시로 적용 */
+const applySwept = (data) => {
+  try {
+    if (!_sweptCache || !Array.isArray(data.recurrings)) return data;
+    let hit = 0;
+    const merged = data.recurrings.map(x => {
+      const c = _sweptCache.get(x && x.id);
+      if (c && c !== (x && x.sweptThrough)) { hit++; return { ...x, sweptThrough: c }; }
+      return x;
+    });
+    return hit ? { ...data, recurrings: merged } : data;
+  } catch { return data; }
+};
+const preserveForeign = async (data, path, q) => {
+  try {
+    if (!Array.isArray(data.recurrings) || !data.recurrings.length) return applySwept(data);
+    const r = await fetch("https://taskmgr-sync-default-rtdb.firebaseio.com/" + path + "/recurrings.json" + q);
+    if (!r.ok) return applySwept(data);
+    const cloud = await r.json();
+    if (!Array.isArray(cloud)) return applySwept(data);
+    _sweptCache = new Map(cloud.filter(Boolean).map(c => [c.id, c.sweptThrough]));
+    const out = applySwept(data);
+    if (out !== data) console.warn("[sync] 외부 write 보존 — sweptThrough 를 클라우드 값으로 되살림(주간 정제 결과 유실 방지)");
+    return out;
+  } catch { return applySwept(data); }
+};
+
 /* 클라우드 저장: Firebase PUT (1회 요청, 2초 디바운스) */
 let _saveTimer = null, _pendingData = null, _pendingPath = null;
 const cloudSave = (data) => {
@@ -207,10 +245,11 @@ const cloudSave = (data) => {
     const el = document.getElementById("sync-status");
     if (el) { el.textContent = "☁️ 저장중..."; el.style.color = "#F59E0B"; }
     const q = await authParam();
+    const body = await preserveForeign(data, path, q); /* ★결함 B: 외부 소유 필드(sweptThrough) 되살림 후 PUT */
     fetch(url + q, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
+      body: JSON.stringify(body),
     }).then(r => {
       /* RTDB는 401(권한거부)에도 유효한 JSON 바디를 주므로 r.ok를 반드시 확인 */
       if (!r.ok) throw new Error("HTTP " + r.status);
@@ -229,7 +268,9 @@ const flushCloudSave = async () => {
   clearTimeout(_saveTimer); _saveTimer = null;
   const data = _pendingData; const path = _pendingPath || WS.fbPath; _pendingData = null; /* ★E2: 예약 시점 경로로 flush(전환돼도 옛 데이터는 옛 경로로) */
   const url = "https://taskmgr-sync-default-rtdb.firebaseio.com/" + path + ".json";
-  try { const q = await authParam(); await fetch(url + q, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data), keepalive: true }); } catch {}
+  /* ★언로드 경로라 네트워크 왕복을 더 붙이면 flush 자체가 유실될 수 있다 → 캐시(_sweptCache)만 동기 적용.
+     캐시는 직전 cloudSave 가 채워두므로 '편집 → 2초 내 탭닫기' 창에서도 직전 관측값이 살아 있다. */
+  try { const q = await authParam(); await fetch(url + q, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(applySwept(data)), keepalive: true }); } catch {}
 };
 
 /* 클라우드 로드: Firebase GET (1회 요청). 실패와 '빈 DB'를 구분해 반환 —
