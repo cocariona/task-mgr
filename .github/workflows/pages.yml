@@ -31,6 +31,11 @@ jobs:
       #   직접 의존성 exact 고정 → 전이 의존성도 전부 ^7 범위라 8이 못 들어옴. (로컬 npm 부재로 lockfile 대신
       #   exact pin + build.js 스모크 게이트 2중 방어.) 승급은 의도적으로만 — 이 줄의 버전을 직접 올릴 것.
       - run: npm init -y && npm install @babel/core@7.29.7 @babel/preset-react@7.29.7
+      # ★SRI 검증(2026-07-25): index.html 이 선언한 integrity 해시를 **실제 CDN 파일과 대조**.
+      #   불일치면 브라우저가 그 스크립트 실행을 거부해 백지가 되므로(=SRI 도입이 만든 새 사고 경로),
+      #   배포 前에 여기서 막는다. 네트워크 실패도 실패로 처리 — 막힌 배포는 되돌릴 수 있지만
+      #   백지 배포는 못 되돌린다. 버전 올릴 때 이 단계가 새 해시를 출력해준다.
+      - run: node verify-sri.js
       - run: node build.js
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

@@ -13,14 +13,29 @@
        이 고정은 동작 변경 0. babel 7.29.7 은 CI 핀(`@babel/core@7.29.7`, pages.yml)과 **정확히 일치**한다.
        ⚠ 승급은 **의도적으로만** — 이 줄의 버전을 직접 올릴 것. build.js 스모크가 bare major 재발을 차단한다.
        ※babel 태그는 배포본에서 build.js 가 제거하므로 프로덕션 무영향(원본 파일을 직접 열 때만 사용). -->
-  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
+  <!-- ★SRI(integrity) 2단 방어(2026-07-25 소유자 지시) — exact pin 과 **다른 층**이다.
+       exact pin = "무엇을 주문할지" 고정 / SRI = "받은 게 진짜인지" 확인.
+       주소가 맞아도 CDN 이 침해되면 다른 내용물이 올 수 있고(2024 polyfill.io: 도메인 매각 후
+       10만+ 사이트에 악성코드 배포·각 사이트는 코드 한 줄 안 바꿨는데 감염), 브라우저는 그걸 그냥 실행한다.
+       integrity 가 있으면 지문 불일치 시 **실행을 거부**한다. 이 앱은 구글 로그인 토큰 + 개인 데이터
+       (루틴·메모·회고) 전체에 접근 가능한 컨텍스트라, 여기 들어온 코드는 앱과 동등한 권한을 갖는다.
+       ⚠ 버전을 올리면 **integrity 도 반드시 같이** 갱신할 것 — 안 하면 브라우저가 실행을 거부해
+       6/17 과 같은 백지 증상이 된다. `verify-sri.js` 가 배포 前 실파일과 대조해 이 실수를 차단한다.
+       해시 출처: unpkg 와 jsdelivr(독립 미러)에서 받은 파일의 sha384 가 **일치**함을 대조 확인. -->
+  <script crossorigin="anonymous" integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z" src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin="anonymous" integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1" src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script crossorigin="anonymous" integrity="sha384-ezQ6HS3FLspd9te19o2McUV6FAK091+GG7KO54f/R8DKgCDi7fULhapNrd5LY+vG" src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
 
   <!-- Firebase (Auth 로그인). compat 빌드 = 빌드툴 없이 전역 firebase 사용.
        파일 저장은 Storage 대신 RTDB(/files, base64) — Storage는 신규 프로젝트에서 유료플랜 필수라 미사용 -->
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <!-- ★firebase 도 SRI(2026-07-25): react 만 봉인하고 여기를 열어두면 문이 반만 닫힌다 —
+       같은 페이지에서 실행되는 이상 권한은 동일하다. gstatic 은 구글 직영이라 unpkg 보다 침해가
+       훨씬 어렵지만, 비용이 같으니 막는다. `crossorigin` 은 SRI 필수 조건이며 gstatic 이
+       `Access-Control-Allow-Origin: *` 를 주는 것을 확인하고 추가했다(안 주는데 붙이면 로드가 깨진다).
+       한계(정직): npm 미러가 있는 react 와 달리 gstatic 빌드는 **독립 대조처가 없어**,
+       반복 fetch 재현성만 확인했다(=지금 서빙되는 것을 고정한 것이지 '정본'과 대조한 게 아님). -->
+  <script crossorigin="anonymous" integrity="sha384-sEVIly94UBRLKWdkYoPpSG7GD/e79YHMrxVyZaOk712Ga7+EAw6w1EFi+xBzBdd+" src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script crossorigin="anonymous" integrity="sha384-EkqK+ezBWJuvO3hfrSx2iVqr3YQbhmnzn8kPhOpBZ+0GMVU5oGSgptwIu8D84HjE" src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #f9fafb; -webkit-text-size-adjust: 100%; }
