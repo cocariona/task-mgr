@@ -1330,7 +1330,7 @@ const HTYPE = {
   edited: { icon: "✏️", color: "#8B5CF6", label: "수정" },
   deleted: { icon: "🗑", color: "#EF4444", label: "삭제" },
 };
-const HistoryView = ({ history, onRestore, onUncancel, onCancelMemo }) => {
+const HistoryView = ({ history, onRestore, onUncancel, onEditMemo, onDeleteMemo }) => {
   const sorted = useMemo(() => [...history].sort((a, b) => b.date.localeCompare(a.date)), [history]);
   const [filter, setFilter] = useState("all");
   return (
@@ -1361,19 +1361,21 @@ const HistoryView = ({ history, onRestore, onUncancel, onCancelMemo }) => {
               {stsCnt > 0 && <span>🔄 {stsCnt}건 변경</span>}
               {editCnt > 0 && <span>✏️ {editCnt}건 수정</span>}
             </div>
-            {filtered.map((item, i) => <HistRow key={i} item={item} date={day.date} idx={day.items.indexOf(item)} onRestore={onRestore} onUncancel={onUncancel} onCancelMemo={onCancelMemo} />)}
+            {filtered.map((item, i) => <HistRow key={(item.orig && item.orig.id) || (day.date + "#" + i)} item={item} date={day.date} idx={day.items.indexOf(item)} onRestore={onRestore} onUncancel={onUncancel} onEditMemo={onEditMemo} onDeleteMemo={onDeleteMemo} />)}
           </div>
         );
       })}
     </div>
   );
 };
-const HistRow = ({ item, date, idx, onRestore, onUncancel, onCancelMemo }) => {
+const HistRow = ({ item, date, idx, onRestore, onUncancel, onEditMemo, onDeleteMemo }) => {
   const [h, setH] = useState(false);
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false); const [et, setEt] = useState(""); /* 루틴 메모 인라인 수정(2026-07-25) */
   const t = HTYPE[item.type] || HTYPE.done;
   const orig = item.orig || {};
   const hasCtx = item.type === "done" && (orig.notes || orig.recap); /* 완료 할일의 맥락(메모)·회고를 히스토리서도 조회(2026-07-01) */
+  const isRoutineMemo = item.type === "done" && orig.recurringId && (orig.notes || "").trim(); /* 루틴 메모 항목(memoOnly + done-with-메모) → 수정/삭제 대상(2026-07-25) */
   return (
     <div onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 4px", fontSize: 13, borderRadius: 4, background: h ? "#f8fafc" : "transparent" }}>
@@ -1390,11 +1392,19 @@ const HistRow = ({ item, date, idx, onRestore, onUncancel, onCancelMemo }) => {
         {item.time && <span style={{ fontSize: 10, color: "#c0c0c0", flexShrink: 0 }}>{item.time}</span>}
         {item.cancelled && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", color: "#059669", borderColor: "#A7F3D0" }} onClick={() => onUncancel(date, idx)} title="취소 복원 — 다시 이번 주 카운트에 포함">↺ 복원</button>}
         {h && item.type === "done" && !item.cancelled && !item.memoOnly && !item.routineKey && !item.isSub && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
-        {h && item.memoOnly && !item.cancelled && onCancelMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", color: "#DC2626" }} onClick={() => onCancelMemo(date, idx)} title="이 메모 삭제 — 캘린더 이월서 제거(복원 가능)">🗑</button>}
+        {h && isRoutineMemo && !item.cancelled && onEditMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => { setEt(orig.notes || ""); setEditing(true); setOpen(true); }} title="메모 수정 — 캘린더 글랜스에 반영">✏️</button>}
+        {h && isRoutineMemo && !item.cancelled && onDeleteMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", color: "#DC2626" }} onClick={() => onDeleteMemo(date, idx)} title={item.memoOnly ? "이 메모 삭제 — 캘린더 글랜스서 제거(↺ 복원 가능)" : "메모만 삭제 — 수행 카운트는 유지·캘린더서 제거(되돌리기 토스트로 복원)"}>🗑</button>}
       </div>
       {hasCtx && open && <div style={{ marginLeft: 28, marginBottom: 6 }}>
-        {orig.notes && <div style={{ ...S.note, marginTop: 2 }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.6, marginRight: 5 }}>📝 메모</span>{orig.notes}</div>}
-        {orig.recap && <div style={{ ...S.note, color: "#7C3AED", marginTop: 2 }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.6, marginRight: 5 }}>🪞 회고</span>{orig.recap}</div>}
+        {editing && <div style={{ marginTop: 2 }}>
+          <textarea value={et} onChange={e => setEt(e.target.value)} autoFocus style={{ width: "100%", minHeight: 64, fontSize: 12, padding: 6, border: "1px solid #C7D2FE", borderRadius: 6, boxSizing: "border-box", resize: "vertical" }} />
+          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+            <button style={{ ...S.gh, fontSize: 11, background: "#EEF2FF", fontWeight: 600 }} onClick={() => { onEditMemo(date, idx, et); setEditing(false); }}>저장</button>
+            <button style={{ ...S.gh, fontSize: 11 }} onClick={() => setEditing(false)}>취소</button>
+          </div>
+        </div>}
+        {!editing && orig.notes && <div style={{ ...S.note, marginTop: 2 }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.6, marginRight: 5 }}>📝 메모</span>{orig.notes}</div>}
+        {!editing && orig.recap && <div style={{ ...S.note, color: "#7C3AED", marginTop: 2 }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.6, marginRight: 5 }}>🪞 회고</span>{orig.recap}</div>}
       </div>}
     </div>
   );
@@ -1566,8 +1576,8 @@ const routineMemoText = (rid, history, n = 10, opts = {}) => {
   const sw = ROUTINE_SWEPT[rid] || ""; /* ★§14.7: 정제 완료일 이후 세션 note만 glance(sw="" → 전부 통과) */
   const out = [];
   (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && it.orig && it.orig.recurringId === rid && (it.orig.notes || "").trim() && it.orig.id !== opts.excludeId && (!it.cancelled || it.orig.id === opts.includeId) && (day.date || "") > sw) out.push({ date: day.date || "", text: (it.orig.notes || "").trim() }); }));
-  out.sort((a, b) => a.date.localeCompare(b.date));
-  return out.slice(-n).map(m => "[" + (m.date || "").slice(5) + "] " + m.text).join("\n");
+  out.sort((a, b) => b.date.localeCompare(a.date)); /* ★최신 위로(역순·2026-07-25 소유자) */
+  return out.slice(0, n).map(m => "[" + (m.date || "").slice(5) + "] " + m.text).join("\n\n"); /* ★날짜 블록 사이 빈 줄로 구분(여러 줄 메모도 날짜별 명확) */
 };
 /* 오늘 탭 상단 — 주N회 루틴 '이번 주 N/목표' + ＋(세션 기록+메모)/−(최근 1건 취소).
    요일 무관 주간 카운트: 옮겨 간 날·예정 외·지난 날 = 전부 ＋로 +1. ＋ 누르면 메모 입력창(선택)이 열림 → 발견을 적으면 루틴 이월메모에 누적되고 다음 실행 때 캘린더 권장요일 이벤트 설명에 보임(glance). */
@@ -2357,7 +2367,7 @@ function App({ onSwitchWs }) {
     setHistory(prev => { const item = { type: "done", text: orig.text, projectName: proj ? proj.name : "", project: orig.project, orig, time: nowTime() };
       const ex = prev.find(h => h.date === TODAY); if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, item] } : h); return [...prev, { date: TODAY, items: [item] }]; });
     if (memoTrim) { /* 메모는 세션(orig.notes)에만 저장 → routineMemoText가 취소 안 된 세션서 도출. 즉시 반영 위해 새 메모 포함해 재-lay(fresh override). */
-      const withNew = ((routineMemoText(rid, history, 9) ? routineMemoText(rid, history, 9) + "\n" : "") + "[" + TODAY.slice(5) + "] " + memoTrim);
+      const rest = routineMemoText(rid, history, 9); const withNew = "[" + TODAY.slice(5) + "] " + memoTrim + (rest ? "\n\n" + rest : ""); /* ★오늘 메모를 맨 위로(역순 정합·2026-07-25) */
       layFutureForRecurring(rec, WS, withNew); /* 권장요일 이벤트 desc(실행방법+메모) 즉시 갱신 → 캘린더 glance 이월 */
     }
     showT("\"" + rec.text + "\" 기록 ✅ (이번 주 +1" + (memoTrim ? " · 메모 저장" : "") + ")", null);
@@ -2387,7 +2397,7 @@ function App({ onSwitchWs }) {
 
   /* 주N회 '📝 메모만'(2026-07-08): 세션 카운트 없이 발견/메모만 기록 → 캘린더 권장요일 desc로 이월(다음 glance 적용).
      '수행은 안 했지만 남길 게 있는' 경우(예: 레슨만 받은 날) 자리. memoOnly=true → routineDoneSet·− 스캔·완료수서 제외(카운트 무관),
-     routineMemoText엔 포함(비취소 done+notes)돼 이월. 히스토리서 🗑(cancelRoutineMemo)로 제거·↺복원 가능. */
+     routineMemoText엔 포함(비취소 done+notes)돼 이월. 히스토리서 ✏️(editRoutineMemo)·🗑(deleteRoutineMemo)로 수정/삭제·↺복원 가능(2026-07-25). */
   const addRoutineMemo = (rid, memo) => {
     const rec = recurrings.find(r => r.id === rid); if (!rec) return;
     const memoTrim = (memo || "").trim();
@@ -2398,18 +2408,40 @@ function App({ onSwitchWs }) {
     const orig = { id: gid(), text: rec.text, status: "done", project: rec.project || "proj_etc", recurringId: rid, recurringPeriod: period, notes: memoTrim, planDate: TODAY, planTime: rec.time || "", protocol: rec.protocol || "", createdAt: TODAY, subtasks: [], calEventId: "", calUpdated: 0 };
     setHistory(prev => { const item = { type: "done", memoOnly: true, text: orig.text, projectName: proj ? proj.name : "", project: orig.project, orig, time: nowTime() };
       const ex = prev.find(h => h.date === TODAY); if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, item] } : h); return [...prev, { date: TODAY, items: [item] }]; });
-    const withNew = ((routineMemoText(rid, history, 9) ? routineMemoText(rid, history, 9) + "\n" : "") + "[" + TODAY.slice(5) + "] " + memoTrim); /* closure history엔 새 항목 없음 → 명시 append(addRoutineSession와 동일 패턴) */
+    const rest = routineMemoText(rid, history, 9); const withNew = "[" + TODAY.slice(5) + "] " + memoTrim + (rest ? "\n\n" + rest : ""); /* ★오늘 메모 맨 위로(역순 정합) · closure history엔 새 항목 없음 → 명시 prepend */
     layFutureForRecurring(rec, WS, withNew); /* 캘린더 desc 즉시 이월(카운트 변화 0) */
     showT("\"" + rec.text + "\" 메모 저장 ✅ (카운트 변화 없음)", null);
   };
-  /* 📝 메모만 항목 삭제(2026-07-08): cancelled 표시 → routineMemoText서 제외돼 캘린더 이월서 사라짐. 히스토리서 ↺복원 가능(즉시 능동 재-lay=R1 대칭). */
-  const cancelRoutineMemo = (date, idx) => {
+  /* 루틴 메모 삭제(2026-07-25 통일·소유자): memoOnly=항목 취소 / done-with-memo=메모만 클리어(★수행 카운트 유지). 재-lay로 캘린더 글랜스 반영. 되돌리기 토스트로 복원.
+     ★closure history 를 map(fn) 해 patched fresh 로 재-lay(setHistory 는 async 라 closure 는 아직 옛 상태). */
+  const deleteRoutineMemo = (date, idx) => {
     const day = (history || []).find(h => h.date === date); const it0 = day && day.items[idx];
-    const rid = it0 && it0.orig && it0.orig.recurringId; const origId = it0 && it0.orig && it0.orig.id;
-    setHistory(prev => prev.map(h => h.date === date ? { ...h, items: (h.items || []).map((it, i) => i === idx ? { ...it, cancelled: true } : it) } : h));
-    const rec0 = rid && recurrings.find(r => r.id === rid);
-    if (rec0 && rec0.type === "count") layFutureForRecurring(rec0, WS, routineMemoText(rid, history, 10, { excludeId: origId }));
-    showT("메모 삭제 — 히스토리서 ↺복원 가능", null);
+    if (!it0 || !it0.orig) return;
+    const rid = it0.orig.recurringId; const rec0 = rid && recurrings.find(r => r.id === rid);
+    const wasMemoOnly = !!it0.memoOnly; const oldNotes = it0.orig.notes || "";
+    const del = (h) => h.date === date ? { ...h, items: (h.items || []).map((it, i) => i === idx
+        ? (wasMemoOnly ? { ...it, cancelled: true } : { ...it, orig: { ...it.orig, notes: "" } }) : it) } : h;
+    setHistory(prev => prev.map(del));
+    if (rec0 && !rec0.disabled) layFutureForRecurring(rec0, WS, routineMemoText(rid, (history || []).map(del), 10)); /* count/weekly 공통(적대검증·layFutureForRecurring는 disabled만 가드) */
+    showT(wasMemoOnly ? "메모 삭제 — 되돌리기" : "메모 삭제(카운트 유지) — 되돌리기", () => {
+      const undo = (h) => h.date === date ? { ...h, items: (h.items || []).map((it, i) => i === idx
+          ? (wasMemoOnly ? { ...it, cancelled: false } : { ...it, orig: { ...it.orig, notes: oldNotes } }) : it) } : h;
+      setHistory(prev => prev.map(undo));
+      if (rec0 && !rec0.disabled) layFutureForRecurring(rec0, WS, routineMemoText(rid, (history || []).map(undo), 10));
+      hideT();
+    });
+  };
+  /* 루틴 메모 수정(2026-07-25 소유자): orig.notes 편집 → 재-lay로 캘린더 글랜스 반영. 빈 텍스트면 글랜스서 제외(사실상 삭제·카운트 유지). */
+  const editRoutineMemo = (date, idx, newText) => {
+    const day = (history || []).find(h => h.date === date); const it0 = day && day.items[idx];
+    if (!it0 || !it0.orig) return;
+    const txt = (newText || "").trim();
+    if (!txt) { deleteRoutineMemo(date, idx); return; } /* 빈 저장 = 삭제 위임(좀비 '📝메모만' 행 방지 + 되돌리기 제공·적대검증) */
+    const rid = it0.orig.recurringId; const rec0 = rid && recurrings.find(r => r.id === rid);
+    const ed = (h) => h.date === date ? { ...h, items: (h.items || []).map((it, i) => i === idx ? { ...it, orig: { ...it.orig, notes: txt } } : it) } : h;
+    setHistory(prev => prev.map(ed));
+    if (rec0 && !rec0.disabled) layFutureForRecurring(rec0, WS, routineMemoText(rid, (history || []).map(ed), 10)); /* count/weekly 공통 */
+    showT("메모 수정 ✅", null);
   };
 
   const addTask = ({ text, status, project, focus, scheduledDate, scheduledLabel, planDate }) => {
@@ -2867,7 +2899,7 @@ function App({ onSwitchWs }) {
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
         {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecaps={updateHistRecaps} onUpdateTaskRecaps={updateTaskRecaps} recurrings={recurrings} onToggleDay={toggleRoutineDay} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
-        {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onCancelMemo={cancelRoutineMemo} />}
+        {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editRoutineMemo} onDeleteMemo={deleteRoutineMemo} />}
       </div>
       {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} isWork={isWork} />}
       {clearTarget && <ClearTodayModal task={clearTarget} onApply={(nd) => applyClearToday(clearTarget.id, nd)} onCancel={() => setClearTarget(null)} />}
