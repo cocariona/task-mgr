@@ -1998,7 +1998,13 @@ function App({ onSwitchWs }) {
         return;
       }
       const cloudData = res.data;
-      if (cloudData && Array.isArray(cloudData.tasks) && cloudData.savedAt) { /* ★M3: tasks=[](전부 완료) 도 유효 — length>0 가드 제거 */
+      /* ★2026-07-25(적대검증): RTDB 는 **빈 배열/객체를 저장하지 않는다** → 모든 할일이 완료돼(doneTask 가 tasks[]에서 제거)
+         `tasks: []` 를 PUT 하면 /personal/tasks 키 자체가 사라진다. 그러면 `Array.isArray(undefined)=false` 라 이 게이트가
+         막혀 **savedAt 정규화와 무관하게 외부 write 를 영구 미채택**했다 — 옛 M3 주석이 표방한 "tasks=[] 도 유효"가
+         실제로는 성립하지 않았다(빈 배열은 [] 로 오는 게 아니라 **키가 없어서** 온다).
+         유효성의 실제 신호는 `savedAt` 이다(cloudLoad 가 '실패'와 '빈 DB'를 이미 구분해 반환).
+         tasks 부재 = 빈 배열로 취급하되, **객체로 온 경우는 계속 거부**(RTDB 희소배열 = 진짜 손상 신호). */
+      if (cloudData && cloudData.savedAt && (cloudData.tasks == null || Array.isArray(cloudData.tasks))) {
         const localSaved = lastSavedAtRef.current || normSavedAt(saved?.savedAt); /* ★C2: 마운트 고정이 아니라 '현재까지 저장한' savedAt과 비교 → 오프라인 작업이 옛 클라우드에 안 짐 */
         /* 클라우드가 더 최신이면 reload 없이 메모리에서 직접 채택.
            (예전 reload 방식은 localStorage가 막힌 환경에서 무한 리로드 루프)
