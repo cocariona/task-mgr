@@ -38,12 +38,21 @@ const smoke = [
      6/17 전체 백지 사고가 정확히 이 기전이었고, 그때 `@7` 로 major 만 막은 건 사고 폭을 좁힌 것이지 없앤 게 아니다.
      CI 는 npm 쪽만 exact 고정(pages.yml)하므로 **런타임 CDN 은 이 게이트가 유일한 방어**다.
      주석은 comments:false 로 사라지니 여기서 못박는다. 승급은 index.html 의 버전을 직접 올려서만. */
+  /* ★SRI 구조 검사(2026-07-25): 해시 **값**이 실파일과 맞는지는 verify-sri.js(네트워크)가 보고,
+     여기서는 네트워크 없이 **누락**을 잡는다 — 2겹으로 두는 이유는 verify-sri 단계가 CI 에서
+     빠지거나 로컬 빌드를 그냥 돌릴 때도 최소 방어가 남게 하려는 것. */
   ...(() => {
-    const srcs = [...srcHtml.matchAll(/src="(https:\/\/unpkg\.com\/[^"]+)"/g)].map(m => m[1]);
-    const bare = srcs.filter(u => !/@\d+\.\d+\.\d+(?:[-+][\w.]+)?\//.test(u));
+    const tags = [...srcHtml.matchAll(/<script\b([^>]*\bsrc="https:\/\/[^"]+"[^>]*)>/g)].map(m => m[1]);
+    const srcOf = (t) => (t.match(/\bsrc="([^"]+)"/) || [])[1] || '';
+    const has = (t, a) => new RegExp(`\\b${a}(?:="[^"]*")?(?=[\\s>]|$)`).test(t);
+    const bare = tags.map(srcOf).filter(u => !/@\d+\.\d+\.\d+(?:[-+][\w.]+)?\//.test(u) && !/\/\d+\.\d+\.\d+\//.test(u));
+    const noSri = tags.filter(t => !has(t, 'integrity')).map(srcOf);
+    const noCors = tags.filter(t => !has(t, 'crossorigin')).map(srcOf);
     return [
-      [srcs.length > 0, 'unpkg CDN 스크립트를 하나도 못 찾음 — 검사기가 헛돌고 있음(선택자 부패?)'],
-      [bare.length === 0, 'unpkg CDN 이 exact pin 이 아님(bare major = 60초 만에 자동 승급 = 6/17 백지 기전): ' + bare.join(', ')],
+      [tags.length > 0, '외부 CDN 스크립트를 하나도 못 찾음 — 검사기가 헛돌고 있음(선택자 부패?)'],
+      [bare.length === 0, 'CDN 이 exact pin 이 아님(bare major = 60초 만에 자동 승급 = 6/17 백지 기전): ' + bare.join(', ')],
+      [noSri.length === 0, 'CDN 스크립트에 integrity(SRI) 없음 — CDN 침해 시 브라우저가 그대로 실행한다: ' + noSri.join(', ')],
+      [noCors.length === 0, 'CDN 스크립트에 crossorigin 없음 — cross-origin SRI 가 동작하지 않아 integrity 가 무력화된다: ' + noCors.join(', ')],
     ];
   })(),
 ];

@@ -1,0 +1,11 @@
+# 빌드 산출물 — 배포는 GitHub Actions 가 build.js 로 생성한 아티팩트를 쓴다(커밋본 아님).
+# 커밋하면 소스(index.html)와 배포본이 두 정본이 되어 어긋난다.
+_site/
+
+# 로컬에서 build.js·verify-sri.js 돌릴 때 생기는 것 (CI 는 매번 exact 핀으로 새로 설치)
+node_modules/
+package.json
+package-lock.json
+
+# Claude Code 로컬 설정(권한 기록·launch.json 등 머신 로컬)
+.claude/
