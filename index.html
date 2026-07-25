@@ -592,6 +592,22 @@ const saveToStorage = (data) => {
     localStorage.setItem(WS.storageKey, JSON.stringify(data));
   } catch {}
 };
+/* ★savedAt 정규화(2026-07-25·PDS §14.7 ②-(c) **savedAt 형식 계약**): LWW 비교는 ISO 문자열 기준인데,
+   외부 도구(하네스 스크립트·수동 PATCH)가 unix epoch ms **숫자**로 bump 하면 JS 관계연산이 "한쪽이 숫자면
+   양변을 Number 로 강제"하는 규칙 때문에 ISO 문자열이 **NaN** 이 되어 비교가 **항상 false** 가 된다.
+   그러면 그 write 는 '더 최신'이 아니라 **앱이 영원히 채택 못 하는 값**이 되고, 앱은 stale 메모리를 유지하다
+   다음 저장에서 blob 전체를 PUT 해 그 write 를 **통째로 되돌린다**.
+   ⚠ 2026-07-19 `sweptThrough` 유실이 정확히 이것 — 열린 탭뿐 아니라 **새 탭·하드리프레시에서도** 결정론적으로
+   실패했고, 숫자는 L2027 '다른 기기 변경' 경고 조건(`typeof === "string"`)도 통과 못 해 **채택 실패와 경고 실패가
+   동시** 발생 → 8일간 무증상. 캘린더 desc 가 6795자까지 자라 GAS URL 임계를 넘긴 사고(§14.8 ⑥)의 상류 원인.
+   ★계약 자체는 **도구측이 ISO 를 쓰는 것**(scripts/sweep_write.ps1 이 준수·write-back 검증까지 함)이고,
+   이 정규화는 그 위반을 **조용히 삼키지 않기 위한 방어**다(다른 도구가 또 숫자를 써도 최소한 채택·경고는 산다).
+   숫자는 unix **ms** 로 해석 — 실측된 유일한 위반 형식(`ToUnixTimeMilliseconds()`). */
+const normSavedAt = (v) => {
+  if (typeof v === "string") return v;
+  if (typeof v === "number" && isFinite(v)) { try { return new Date(v).toISOString(); } catch { return ""; } }
+  return "";
+};
 
 /* ─── 초기 데이터 ─── */
 const INIT_PROJECTS = [
@@ -1970,7 +1986,7 @@ function App({ onSwitchWs }) {
      (로컬 저장은 계속 동작). */
   const [cloudLoaded, setCloudLoaded] = useState(false);
   const cloudLoadedRef = useRef(false);
-  const lastSavedAtRef = useRef(saved?.savedAt || ""); /* ★C2(2026-07-04): 저장/채택마다 갱신되는 '현재 savedAt' — 온라인 복귀 LWW 비교 기준(마운트 스냅샷 고정으로 오프라인 작업 유실 방지) */
+  const lastSavedAtRef = useRef(normSavedAt(saved?.savedAt)); /* ★C2(2026-07-04): 저장/채택마다 갱신되는 '현재 savedAt' — 온라인 복귀 LWW 비교 기준(마운트 스냅샷 고정으로 오프라인 작업 유실 방지). ★normSavedAt=형식 계약 방어(§14.7 ②-(c)) */
   useEffect(() => {
     let cancelled = false;
     const tryLoad = () => cloudLoad().then(res => {
@@ -1983,12 +1999,12 @@ function App({ onSwitchWs }) {
       }
       const cloudData = res.data;
       if (cloudData && Array.isArray(cloudData.tasks) && cloudData.savedAt) { /* ★M3: tasks=[](전부 완료) 도 유효 — length>0 가드 제거 */
-        const localSaved = lastSavedAtRef.current || saved?.savedAt || ""; /* ★C2: 마운트 고정이 아니라 '현재까지 저장한' savedAt과 비교 → 오프라인 작업이 옛 클라우드에 안 짐 */
+        const localSaved = lastSavedAtRef.current || normSavedAt(saved?.savedAt); /* ★C2: 마운트 고정이 아니라 '현재까지 저장한' savedAt과 비교 → 오프라인 작업이 옛 클라우드에 안 짐 */
         /* 클라우드가 더 최신이면 reload 없이 메모리에서 직접 채택.
            (예전 reload 방식은 localStorage가 막힌 환경에서 무한 리로드 루프)
            saveToStorage는 여기서 호출하지 않는다 — 아래 자동저장 effect가 상태 변경을 감지해
            한 번만 저장하므로, BACKUP_KEY에 '채택 직전 로컬'이 1세대 보존된다. */
-        if (cloudData.savedAt > localSaved) {
+        if (normSavedAt(cloudData.savedAt) > localSaved) { /* ★normSavedAt: 숫자 savedAt이면 NaN 비교로 **항상 false**가 되어 외부 write를 영구 미채택하던 것 차단(§14.7 ②-(c)) */
           console.log("[Sync] 클라우드에서 복원:", cloudData.savedAt);
           const m = migrateData(cloudData);
           setTasks(m.tasks || []);
@@ -1997,7 +2013,7 @@ function App({ onSwitchWs }) {
           setFiles(m.files || []);
           setHistory(m.history || []);
           setRecurrings(m.recurrings || []);
-          lastSavedAtRef.current = cloudData.savedAt; /* 채택했으니 기준도 클라우드 값으로 */
+          lastSavedAtRef.current = normSavedAt(cloudData.savedAt); /* 채택했으니 기준도 클라우드 값으로(정규화해 보관 — 이후 비교가 전부 ISO 문자열 기준) */
         }
       }
       cloudLoadedRef.current = true;
@@ -2024,7 +2040,10 @@ function App({ onSwitchWs }) {
       try {
         const q = await authParam();
         const res = await fetch("https://taskmgr-sync-default-rtdb.firebaseio.com/" + WS.fbPath + "/savedAt.json" + q);
-        if (res.ok) { const cs = await res.json(); if (typeof cs === "string" && cs > (lastSavedAtRef.current || "")) showT("⚠️ 다른 기기에서 변경됨 — 새로고침하면 반영됩니다", null); }
+        /* ★2026-07-25: 옛 `typeof cs === "string"` 가드는 **숫자 savedAt 을 조용히 무시**했다 → 외부 도구가 숫자로 bump 하면
+           채택(L1991)도 경고(여기)도 동시에 죽어 무증상(sweptThrough 유실 8일). normSavedAt 으로 정규화해 경고는 살린다.
+           = 결함 B(열린 탭 blob 전체 PUT clobber·구조적 한계)의 **탐지 경로**: 사용자가 새로고침하면 L1991 이 안전하게 채택. */
+        if (res.ok) { const cs = normSavedAt(await res.json()); if (cs && cs > (lastSavedAtRef.current || "")) showT("⚠️ 다른 기기에서 변경됨 — 새로고침하면 반영됩니다", null); }
       } catch {} finally { checking = false; }
     };
     document.addEventListener("visibilitychange", check);
