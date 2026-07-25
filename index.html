@@ -276,6 +276,11 @@ const fmtSize = (b) => b >= 1048576 ? (b/1048576).toFixed(1)+" MB" : b >= 1024 ?
 /* (S3·cleanup 2026-06-16) 회사 캘린더 가져오기(COMPANY_GAS_URL/KEY·companyFetchEvents) 제거 — 인박스 탭과 함께 폐지(inert였음). */
 
 const GCAL_URL = GAS_URL;
+/* ★URL 단일 조립기(2026-07-25·PDS §14.8 ⑥): 전송 URL 을 만드는 곳은 **여기 하나뿐**이어야 한다.
+   예산 가드(calFitParams)가 길이를 재는 식과 실제 전송하는 식이 갈리면 가드가 조용히 거짓말한다
+   (이번 조사에서 python 미러가 실측과 5~11자 어긋난 게 정확히 그 클래스). calSyncOnce 도 이걸 쓴다. */
+const calBuildUrl = (action, params, cb) =>
+  `${GCAL_URL}?${new URLSearchParams({ ...params, action, callback: cb, ...(_calToken ? { token: _calToken } : {}) })}`;
 /* ─── 캘린더 JSONP 동기화 (add / update / delete) ─── */
 /* ★P0 계측(2026-07-17·§14.8 ⑤): 세 실패 경로는 **원래도 코드에 구분돼 있었으나 전부 동일한 {success:false} 로 뭉개져 버려졌다**
    — 그래서 "프록시냐 콜드스타트냐"가 판정 불가였다(§14.8 ③). failMode+ms 를 실어 진단 가능하게 만든다:
@@ -291,18 +296,55 @@ const calSyncOnce = (action, params) => new Promise((resolve) => {
     if (r.success === false) return fin({ ...r, failMode: "gas", ms: Date.now() - t0 });
     return fin(r); /* 성공 = 원본 무변경 */
   };
-  const qs = new URLSearchParams({ ...params, action, callback: cb, ...(_calToken ? { token: _calToken } : {}) });
   const s = document.createElement("script");
-  s.src = `${GCAL_URL}?${qs}`;
+  s.src = calBuildUrl(action, params, cb); /* ★조립은 calBuildUrl 하나로 일원화(2026-07-25) — 가드가 재는 식과 반드시 동일 */
   s.onerror = () => fin({ success: false, failMode: "onerror", ms: Date.now() - t0 });
   document.body.appendChild(s);
 });
+/* ★URL 예산 가드(2026-07-25·PDS §14.8 ⑥ · 근본원인 실증): 캘린더 호출은 JSONP GET 이라 제목·설명이 **전부 URL 에 실린다**.
+   한글은 %XX 로 문자당 9자까지 부풀고 루틴 메모(routineMemoText L1575)는 계속 쌓이므로 URL 이 무한히 자란다. 구글은 **두 지점**에서 끊는다(실측 2026-07-25):
+     ⓐ 앱 URL ≈5982자 초과 → /exec 는 **doGet 을 완주하고 302** 를 주는데 리다이렉트 목적지(script.googleusercontent.com/macros/echo,
+        원본×약 1.374~1.44)가 요청라인 8192B 를 넘어 **2홉에서 400** → <script> onerror. **캘린더 쓰기는 이미 커밋됐다** — 앱만 eventId 를 못 받아
+        futureThrough 가 안 전진하고 매 로드 같은 회차를 재시도한다(멱등키라 중복 0·순수 헛일). ← 🔈보컬(6805자)이 8일간 여기 있었다.
+     ⓑ 앱 URL ≈8250자 초과 → **1홉 자체가 400** → doGet 미실행 → **진짜 유실**(이벤트가 안 생김). 관측된 레슨 메모 1건이 +2101자 = 사정권이었다.
+   → 전송 직전에 길이를 재서 초과분만 desc 꼬리(=가장 오래된 메모)부터 덜어낸다. 예산 4600 = 실측 임계 대비 약 23% 여유
+     (5982 는 우리 URL 의 고유 성질이 아니라 구글이 생성하는 2홉 URL 의 파생값이라 GAS 재배포·포맷 변경으로 이동한다 — 여유를 두는 이유).
+   ★불변식: 예산 이내면 **원본 params 참조를 그대로 반환**(바이트 동일 통과). 가드는 개선이지 의존 대상이 아니다 — 실패해도 현행 동작으로 폴백. */
+const CAL_URL_BUDGET = 4600;
+const CAL_CUT_MARK = "\n…(이전 메모 생략 · 앱 히스토리 탭에 전체)";
+/* 토큰 미로드 시점에 재면 39자(&token= + 32자) 과소측정 → 보수적으로 미리 차감. gid()=7자라 callback 은 항상 13자(_gcal_+7). */
+const calUrlLen = (action, params) => calBuildUrl(action, params, "_gcal_0000000").length + (_calToken ? 0 : 39);
+const calFitParams = (action, params) => {
+  const len0 = calUrlLen(action, params);
+  if (len0 <= CAL_URL_BUDGET) return { p: params, cut: 0, len: len0 }; /* 절대다수 경로 = 원본 그대로 */
+  if (!params || typeof params.desc !== "string" || !params.desc) return { p: params, cut: 0, len: len0 }; /* 줄일 게 없음(list/delete 등) = 손 안 댐 */
+  const at = (d) => ({ d, n: calUrlLen(action, { ...params, desc: d }) });
+  /* ① 블록 경계 우선 — desc 의 메모는 "\n\n" 로 구분된다(L1580). 문장 중간이 아니라 블록 단위로 오래된 것부터 버린다.
+        (2026-07-25 이전 포맷으로 깔린 이벤트는 블록이 1개라 여기서 못 줄고 ②로 떨어진다 — 재-lay 되면 신포맷이라 일시적) */
+  const blocks = params.desc.split("\n\n");
+  for (let keep = blocks.length - 1; keep >= 1; keep--) {
+    const r = at(blocks.slice(0, keep).join("\n\n") + CAL_CUT_MARK);
+    if (r.n <= CAL_URL_BUDGET) return { p: { ...params, desc: r.d }, cut: blocks.length - keep, len: r.n };
+  }
+  /* ② 블록 1개도 예산 초과 → 문자 하드클립. ★코드포인트 단위(Array.from): slice 는 UTF-16 코드유닛이라 이모지(🔈·🛌·✍️)
+        서로게이트 쌍을 반토막 내고, URLSearchParams 는 throw 없이 U+FFFD 를 캘린더에 찍는다(실패 없이 조용히 깨짐 = 더 나쁨). */
+  const cs = Array.from(blocks[0] || "");
+  let lo = 0, hi = cs.length;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (at(cs.slice(0, mid).join("") + CAL_CUT_MARK).n <= CAL_URL_BUDGET) lo = mid; else hi = mid - 1; }
+  const r = at(lo ? cs.slice(0, lo).join("") + CAL_CUT_MARK : "");
+  return { p: { ...params, desc: r.d }, cut: blocks.length, len: r.n };
+};
 /* ★재시도(2026-07-13·push 신뢰성): JSONP 실패(GAS 콜드스타트·onerror·45s 타임아웃)는 흔하고 조용해서 '만들었는데 캘린더 미반영'의 주범.
    실패({success:false}) 시 최대 tries회 재시도(2s 간격). 멱등키(calKey)가 있어 add/update 재시도해도 GAS findByKey가 기존 이벤트 반환=중복 0. list/delete도 안전(읽기·멱등). 콜드스타트는 1차서 GAS 깨어나 2차 성공이 흔함. */
 const calSync = async (action, params, tries = 2) => {
+  /* ★예산 가드는 31개 호출부 전부의 앞에 선다 → 여기서 throw 가 나면 .catch() 없는 호출부(다수)에서 unhandled rejection 으로
+     캘린더 동기가 통째로 죽는다. 실패 시 **현행 동작 그대로 폴백**(가드가 없던 것과 동일). */
+  let fit;
+  try { fit = calFitParams(action, params); } catch { fit = { p: params, cut: 0, len: 0 }; }
+  if (fit.cut) { try { console.warn("[cal] URL 예산 초과 → 오래된 메모 " + fit.cut + "블록 생략 (len=" + fit.len + "/" + CAL_URL_BUDGET + ")", action, (params && params.key) || ""); } catch {} }
   let last = { success: false };
   for (let i = 0; i < tries; i++) {
-    last = await calSyncOnce(action, params);
+    last = await calSyncOnce(action, fit.p);
     if (last && last.success !== false) return last; /* add=eventId 반환(success 무), list/delete=success:true → 통과. 실패만 재시도 */
     if (i < tries - 1) await new Promise(res => setTimeout(res, 2000));
   }
@@ -310,7 +352,10 @@ const calSync = async (action, params, tries = 2) => {
      절대 throw/블로킹 금지 — 진단용이지 기능이 여기 의존하지 않는다. key=멱등키(어느 task/회차인지 식별). */
   try {
     calLogFailure({ at: new Date().toISOString(), action, key: (params && params.key) || "", devId: DEV_ID,
-                    failMode: (last && last.failMode) || "unknown", ms: (last && last.ms) || 0, tries });
+                    failMode: (last && last.failMode) || "unknown", ms: (last && last.ms) || 0, tries,
+                    /* ★len/cut(2026-07-25): 임계 5982 는 구글 소관 파생값이라 이동한다. 실패 1건만으로 '가드가 잘랐는데도 실패'
+                       = 임계가 내려왔음을 즉시 판정하기 위한 계측(백스톱 로그가 영속 사본). */
+                    len: fit.len, cut: fit.cut });
   } catch {}
   return last || { success: false };
 };
