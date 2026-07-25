@@ -27,6 +27,11 @@ const smoke = [
   [/ReactDOM\s*\.\s*render\s*\(/.test(compiled) || /createRoot\s*\(/.test(compiled), 'ReactDOM 렌더 호출이 산출물에 없음'],
   [compiled.length > 80000, '컴파일 산출물이 비정상적으로 작음(' + compiled.length + 'B) — 부분 컴파일 의심'],
   [!/type=["']text\/babel["']/.test(html), '배포본에 text/babel 스크립트가 남아있음(babel 미제거)'],
+  /* ★조립기 단일화 불변식(2026-07-25·PDS §14.8 ⑥): 캘린더 URL 을 만드는 곳은 calBuildUrl **하나**여야 한다.
+     둘로 갈리면 URL 예산 가드(calFitParams)가 재는 식과 실제 전송식이 어긋나 가드가 조용히 거짓말한다 —
+     그 상태의 증상이 '메모 쌓이면 캘린더 동기가 며칠씩 조용히 실패'라 사람 눈으로는 못 잡는다. 주석은 comments:false 로 사라지므로 여기서 못박는다. */
+  [(compiled.match(/\$\{GCAL_URL\}\?/g) || []).length === 1,
+   '캘린더 URL 조립이 calBuildUrl 밖에서도 일어남(=예산 가드 전제 붕괴). ${GCAL_URL}? 는 정확히 1회여야 함'],
 ];
 const failed = smoke.filter(c => !c[0]).map(c => c[1]);
 if (failed.length) { console.error('BUILD SMOKE FAIL:\n - ' + failed.join('\n - ')); process.exit(1); }
