@@ -4,9 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Task Manager - GTD 과제관리</title>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script><!-- @7 고정(2026-06-17): 비고정 CDN이 v8로 자동승급 → v8 React preset이 automatic JSX runtime(import 방출)이라 UMD(비-module) 스크립트서 전체 백지. v7=classic(React.createElement)로 정상. -->
+  <!-- ★CDN exact pin(2026-07-25 소유자 지시) — bare major(`@18`·`@7`)는 **버전 고정이 아니다**.
+       unpkg 의 major URL 은 302 리다이렉트 + `max-age=60` 이라 새 패치/마이너가 나오면 **1분 안에** 전 사용자에게
+       자동 승급된다(반면 exact URL 은 `max-age=31536000` = 사실상 불변). 6/17 전체 백지 사고가 정확히 이 기전
+       (`@babel/standalone` 비고정 → v8 자동승급 → automatic JSX runtime 이 import 방출 → UMD 에서 백지)이었고,
+       그때 `@7` 로 major 만 막은 것은 **같은 사고를 한 자릿수 좁힌 것이지 없앤 게 아니다**.
+       고정 시점 실측: `@18`→18.3.1, `@7`→7.29.7 로 해석되며 exact URL 과 **바이트 동일**(sha256 대조) →
+       이 고정은 동작 변경 0. babel 7.29.7 은 CI 핀(`@babel/core@7.29.7`, pages.yml)과 **정확히 일치**한다.
+       ⚠ 승급은 **의도적으로만** — 이 줄의 버전을 직접 올릴 것. build.js 스모크가 bare major 재발을 차단한다.
+       ※babel 태그는 배포본에서 build.js 가 제거하므로 프로덕션 무영향(원본 파일을 직접 열 때만 사용). -->
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
 
   <!-- Firebase (Auth 로그인). compat 빌드 = 빌드툴 없이 전역 firebase 사용.
        파일 저장은 Storage 대신 RTDB(/files, base64) — Storage는 신규 프로젝트에서 유료플랜 필수라 미사용 -->

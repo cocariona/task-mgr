@@ -5,6 +5,7 @@ const fs = require('fs');
 const { transformSync } = require('@babel/core');
 
 let html = fs.readFileSync('index.html', 'utf8');
+const srcHtml = html; /* babel 태그 제거 前 원본 — CDN 핀 검사는 이걸로(제거되는 태그도 검사 대상) */
 
 const m = html.match(/<script type="text\/babel">([\s\S]*?)<\/script>/);
 if (!m) { console.error('BUILD ERROR: <script type="text/babel"> 를 찾지 못함'); process.exit(1); }
@@ -32,6 +33,19 @@ const smoke = [
      그 상태의 증상이 '메모 쌓이면 캘린더 동기가 며칠씩 조용히 실패'라 사람 눈으로는 못 잡는다. 주석은 comments:false 로 사라지므로 여기서 못박는다. */
   [(compiled.match(/\$\{GCAL_URL\}\?/g) || []).length === 1,
    '캘린더 URL 조립이 calBuildUrl 밖에서도 일어남(=예산 가드 전제 붕괴). ${GCAL_URL}? 는 정확히 1회여야 함'],
+  /* ★CDN exact pin 불변식(2026-07-25·소유자 지시): unpkg 의 bare major URL(`react@18`)은 **버전 고정이 아니다** —
+     302 + max-age=60 이라 새 릴리스가 1분 안에 전 사용자에게 자동 승급된다(exact URL 은 max-age=31536000).
+     6/17 전체 백지 사고가 정확히 이 기전이었고, 그때 `@7` 로 major 만 막은 건 사고 폭을 좁힌 것이지 없앤 게 아니다.
+     CI 는 npm 쪽만 exact 고정(pages.yml)하므로 **런타임 CDN 은 이 게이트가 유일한 방어**다.
+     주석은 comments:false 로 사라지니 여기서 못박는다. 승급은 index.html 의 버전을 직접 올려서만. */
+  ...(() => {
+    const srcs = [...srcHtml.matchAll(/src="(https:\/\/unpkg\.com\/[^"]+)"/g)].map(m => m[1]);
+    const bare = srcs.filter(u => !/@\d+\.\d+\.\d+(?:[-+][\w.]+)?\//.test(u));
+    return [
+      [srcs.length > 0, 'unpkg CDN 스크립트를 하나도 못 찾음 — 검사기가 헛돌고 있음(선택자 부패?)'],
+      [bare.length === 0, 'unpkg CDN 이 exact pin 이 아님(bare major = 60초 만에 자동 승급 = 6/17 백지 기전): ' + bare.join(', ')],
+    ];
+  })(),
 ];
 const failed = smoke.filter(c => !c[0]).map(c => c[1]);
 if (failed.length) { console.error('BUILD SMOKE FAIL:\n - ' + failed.join('\n - ')); process.exit(1); }
