@@ -225,7 +225,60 @@ const preserveForeign = async (data, path, q) => {
   } catch { return applySwept(data); }
 };
 
-/* 클라우드 저장: Firebase PUT (1회 요청, 2초 디바운스) */
+/* ★★결함 B 근본 해결(2026-07-26·PDS §14.7): **통째 PUT → 바뀐 키만 PATCH**.
+   지금까지 저장은 blob 전체를 PUT 했다 → 앱이 안 건드린 키까지 매번 덮어써서, 로드 후 외부 도구가 쓴 값이
+   그 탭의 다음 저장에 통째로 되돌아갔다(= 결함 B). PATCH 는 **본문에 없는 키를 건드리지 않으므로**,
+   앱이 손대지 않은 키는 아예 쓰지 않는다 = 경쟁 자체가 사라진다(구조적 차단·경쟁창 0).
+   ★ETag 조건부 PUT(if-match)은 **브라우저에서 불가**로 실측 확인(2026-07-26): RTDB 응답에
+     `Access-Control-Expose-Headers` 가 없어 fetch 가 ETag 헤더를 읽지 못한다(서버측 백스톱은 가능 → 거기선 계속 사용).
+     Firebase SDK 트랜잭션은 firebase-database-compat 추가가 필요해 CDN 의존 1개 증설(6/17 백지 사고 클래스) → 채택 안 함.
+   ★실측 검증한 PATCH 의미론(scratch 경로·2026-07-26): 본문에 없는 키 불변 / `null`=삭제 / 빈 배열·빈 객체=키 삭제(PUT 과 동형) / 빈 본문 `{}`=200 no-op.
+   ★잔여: **같은 키를 동시에** 쓰면 그 키는 여전히 통째 교체된다(예: 사용자가 반복설정을 편집하는 순간 /sweep 이 sweptThrough 를 씀)
+     → 그 좁은 창은 preserveForeign(위)이 필드 단위로 방어한다. 두 겹.
+   ★기준선(_syncBase)=**'우리가 아는 클라우드의 내용'**. 로드/저장 성공 시 갱신. 없으면 통째 PUT 으로 안전 폴백. */
+const SYNC_OWNED = ["tasks", "projects", "history", "recurrings", "memos", "files", "savedAt", "lastWriter", "calFailures"];
+/* ★비교는 반드시 **정규화(canonical)** 로 — E2E 가 잡은 결함(2026-07-26): RTDB 는 객체 키를 **정렬해서** 돌려주는데
+   `JSON.stringify` 는 삽입순서를 보존한다 → 내용이 같아도 문자열이 달라 전 키가 '바뀜'으로 오판되고,
+   그러면 안 바뀐 키까지 다시 보내 이 설계의 목적(경쟁창 0)이 통째로 무력화된다. 키를 정렬해 직렬화한다. */
+const canonJson = (v) => {
+  if (v === null || typeof v !== "object") return JSON.stringify(v === undefined ? null : v);
+  if (Array.isArray(v)) return "[" + v.map(canonJson).join(",") + "]";
+  return "{" + Object.keys(v).sort().map(k => JSON.stringify(k) + ":" + canonJson(v[k])).join(",") + "}";
+};
+/* RTDB 는 빈 배열·빈 객체·null 을 **저장하지 않는다**(실측) → 로컬의 [] / {} 와 클라우드의 '키 없음'은 같은 상태다.
+   이걸 구분하면 매 저장마다 헛된 삭제 write 가 나간다. */
+const emptyish = (v) => v === null || v === undefined
+  || (Array.isArray(v) && v.length === 0)
+  || (typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0);
+let _syncBase = null; /* { key: 정규화 문자열 } */
+const setSyncBase = (obj) => {
+  try { const b = {}; for (const k of Object.keys(obj || {})) b[k] = canonJson(obj[k]); _syncBase = b; }
+  catch { _syncBase = null; } /* 직렬화 실패(순환참조 등) → 기준선 포기 = 다음 저장은 통째 PUT(안전측) */
+};
+const resetSyncState = () => { _syncBase = null; _sweptCache = null; }; /* ★워크스페이스 전환 = 다른 blob → 기준선 폐기(E2 클래스 방지) */
+/* 보낼 변경분만 추린다. null=기준선에 없음(=기준 모름) → 호출측이 통째 PUT. */
+const diffForPatch = (data) => {
+  if (!_syncBase || !data) return null;
+  const out = {};
+  try {
+    const EMPTY = new Set([undefined, "null", "[]", "{}"]); /* 클라우드에 '없음'과 동치인 정규화 표현 */
+    for (const k of Object.keys(data)) {
+      const cur = canonJson(data[k]);
+      const was = _syncBase[k];
+      if (cur === was) continue;
+      if (emptyish(data[k]) && EMPTY.has(was)) continue; /* 둘 다 '비어있음' = 같은 상태(헛된 write 방지) */
+      out[k] = data[k];
+    }
+    /* 앱이 **소유한** 키인데 이번 데이터에 없음 = 삭제 의도(PUT 의 '키 누락=삭제'를 재현).
+       ★소유 목록 밖의 키(외부 도구가 blob 에 심은 것)는 **절대 건드리지 않는다** — 이게 통째 PUT 보다 나은 지점. */
+    for (const k of SYNC_OWNED) {
+      if (!Object.prototype.hasOwnProperty.call(data, k) && !EMPTY.has(_syncBase[k])) out[k] = null;
+    }
+  } catch { return null; }
+  return out;
+};
+
+/* 클라우드 저장: Firebase PATCH(바뀐 키만) — 기준선 없으면 PUT (2초 디바운스) */
 let _saveTimer = null, _pendingData = null, _pendingPath = null;
 const cloudSave = (data) => {
   /* ★P0 계측 부착(2026-07-17·§14.8 ⑤): 이 blob 을 마지막으로 쓴 기기(lastWriter) + 이 기기가 겪은 최근 GAS 실패(calFailures).
@@ -245,17 +298,23 @@ const cloudSave = (data) => {
     const el = document.getElementById("sync-status");
     if (el) { el.textContent = "☁️ 저장중..."; el.style.color = "#F59E0B"; }
     const q = await authParam();
-    const body = await preserveForeign(data, path, q); /* ★결함 B: 외부 소유 필드(sweptThrough) 되살림 후 PUT */
+    /* ★바뀐 키만 PATCH(기준선 없으면 통째 PUT). recurrings 를 **보내야 할 때만** 외부 필드 보존 —
+       안 보내면 그 키는 애초에 건드리지 않으므로 병합도 네트워크 왕복도 불필요(대부분의 저장이 여기 해당). */
+    const patch = diffForPatch(data);
+    const sendRec = !!(patch && Object.prototype.hasOwnProperty.call(patch, "recurrings"));
+    const sendAll = (!patch || sendRec) ? await preserveForeign(data, path, q) : data;
+    const payload = patch ? { ...patch, ...(sendRec ? { recurrings: sendAll.recurrings } : {}) } : sendAll;
     fetch(url + q, {
-      method: "PUT",
+      method: patch ? "PATCH" : "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     }).then(r => {
       /* RTDB는 401(권한거부)에도 유효한 JSON 바디를 주므로 r.ok를 반드시 확인 */
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }).then(() => {
       _pendingData = null;
+      setSyncBase(sendAll); /* ★성공 = 클라우드는 이제 이 내용 → 다음 저장의 diff 기준 */
       if (el) { el.textContent = "☁️ 동기화됨"; el.style.color = "#10B981"; setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 2000); }
     }).catch(() => {
       if (el) { el.textContent = "☁️ 실패"; el.style.color = "#EF4444"; setTimeout(() => { el.textContent = "☁️"; el.style.color = "#9ca3af"; }, 3000); }
@@ -269,8 +328,16 @@ const flushCloudSave = async () => {
   const data = _pendingData; const path = _pendingPath || WS.fbPath; _pendingData = null; /* ★E2: 예약 시점 경로로 flush(전환돼도 옛 데이터는 옛 경로로) */
   const url = "https://taskmgr-sync-default-rtdb.firebaseio.com/" + path + ".json";
   /* ★언로드 경로라 네트워크 왕복을 더 붙이면 flush 자체가 유실될 수 있다 → 캐시(_sweptCache)만 동기 적용.
-     캐시는 직전 cloudSave 가 채워두므로 '편집 → 2초 내 탭닫기' 창에서도 직전 관측값이 살아 있다. */
-  try { const q = await authParam(); await fetch(url + q, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(applySwept(data)), keepalive: true }); } catch {}
+     캐시는 직전 cloudSave 가 채워두므로 '편집 → 2초 내 탭닫기' 창에서도 직전 관측값이 살아 있다.
+     ★여기서도 바뀐 키만 PATCH. 성공 확인이 불가능한 경로라 기준선(_syncBase)은 갱신하지 않는다(다음 저장이 조금 더 보내면 그만·안전측). */
+  try {
+    const q = await authParam();
+    const patch = diffForPatch(data);
+    const sendAll = applySwept(data);
+    const sendRec = !!(patch && Object.prototype.hasOwnProperty.call(patch, "recurrings"));
+    const payload = patch ? { ...patch, ...(sendRec ? { recurrings: sendAll.recurrings } : {}) } : sendAll;
+    await fetch(url + q, { method: patch ? "PATCH" : "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), keepalive: true });
+  } catch {}
 };
 
 /* 클라우드 로드: Firebase GET (1회 요청). 실패와 '빈 DB'를 구분해 반환 —
@@ -2093,6 +2160,9 @@ function App({ onSwitchWs }) {
           setRecurrings(m.recurrings || []);
           lastSavedAtRef.current = normSavedAt(cloudData.savedAt); /* 채택했으니 기준도 클라우드 값으로(정규화해 보관 — 이후 비교가 전부 ISO 문자열 기준) */
         }
+        /* ★PATCH diff 기준선 = **클라우드의 내용**(채택 여부와 무관). 채택 안 한 경우에도 이게 맞다 —
+           다음 저장이 '로컬 vs 클라우드' 차이만 보내므로, 클라우드에만 있는 외부 write 는 건드리지 않는다. */
+        setSyncBase(cloudData);
       }
       cloudLoadedRef.current = true;
       setCloudLoaded(true);
@@ -3108,6 +3178,7 @@ function WorkspaceRoot() {
   const switchWs = () => {
     flushCloudSave(); /* ★E2(2026-07-05): 전환 전 대기 저장을 즉시 flush(예약 경로로) — 안 하면 2초 디바운스 중인 이 워크스페이스의 클라우드 저장이 새 워크스페이스 편집에 preempt돼 유실. flushCloudSave가 _pendingData/_pendingPath를 동기 캡처하므로 아래 WS 재할당 전 호출로 옛 경로 보존. */
     const nk = wsKey === "work" ? "personal" : "work";
+    resetSyncState(); /* ★전환 = 다른 blob → PATCH diff 기준선·sweptThrough 캐시 폐기(옛 워크스페이스 기준으로 새 blob 을 부분 write 하는 E2 클래스 사고 차단) */
     try { localStorage.setItem("tm-workspace", nk); } catch {}
     WS = WORKSPACES[nk];
     setWsKey(nk);
