@@ -1455,7 +1455,7 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
 };
 
 /* ═══ 과제별 뷰 ═══ */
-const ProjectsView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, onReorder, isWork }) => {
+const ProjectsView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, onReorder, isWork }) => {
   const [open, setOpen] = useState(new Set(projects.filter(p => tasks.some(t => t.project === p.id && t.status !== "done")).map(p => p.id)));
   const [np, setNp] = useState("");
   const [editId, setEditId] = useState(null);
@@ -1465,12 +1465,27 @@ const ProjectsView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, 
   const isDefault = (id) => PERSONAL_PROJECTS.some(d => d.id === id);
   const startEdit = (e, p) => { e.stopPropagation(); setEditId(p.id); setEditName(p.name); };
   const saveEdit = () => { if (editName.trim()) onEditProj(editId, editName.trim()); setEditId(null); setEditName(""); };
+  /* ★참조 무결성(2026-07-26·소유자): 과제 ↔ 반복 태스크. 헤더 숫자가 **미완료 할일만** 세던 탓에
+     반복 3개짜리 살아있는 영역과 참조 0인 고아 과제가 화면에서 똑같이 "0" 으로 보였다 → 둘 다 문제였다:
+     ⓐ 진짜 고아(참조 0)가 안 보여 몇 주째 방치 ⓑ **살아있는 걸 고아로 오인해 삭제**하기 쉬움.
+     → 반복 개수를 헤더에 드러내고(🔁N), 반복이 붙은 과제는 **삭제를 막는다**. */
+  const recOf = (pid) => (recurrings || []).filter(r => !r.disabled && r.project === pid);
   const askDel = (e, p) => { e.stopPropagation();
+    const rec = recOf(p.id);
+    /* ★차단: 지우면 그 반복들이 '존재하지 않는 과제'를 가리키는 미아가 된다 — 반복 편집창의 과제 드롭다운이
+       값을 못 찾아 첫 항목으로 잘못 표시되고, 그대로 저장하면 엉뚱한 영역으로 재배정된다(2026-06-30 실제 발생). */
+    if (rec.length) {
+      window.alert('"' + p.name + '" 과제에는 반복 태스크 ' + rec.length + '개가 붙어 있어 삭제할 수 없습니다.\n\n'
+        + rec.map(r => "· " + r.text).join("\n")
+        + '\n\n반복설정(🔁)에서 먼저 다른 과제로 옮기거나 삭제한 뒤 지워주세요.');
+      return;
+    }
     const cnt = tasks.filter(t => t.project === p.id && t.status !== "done").length;
     if (window.confirm('"' + p.name + '" 과제를 삭제할까요?' + (cnt > 0 ? " (할일 " + cnt + "개도 함께 삭제)" : ""))) onDelProj(p.id);
   };
   const renderProj = (p) => {
     const pt = tasks.filter(t => t.project === p.id && t.status !== "done");
+    const rc = recOf(p.id).length; /* 반복 개수 — 이게 안 보여서 살아있는 영역과 고아가 구분이 안 됐다 */
     const fc = pt.filter(t => t.focus).length;
     const o = open.has(p.id);
     const canDel = isWork || !isDefault(p.id);
@@ -1485,6 +1500,8 @@ const ProjectsView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, 
                   onBlur={saveEdit} style={{ ...S.inp, fontSize: 14, padding: "2px 6px", maxWidth: 200 }} />
               : <span style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</span>}
             <span style={S.cnt(pt.length)}>{pt.length}</span>
+            {rc > 0 && <span style={{ fontSize: 10, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", padding: "0 5px", borderRadius: 6, fontWeight: 600, flexShrink: 0 }}
+              title={"반복 태스크 " + rc + "개 — " + recOf(p.id).map(r => r.text).join(", ")}>🔁{rc}</span>}
             {fc > 0 && <span style={{ fontSize: 11, color: "#F59E0B" }}>⭐{fc}</span>}
           </div>
           {editId !== p.id && <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
@@ -1495,7 +1512,9 @@ const ProjectsView = ({ tasks, projects, onDone, onDel, onFocus, onAdd, onEdit, 
         {o && <div style={{ paddingLeft: 8, marginBottom: 12 }}>
           {SK.map(s => { const items = pt.filter(t => t.status === s); if (!items.length) return null;
             return <div key={s} style={{ marginBottom: 4 }}>{items.map(t => <TaskRow key={t.id} task={t} projects={projects} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={dragHandlers} />)}</div>; })}
-          {pt.length === 0 && <div style={{ ...S.emp, padding: 16 }}>할 일 없음</div>}
+          {pt.length === 0 && <div style={{ ...S.emp, padding: 16 }}>
+            할 일 없음{rc > 0 && <><br/><span style={{ fontSize: 11 }}>반복 태스크 {rc}개는 오늘 탭·캘린더에서 돕니다 (여긴 일회성 할일만)</span></>}
+          </div>}
           <div style={S.div} /><AddForm projects={projects} onAdd={onAdd} defProj={p.id} />
         </div>}
       </div>
@@ -2962,6 +2981,11 @@ function App({ onSwitchWs }) {
   };
   const editProj = (id, name) => setProjects(p => p.map(pr => pr.id === id ? { ...pr, name } : pr));
   const delProj = (id) => {
+    /* ★참조 무결성 2겹(2026-07-26): UI(askDel)에서도 막지만 여기서도 막는다 — 호출 경로가 늘어도 불변식이 유지되도록.
+       반복이 붙은 과제를 지우면 그 반복이 '없는 과제'를 가리키는 미아가 되고, 편집창 드롭다운이 첫 항목으로
+       잘못 표시돼 저장 시 엉뚱한 영역으로 재배정된다(2026-06-30 실제 발생). */
+    const attached = (recurrings || []).filter(r => !r.disabled && r.project === id);
+    if (attached.length) { showT("반복 태스크 " + attached.length + "개가 붙어 있어 삭제할 수 없습니다 — 반복설정에서 먼저 옮기세요", null); return; }
     tasks.filter(t => t.project === id).forEach(t => { if (t.calEventId) calSync("delete", { eventId: t.calEventId }); });
     setProjects(p => p.filter(pr => pr.id !== id));
     setTasks(p => p.filter(t => t.project !== id));
@@ -3220,7 +3244,7 @@ function App({ onSwitchWs }) {
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
         {tab === "today" && <><WeeklyRoutineStrip recurrings={recurrings} tasks={tasks} history={history} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemoOnly={addRoutineMemo} /><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
-        {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
+        {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
         {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecaps={updateHistRecaps} onUpdateTaskRecaps={updateTaskRecaps} recurrings={recurrings} onToggleDay={toggleRoutineDay} />}
         {tab === "memos" && <MemosView projects={projects} memos={memos} setMemos={setMemos} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} />}
