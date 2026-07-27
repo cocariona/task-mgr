@@ -236,7 +236,7 @@ const preserveForeign = async (data, path, q) => {
    ★잔여: **같은 키를 동시에** 쓰면 그 키는 여전히 통째 교체된다(예: 사용자가 반복설정을 편집하는 순간 /sweep 이 sweptThrough 를 씀)
      → 그 좁은 창은 preserveForeign(위)이 필드 단위로 방어한다. 두 겹.
    ★기준선(_syncBase)=**'우리가 아는 클라우드의 내용'**. 로드/저장 성공 시 갱신. 없으면 통째 PUT 으로 안전 폴백. */
-const SYNC_OWNED = ["tasks", "projects", "history", "recurrings", "memos", "files", "savedAt", "lastWriter", "calFailures"];
+const SYNC_OWNED = ["tasks", "projects", "history", "recurrings", "files", "savedAt", "lastWriter", "calFailures"];
 /* ★비교는 반드시 **정규화(canonical)** 로 — E2E 가 잡은 결함(2026-07-26): RTDB 는 객체 키를 **정렬해서** 돌려주는데
    `JSON.stringify` 는 삽입순서를 보존한다 → 내용이 같아도 문자열이 달라 전 키가 '바뀜'으로 오판되고,
    그러면 안 바뀐 키까지 다시 보내 이 설계의 목적(경쟁창 0)이 통째로 무력화된다. 키를 정렬해 직렬화한다. */
@@ -2145,7 +2145,6 @@ function App({ onSwitchWs }) {
   const [tasks, setTasks] = useState(saved?.tasks || (isWork ? INIT_TASKS : []));
   const [projects, setProjects] = useState(saved?.projects || (isWork ? INIT_PROJECTS : PERSONAL_PROJECTS));
   /* (2026-06-26) issues·projectInfo state 제거 (폐기) */
-  const [memos, setMemos] = useState(saved?.memos || {});
   const [files, setFiles] = useState(saved?.files || []); /* 단독 업로드 파일 메타 (bytes=RTDB /files) */
   const [history, setHistory] = useState(saved?.history || []);
   const [recurrings, setRecurrings] = useState(saved?.recurrings || (isWork ? [
@@ -2197,7 +2196,6 @@ function App({ onSwitchWs }) {
           const m = migrateData(cloudData);
           setTasks(m.tasks || []);
           setProjects(m.projects || INIT_PROJECTS);
-          setMemos(m.memos || {});
           setFiles(m.files || []);
           setHistory(m.history || []);
           setRecurrings(m.recurrings || []);
@@ -2315,7 +2313,6 @@ function App({ onSwitchWs }) {
     if (doomedIds.size) setTasks(prev => prev.filter(t => !doomedIds.has(t.id)));
     if (bucketIds.size) {
       setProjects(prev => prev.filter(p => !bucketIds.has(p.id)));
-      setMemos(prev => { const n = { ...prev }; bucketIds.forEach(id => delete n[id]); return n; }); /* delProj와 동일하게 고아 메모 정리 */
     }
   }, [cloudLoaded]); /* eslint-disable-line */
 
@@ -2477,11 +2474,11 @@ function App({ onSwitchWs }) {
   const firstSaveSkip = useRef(true);
   useEffect(() => {
     if (firstSaveSkip.current) { firstSaveSkip.current = false; return; }
-    const data = { tasks, projects, history, recurrings, memos, files, savedAt: new Date().toISOString() };
+    const data = { tasks, projects, history, recurrings, files, savedAt: new Date().toISOString() };
     lastSavedAtRef.current = data.savedAt; /* ★C2: 저장한 savedAt을 기준으로 갱신 */
     saveToStorage(data);
     if (cloudLoadedRef.current) cloudSave(data);
-  }, [tasks, projects, history, recurrings, memos, files]);
+  }, [tasks, projects, history, recurrings, files]);
 
   const showT = (msg, undo) => setToast({ msg, undo });
   const hideT = () => setToast(null);
@@ -2905,11 +2902,10 @@ function App({ onSwitchWs }) {
     tasks.filter(t => t.project === id).forEach(t => { if (t.calEventId) calSync("delete", { eventId: t.calEventId }); });
     setProjects(p => p.filter(pr => pr.id !== id));
     setTasks(p => p.filter(t => t.project !== id));
-    setMemos(prev => { const n = { ...prev }; delete n[id]; return n; });
   };
 
   const exportData = () => {
-    const data = JSON.stringify({ tasks, projects, history, recurrings, memos, files, exportedAt: new Date().toISOString() }, null, 2);
+    const data = JSON.stringify({ tasks, projects, history, recurrings, files, exportedAt: new Date().toISOString() }, null, 2);
     const blob = new Blob([data], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `task-manager-${TODAY}.json`; a.click(); URL.revokeObjectURL(url);
@@ -2921,7 +2917,7 @@ function App({ onSwitchWs }) {
       const d = migrateData(JSON.parse(ev.target.result)); /* 옛 백업도 필드 기본값/상태 변환 적용 */
       if (d.tasks) setTasks(d.tasks); if (d.projects) setProjects(d.projects);
       if (d.history) setHistory(d.history);
-      if (d.recurrings) setRecurrings(d.recurrings); if (d.memos) setMemos(d.memos);
+      if (d.recurrings) setRecurrings(d.recurrings);
       if (d.files) setFiles(d.files);
       showT("데이터를 불러왔습니다", null);
     } catch { showT("파일 형식 오류", null); } };
