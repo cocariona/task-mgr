@@ -27,7 +27,7 @@
   <script crossorigin="anonymous" integrity="sha384-ezQ6HS3FLspd9te19o2McUV6FAK091+GG7KO54f/R8DKgCDi7fULhapNrd5LY+vG" src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
 
   <!-- Firebase (Auth 로그인). compat 빌드 = 빌드툴 없이 전역 firebase 사용.
-       파일 저장은 Storage 대신 RTDB(/files, base64) — Storage는 신규 프로젝트에서 유료플랜 필수라 미사용 -->
+       (2026-07-31) 파일 첨부 배선 전량 제거 — 생애 1건 사용 후 50일 0건, RTDB /files 비어 있음. -->
   <!-- ★firebase 도 SRI(2026-07-25): react 만 봉인하고 여기를 열어두면 문이 반만 닫힌다 —
        같은 페이지에서 실행되는 이상 권한은 동일하다. gstatic 은 구글 직영이라 unpkg 보다 침해가
        훨씬 어렵지만, 비용이 같으니 막는다. `crossorigin` 은 SRI 필수 조건이며 gstatic 이
@@ -236,7 +236,9 @@ const preserveForeign = async (data, path, q) => {
    ★잔여: **같은 키를 동시에** 쓰면 그 키는 여전히 통째 교체된다(예: 사용자가 반복설정을 편집하는 순간 /sweep 이 sweptThrough 를 씀)
      → 그 좁은 창은 preserveForeign(위)이 필드 단위로 방어한다. 두 겹.
    ★기준선(_syncBase)=**'우리가 아는 클라우드의 내용'**. 로드/저장 성공 시 갱신. 없으면 통째 PUT 으로 안전 폴백. */
-const SYNC_OWNED = ["tasks", "projects", "history", "recurrings", "files", "savedAt", "lastWriter", "calFailures"];
+/* ★"files" 제외(2026-07-31·첨부 제거): 앱이 더는 이 키를 소유하지 않는다 → PATCH 대상에서 빠져
+   **건드리지 않는다**(RTDB blob 에 옛 키가 남아 있어도 삭제하지 않음 — 비파괴). */
+const SYNC_OWNED = ["tasks", "projects", "history", "recurrings", "savedAt", "lastWriter", "calFailures"];
 /* ★비교는 반드시 **정규화(canonical)** 로 — E2E 가 잡은 결함(2026-07-26): RTDB 는 객체 키를 **정렬해서** 돌려주는데
    `JSON.stringify` 는 삽입순서를 보존한다 → 내용이 같아도 문자열이 달라 전 키가 '바뀜'으로 오판되고,
    그러면 안 바뀐 키까지 다시 보내 이 설계의 목적(경쟁창 0)이 통째로 무력화된다. 키를 정렬해 직렬화한다. */
@@ -459,60 +461,11 @@ const cloudLoad = async () => {
   } catch { return { ok: false }; }
 };
 
-/* ─── 파일 업로드 (RTDB /files 에 base64 저장 — 같은 잠금 규칙 적용, 로그인 필요) ───
-   메타({id,name,size,...})는 task.attachments/files 상태에, 실제 bytes 는 /files/<id> 별도 경로에.
-   /data 자동저장 블롭과 분리되어 있어 매 저장마다 파일이 재전송되지 않는다. */
-const RTDB_FILES_URL = "https://taskmgr-sync-default-rtdb.firebaseio.com/files/";
-const FILE_MAX_BYTES = 20 * 1024 * 1024; /* base64 +33% 감안, DB 저장 방식의 실용 한도 */
-const uploadFile = (file, onProgress) => new Promise((resolve, reject) => {
-  const u = fbUser();
-  if (!FB_CONFIGURED || !u) { reject(new Error("파일 업로드는 로그인 후 사용 가능합니다")); return; }
-  if (file.size > FILE_MAX_BYTES) { reject(new Error("20MB 이하 파일만 업로드할 수 있습니다")); return; }
-  const reader = new FileReader();
-  reader.onerror = () => reject(new Error("파일 읽기 실패"));
-  reader.onload = async () => {
-    try {
-      const b64 = String(reader.result).split(",")[1] || "";
-      const token = await u.getIdToken();
-      const fid = gid();
-      const meta = { id: fid, name: file.name, mimeType: file.type || "application/octet-stream", size: file.size, uploadedAt: new Date().toISOString(), store: "rtdb" };
-      const xhr = new XMLHttpRequest();
-      xhr.open("PUT", RTDB_FILES_URL + fid + ".json?auth=" + token);
-      xhr.setRequestHeader("Content-Type", "application/json");
-      if (onProgress && xhr.upload) xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(Math.round(e.loaded / e.total * 100)); };
-      xhr.onload = () => { (xhr.status >= 200 && xhr.status < 300) ? resolve(meta) : reject(new Error("업로드 실패 (HTTP " + xhr.status + ")")); };
-      xhr.onerror = () => reject(new Error("업로드 실패 (네트워크)"));
-      xhr.send(JSON.stringify({ name: meta.name, mimeType: meta.mimeType, size: meta.size, uploadedAt: meta.uploadedAt, data: b64 }));
-    } catch (e) { reject(e); }
-  };
-  reader.readAsDataURL(file);
-});
-const deleteStoredFile = async (att) => {
-  try {
-    const u = fbUser(); if (!u || !att || !att.id) return;
-    const token = await u.getIdToken();
-    await fetch(RTDB_FILES_URL + att.id + ".json?auth=" + token, { method: "DELETE" });
-  } catch {}
-};
-const downloadAttachment = async (att) => {
-  try {
-    const u = fbUser(); if (!u) { alert("로그인 후 사용 가능합니다"); return; }
-    const token = await u.getIdToken();
-    const r = await fetch(RTDB_FILES_URL + att.id + ".json?auth=" + token);
-    if (!r.ok) { alert("다운로드 실패 (HTTP " + r.status + ")"); return; }
-    const f = await r.json();
-    if (!f || !f.data) { alert("파일이 저장소에 없습니다 (삭제되었을 수 있음)"); return; }
-    const bin = atob(f.data);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const blob = new Blob([bytes], { type: f.mimeType || "application/octet-stream" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = f.name || att.name || "file"; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-  } catch (e) { alert("다운로드 실패: " + ((e && e.message) || e)); }
-};
-const fmtSize = (b) => b >= 1048576 ? (b/1048576).toFixed(1)+" MB" : b >= 1024 ? Math.round(b/1024)+" KB" : (b||0)+" B";
 
+/* (cleanup 2026-07-31) 파일 첨부 배선 전량 제거 — 업로드/다운로드 유틸·편집창 첨부 섹션(이미 죽은 코드)·
+   회고 첨부 상자·앱 상태까지. 생애 1건(2026-06-10) 사용 후 50일 0건, RTDB 저장소는 비어 있었음(고아 0).
+   기존 blob 에 남은 옛 키는 **삭제하지 않는다**(비파괴 — SYNC_OWNED 에서 빠져 손대지 않음).
+   제거된 식별자 목록은 커밋 메시지 참조. */
 /* (S3·cleanup 2026-06-16) 회사 캘린더 가져오기(COMPANY_GAS_URL/KEY·companyFetchEvents) 제거 — 인박스 탭과 함께 폐지(inert였음). */
 
 const GCAL_URL = GAS_URL;
@@ -811,7 +764,6 @@ const migrateData = (data) => {
     if (t.planDate === undefined) t = { ...t, planDate: "" };
     if (t.calEventId === undefined) t = { ...t, calEventId: "" };
     if (t.calUpdated === undefined) t = { ...t, calUpdated: 0 };
-    if (t.attachments === undefined) t = { ...t, attachments: [] };
     if (t.marks === undefined) t = { ...t, marks: [] };
     if (t.recap === undefined) t = { ...t, recap: "" };
     if (t.recaps === undefined) t = { ...t, recaps: (t.recap ? [{ id: "lg_" + t.id, text: t.recap, ts: (t.createdAt || TODAY) }] : []) }; /* recap 문자열 → recaps 배열(2026-07-01) */
@@ -1060,7 +1012,6 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
             {subs.length > 0 && <span style={S.progBdg}>{doneSubCnt}/{subs.length}</span>}
             {showProj && p && <span style={{ fontSize: 11, color: "#9ca3af" }}>#{p.name}</span>}
             {task.calEventId && <span style={{ fontSize: 9, color: "#10B981", fontWeight: 600, background: "#ECFDF5", padding: "1px 4px", borderRadius: 4 }} title="캘린더 연동됨">📅✓</span>}
-            {(task.attachments || []).length > 0 && <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "1px 4px", borderRadius: 4 }} title="첨부파일">📎{task.attachments.length}</span>}
             {/* (2026-06-26) 마커 표시 폐지 — 채널=프로젝트 버킷 */}
             {task.notes && <span onClick={(e) => { e.stopPropagation(); setShowNotes(!showNotes); }} style={{ cursor: "pointer", fontSize: 10, color: showNotes ? "#92400E" : "#B45309", background: showNotes ? "#FEF3C7" : "#FFFBEB", border: "1px solid #FDE68A", padding: "1px 5px", borderRadius: 4, userSelect: "none" }}>📝 메모</span>}
           </div>
@@ -1134,62 +1085,6 @@ const AddForm = ({ projects, onAdd, defProj }) => {
   );
 };
 
-/* ─── 첨부파일 섹션 (EditModal·파일 탭 공용) ─── */
-/* deferred 모드(EditModal): Storage 부수효과를 모달의 저장/취소와 일치시킨다 —
-   업로드는 즉시 하되 '취소' 시 롤백 삭제, 삭제는 예약만 했다가 '저장' 시 실행. */
-const AttachmentSection = ({ attachments, onChange, deferred, onBusy }) => {
-  const [uploading, setUploading] = useState(0); /* 0=idle, 1~100=진행% */
-  const [err, setErr] = useState("");
-  const inRef = useRef();
-  const canUpload = FB_CONFIGURED && !!fbUser();
-  const list = attachments || [];
-  const pick = async (e) => {
-    const file = e.target.files?.[0]; e.target.value = "";
-    if (!file) return;
-    setErr(""); setUploading(1); if (onBusy) onBusy(true);
-    try {
-      const att = await uploadFile(file, p => setUploading(Math.max(1, p)));
-      if (deferred) deferred.uploads.current.push(att);
-      onChange([...list, att]);
-    } catch (ex) { setErr((ex && ex.message) || String(ex)); }
-    setUploading(0); if (onBusy) onBusy(false);
-  };
-  const remove = (att) => {
-    if (deferred) {
-      if (!window.confirm('"' + att.name + '" 첨부를 삭제할까요? (저장을 눌러야 확정)')) return;
-      deferred.deletes.current.push(att);
-      onChange(list.filter(a => a.id !== att.id));
-      return;
-    }
-    if (!window.confirm('"' + att.name + '" 첨부를 삭제할까요? (저장소 파일도 함께 삭제)')) return;
-    deleteStoredFile(att);
-    onChange(list.filter(a => a.id !== att.id));
-  };
-  return (
-    <div>
-      <div style={S.lbl}>📎 첨부파일</div>
-      {list.map(a => (
-        <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "3px 0" }}>
-          <a href="#" onClick={(e) => { e.preventDefault(); downloadAttachment(a); }} style={{ color: "#3B82F6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }} title="클릭하여 다운로드">📎 {a.name}</a>
-          <span style={{ color: "#9ca3af", fontSize: 10, flexShrink: 0 }}>{fmtSize(a.size)}</span>
-          <button style={{ ...S.gh, fontSize: 10, color: "#EF4444", flexShrink: 0 }} onClick={() => remove(a)}>✕</button>
-        </div>
-      ))}
-      {canUpload ? (
-        <div style={{ marginTop: 4 }}>
-          <input ref={inRef} type="file" style={{ display: "none" }} onChange={pick} />
-          {uploading > 0
-            ? <span style={{ fontSize: 12, color: "#F59E0B" }}>⬆️ 업로드 중… {uploading}%</span>
-            : <button style={{ ...S.gh, fontSize: 11 }} onClick={() => inRef.current?.click()}>+ 파일 첨부</button>}
-        </div>
-      ) : (
-        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>파일 업로드는 Firebase 설정(로그인) 후 사용 가능</div>
-      )}
-      {err && <div style={{ fontSize: 11, color: "#EF4444", marginTop: 2 }}>{err}</div>}
-    </div>
-  );
-};
-
 /* ─── EditModal (task + subtask 공용) ─── */
 /* 오늘에서 내리기 얼럿(2026-07-04, 소유자) — 무조건 날짜 없앰 대신 [다른 날짜로 변경 / 날짜 없앰 / 취소] 선택 */
 const ClearTodayModal = ({ task, onApply, onCancel }) => {
@@ -1214,15 +1109,12 @@ const ClearTodayModal = ({ task, onApply, onCancel }) => {
   );
 };
 const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
-  const [f, setF] = useState({ attachments: [], marks: [], recap: "", ...task });
+  const [f, setF] = useState({ marks: [], recap: "", ...task });
   const u = (k, v) => setF(p => ({ ...p, [k]: v }));
-  const pendingUploads = useRef([]); const pendingDeletes = useRef([]);
   const overlayDown = useRef(false); /* 바깥클릭 닫기는 '오버레이에서 시작한 클릭'만 — textarea 드래그가 오버레이에서 끝나도 안 닫히게(2026-06-29) */
-  const [attBusy, setAttBusy] = useState(false);
-  /* 취소/바깥클릭: 이번 모달에서 올린 파일은 롤백 삭제(고아 방지), 삭제 예약은 폐기(파일 보존) */
-  const cancel = () => { pendingUploads.current.forEach(deleteStoredFile); onClose(); };
-  /* 저장: 삭제 예약을 이때 실행(취소했을 때 깨진 링크가 남지 않게) */
-  const commit = () => { if (attBusy) return; pendingDeletes.current.forEach(deleteStoredFile); onSave(f); onClose(); };
+  /* (2026-07-31) 첨부 제거로 저장/취소의 파일 부수효과(업로드 롤백·삭제 예약·업로드 중 저장 잠금)도 함께 사라짐 — 둘 다 순수 동작 */
+  const cancel = () => { onClose(); };
+  const commit = () => { onSave(f); onClose(); };
   return (
     <div style={S.mod} onMouseDown={e => { overlayDown.current = e.target === e.currentTarget; }} onClick={e => { if (e.target === e.currentTarget && overlayDown.current) cancel(); }}>
       <div className="modal-content" style={S.modC} onClick={e => e.stopPropagation()}>
@@ -1253,13 +1145,12 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
             </div>
           </div>
           {/* (2026-06-26) 채널 마커(🧠🎯✍️) 폐지 → 지식·교훈·글감 버킷(프로젝트)으로 대체. 예측 폐지. */}
-          {/* (2026-06-18) 첨부 제거 — 파일은 회고에 종속(회고탭 RecapFileBox). task 편집엔 불필요 */}
           <div><div style={S.lbl}>📝 메모 / 맥락 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(진행·참고 — 지금 이 일을 하기 위한 것)</span></div><textarea style={S.ta} rows={3} value={f.notes || ""} onChange={e => u("notes", e.target.value)} /></div>
           {/* 🪞 회고(완료 결과·교훈)는 회고 탭 전용으로 분리(2026-07-01) — 편집창에선 메모(진행/맥락)만. f.recap은 그대로 보존. */}
           <div style={{ fontSize: 10, color: "#9ca3af" }}>🪞 회고(완료 결과·교훈)는 <b>회고 탭</b>에서 적습니다 — 메모와 분리.</div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <button style={S.gh} onClick={cancel}>취소</button>
-            <button style={{ ...S.btn(), opacity: attBusy ? 0.4 : 1, cursor: attBusy ? "wait" : "pointer" }} onClick={commit} title={attBusy ? "파일 업로드 완료 후 저장할 수 있습니다" : ""}>저장</button>
+            <button style={S.btn()} onClick={commit}>저장</button>
           </div>
         </div>
       </div>
@@ -1925,28 +1816,10 @@ const RoutineStreak = ({ recurrings, tasks, history, onToggleDay }) => {
   );
 };
 
-/* ═══ 회고 (통합) — 업무: 마커별(보기+파일) / 개인: 루틴·프로젝트별(보기+입력+파일). 완료=history ═══ */
-/* 회고 첨부 — recapKey 단위로 파일 종속(업로드·목록·삭제). 회고 UI와 한 카드 안에. */
-const RecapFileBox = ({ recapKey, files, setFiles, canUpload }) => {
-  const inRef = useRef(); const [up, setUp] = useState(0); const [err, setErr] = useState("");
-  const mine = (files || []).filter(a => (a.recapKey || "") === recapKey);
-  const pick = async (e) => { const file = e.target.files?.[0]; e.target.value = ""; if (!file) return; setUp(1);
-    try { const att = await uploadFile(file, p => setUp(Math.max(1, p))); setFiles(prev => [...prev, { ...att, recapKey }]); } catch (ex) { setErr((ex && ex.message) || String(ex)); } setUp(0); };
-  const del = (a) => { if (!window.confirm('"' + a.name + '" 파일을 삭제할까요?')) return; deleteStoredFile(a); setFiles(prev => prev.filter(x => x.id !== a.id)); };
-  return (
-    <div style={{ marginTop: 5, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-      <span style={{ fontSize: 10, color: "#9ca3af" }}>📎</span>
-      {mine.map(a => <span key={a.id} style={{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 11, background: "#F3F4F6", borderRadius: 4, padding: "1px 5px" }}>
-        <a href="#" onClick={(ev) => { ev.preventDefault(); downloadAttachment(a); }} style={{ color: "#3B82F6", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</a>
-        <button style={{ ...S.gh, fontSize: 9, color: "#EF4444", padding: "0 2px", border: "none", background: "none" }} onClick={() => del(a)}>✕</button>
-      </span>)}
-      {canUpload ? (up > 0 ? <span style={{ fontSize: 11, color: "#F59E0B" }}>⬆️ {up}%</span> : <><input ref={inRef} type="file" style={{ display: "none" }} onChange={pick} /><button style={{ ...S.gh, fontSize: 10, padding: "1px 6px" }} onClick={() => inRef.current?.click()}>+ 파일</button></>) : <span style={{ fontSize: 10, color: "#9ca3af" }}>로그인 후 첨부</span>}
-      {err && <span style={{ fontSize: 10, color: "#EF4444" }}>{err}</span>}
-    </div>
-  );
-};
-/* 한 회고 항목 — 편집 후 '저장' 버튼(수정 시에만 표시) + 삭제 + 그 회고 전용 파일첨부(recap:<id>)(2026-07-01) */
-const RecapItem = ({ r, onSave, onDel, files, setFiles, canUpload }) => {
+/* ═══ 회고 (통합) — 업무: 마커별 / 개인: 루틴·프로젝트별(보기+입력). 완료=history ═══ */
+/* (2026-07-31) 회고별 파일 첨부 제거 — 회고 CRUD(추가·편집·삭제) 자체는 그대로 */
+/* 한 회고 항목 — 편집 후 '저장' 버튼(수정 시에만 표시) + 삭제 */
+const RecapItem = ({ r, onSave, onDel }) => {
   const [d, setD] = useState(r.text || "");
   useEffect(() => { setD(r.text || ""); }, [r.text, r.id]);
   const dirty = d !== (r.text || "");
@@ -1960,12 +1833,11 @@ const RecapItem = ({ r, onSave, onDel, files, setFiles, canUpload }) => {
       </div>
       <textarea value={d} onChange={e => setD(e.target.value)} rows={2}
         style={{ ...S.ta, minHeight: 0, fontSize: 12, background: dirty ? "#FFFDF5" : "#fff", borderColor: dirty ? "#FCD34D" : "#E9D5FF" }} />
-      <RecapFileBox recapKey={"recap:" + r.id} files={files} setFiles={setFiles} canUpload={canUpload} />
     </div>
   );
 };
-/* 여러 회고 = (접기 가능한) 목록 + '추가' 버튼(명시 저장). 각 회고에 파일첨부 종속 */
-const RecapEntries = ({ recaps, onChange, files, setFiles, canUpload }) => {
+/* 여러 회고 = (접기 가능한) 목록 + '추가' 버튼(명시 저장) */
+const RecapEntries = ({ recaps, onChange }) => {
   const list = recaps || [];
   const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(false); /* 기존 회고는 기본 접힘 */
@@ -1975,7 +1847,7 @@ const RecapEntries = ({ recaps, onChange, files, setFiles, canUpload }) => {
       {list.length > 0 && <div onClick={() => setOpen(!open)} style={{ fontSize: 11, color: "#7C3AED", fontWeight: 600, cursor: "pointer", userSelect: "none", padding: "2px 0", display: "flex", alignItems: "center", gap: 5 }}>
         <span style={{ fontSize: 10 }}>{open ? "▼" : "▶"}</span> 🪞 회고 {list.length}개 {open ? "접기" : "펴기"}
       </div>}
-      {open && list.map(r => <RecapItem key={r.id} r={r} files={files} setFiles={setFiles} canUpload={canUpload}
+      {open && list.map(r => <RecapItem key={r.id} r={r}
         onSave={txt => onChange(list.map(x => x.id === r.id ? { ...x, text: txt } : x))}
         onDel={() => { if (window.confirm("이 회고를 삭제할까요?")) onChange(list.filter(x => x.id !== r.id)); }} />)}
       <div style={{ display: "flex", gap: 4, alignItems: "stretch", marginTop: 2 }}>
@@ -1987,8 +1859,8 @@ const RecapEntries = ({ recaps, onChange, files, setFiles, canUpload }) => {
     </div>
   );
 };
-/* 완료 회고 카드 — 여러 회고(각자 파일) 목록 + 추가 */
-const RecapCompletionCard = ({ e, onSaveRecaps, files, setFiles, canUpload }) => {
+/* 완료 회고 카드 — 여러 회고 목록 + 추가 */
+const RecapCompletionCard = ({ e, onSaveRecaps }) => {
   const has = (e.recaps || []).length > 0;
   const [open, setOpen] = useState(has); /* 회고 입력은 선택적으로 펼침(2026-07-04) — 완료 목록이 길어지지 않게. 이미 회고 있으면 열림 */
   return (
@@ -2002,13 +1874,13 @@ const RecapCompletionCard = ({ e, onSaveRecaps, files, setFiles, canUpload }) =>
       </div>
       {e.notes && <div style={{ ...S.note, marginLeft: 0 }}>{e.notes}</div>}
       {open && (e.origId
-        ? <RecapEntries recaps={e.recaps} onChange={rs => onSaveRecaps(e.date, e.origId, rs)} files={files} setFiles={setFiles} canUpload={canUpload} />
+        ? <RecapEntries recaps={e.recaps} onChange={rs => onSaveRecaps(e.date, e.origId, rs)} />
         : (e.recaps || []).map(r => <div key={r.id} style={{ ...S.note, color: "#7C3AED", marginLeft: 0 }}>🪞 {r.text}</div>))}
     </div>
   );
 };
-/* 진행중 할일 회고 행 — 회고탭 '진행중'에서도 회고 여러 개 + 각자 파일첨부(2026-07-01) */
-const ActiveRecapRow = ({ t, isWork, pname, onEdit, onSaveRecaps, files, setFiles, canUpload }) => {
+/* 진행중 할일 회고 행 — 회고탭 '진행중'에서도 회고 여러 개(2026-07-01) */
+const ActiveRecapRow = ({ t, isWork, pname, onEdit, onSaveRecaps }) => {
   const dl = t.scheduledDate ? deadlineInfo(t.scheduledDate) : null;
   return (
     <div style={{ padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
@@ -2017,11 +1889,11 @@ const ActiveRecapRow = ({ t, isWork, pname, onEdit, onSaveRecaps, files, setFile
         <div style={{ flex: 1, minWidth: 0 }}>{t.text} {isWork && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{pname(t.project)}</span>}{t.notes && <div style={S.note}><span style={{ fontSize: 8, fontWeight: 700, opacity: 0.6, marginRight: 4 }}>📝</span>{t.notes}</div>}</div>
         <button style={{ ...S.gh, fontSize: 10 }} onClick={() => onEdit(t)}>✏️</button>
       </div>
-      <RecapEntries recaps={t.recaps} onChange={rs => onSaveRecaps(t.id, rs)} files={files} setFiles={setFiles} canUpload={canUpload} />
+      <RecapEntries recaps={t.recaps} onChange={rs => onSaveRecaps(t.id, rs)} />
     </div>
   );
 };
-const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, onUpdateHistRecaps, onUpdateTaskRecaps, recurrings, onToggleDay }) => {
+const RecapView = ({ isWork, tasks, history, projects, onEdit, onUpdateHistRecaps, onUpdateTaskRecaps, recurrings, onToggleDay }) => {
   /* 완료(alldone) 칩 제거(2026-07-04, 소유자): 완료 회고는 각 프로젝트 칩의 '완료(N)' 섹션 + 루틴 칩에서 이미 보임 → 중복 제거.
      업무=프로젝트별 / 개인=루틴별+프로젝트별. 완료 task는 해당 프로젝트 칩 하단 완료 섹션에 뜸. */
   /* 회고탭 루틴 분류 = 공유 isRoutineProj(2026-07-12): "반복 붙은 프로젝트=루틴" 자동 도출(모듈 ROUTINE_REC_PROJ_IDS, App이 매 렌더 동기) → 휴식(mm2tdvi 소속) 등 자동 루틴 + 운동/보컬/글쓰기 라이브 반복(F45·헬스·q1omsdk·dcfei54) 매핑. 하드코딩 SD_ROUTINES 폐지. */
@@ -2078,8 +1950,6 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
     return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   }, [logsAll, notes, tasks, history, recurrings, cur.kind, cur.key, cur.label]);
 
-  const canUpload = FB_CONFIGURED && !!fbUser();
-
   return (
     <div style={{ marginTop: 12 }}>
       {/* 지난 루틴 체크 그리드 폐지(2026-07-07): 루틴 체크는 오늘 탭 1곳(주N회 카운터/특정일 오늘할일)으로 일원화. 회고엔 읽기전용 주간 히스토리만 */}
@@ -2109,18 +1979,18 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
       {(cur.kind === "project" || (cur.kind === "routine" && active.length > 0)) && <div style={S.card}>
         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>진행중 ({active.length}){cur.kind === "routine" && <span style={{ fontSize: 10, fontWeight: 400, color: "#9ca3af", marginLeft: 6 }}>· 일회성 할일</span>}</div>
         {active.length === 0 && <div style={{ ...S.emp, padding: 12 }}>없음</div>}
-        {active.map(t => <ActiveRecapRow key={t.id} t={t} isWork={isWork} pname={pname} onEdit={onEdit} onSaveRecaps={onUpdateTaskRecaps} files={files} setFiles={setFiles} canUpload={canUpload} />)}
+        {active.map(t => <ActiveRecapRow key={t.id} t={t} isWork={isWork} pname={pname} onEdit={onEdit} onSaveRecaps={onUpdateTaskRecaps} />)}
       </div>}
 
       {(cur.kind === "project" || (cur.kind === "routine" && doneView.total > 0)) && <div>
         <div style={{ fontSize: 12, fontWeight: 600, margin: "10px 2px 6px" }}>완료 ({doneView.total}){cur.kind === "routine" && <span style={{ fontSize: 10, fontWeight: 400, color: "#9ca3af" }}> · 일회성 할일</span>}{doneView.pending.length > 0 && <span style={{ fontSize: 10, color: "#7C3AED", fontWeight: 600 }}> · 회고 대기 {doneView.pending.length}</span>}</div>
         {doneView.total === 0 && <div style={{ ...S.emp, padding: 12 }}>완료 기록 없음 (task 완료 시 모임)</div>}
-        {doneView.pending.map(e => <RecapCompletionCard key={e.key} e={e} onSaveRecaps={onUpdateHistRecaps} files={files} setFiles={setFiles} canUpload={canUpload} />)}
+        {doneView.pending.map(e => <RecapCompletionCard key={e.key} e={e} onSaveRecaps={onUpdateHistRecaps} />)}
         {doneView.recapped.length > 0 && <>
           <div onClick={() => setDoneOpen(!doneOpen)} style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, cursor: "pointer", userSelect: "none", padding: "6px 2px", display: "flex", alignItems: "center", gap: 5 }}>
             <span style={{ fontSize: 10 }}>{doneOpen ? "▼" : "▶"}</span> ✅ 회고 완료 {doneView.recapped.length}건 {doneOpen ? "접기" : "펼치기"}
           </div>
-          {doneOpen && doneView.recapped.map(e => <RecapCompletionCard key={e.key} e={e} onSaveRecaps={onUpdateHistRecaps} files={files} setFiles={setFiles} canUpload={canUpload} />)}
+          {doneOpen && doneView.recapped.map(e => <RecapCompletionCard key={e.key} e={e} onSaveRecaps={onUpdateHistRecaps} />)}
         </>}
         {doneView.hidden > 0 && <button style={{ ...S.gh, fontSize: 11, width: "100%", padding: "6px" }} onClick={() => setShowAllDone(true)}>이전 완료 {doneView.hidden}건 더 보기</button>}
       </div>}
@@ -2129,7 +1999,6 @@ const RecapView = ({ isWork, tasks, history, projects, files, setFiles, onEdit, 
           옛 /selfdev/inbox write(addNote)·weekly-review §2 수거 폐지. 과거 /selfdev logs·notes read-only 표시는 아래 목록에 유지. */}
       {!isWork && cur.kind === "routine" && <div style={{ ...S.card, fontSize: 11, color: "#6b7280", lineHeight: 1.6 }}>📝 <b>루틴 메모 = 회고</b> — 오늘탭 '주간 루틴' <b>＋</b>(세션 기록)에 메모를 남기면 여기·캘린더에 이월됩니다. 주1 <b>/sweep</b>이 영역 일지로 수거. 위 목록은 지난 메모 보기(완료 수는 상단 '주간 루틴').</div>}
 
-      {/* (2026-06-18) 공용 파일 카드 제거 — 파일은 회고 단위(RecapFileBox)에 종속: 회고 입력 카드 + 각 완료 카드 안에 */}
       {err && <div style={{ fontSize: 11, color: "#EF4444" }}>{err}</div>}
     </div>
   );
@@ -2145,7 +2014,7 @@ function App({ onSwitchWs }) {
   const [tasks, setTasks] = useState(saved?.tasks || (isWork ? INIT_TASKS : []));
   const [projects, setProjects] = useState(saved?.projects || (isWork ? INIT_PROJECTS : PERSONAL_PROJECTS));
   /* (2026-06-26) issues·projectInfo state 제거 (폐기) */
-  const [files, setFiles] = useState(saved?.files || []); /* 단독 업로드 파일 메타 (bytes=RTDB /files) */
+  /* (2026-07-31) 첨부 파일 목록 state 제거 — 배선 폐지. 옛 백업/blob 의 해당 키는 읽지도 쓰지도 않는다(비파괴). */
   const [history, setHistory] = useState(saved?.history || []);
   const [recurrings, setRecurrings] = useState(saved?.recurrings || (isWork ? [
     { id: gid(), dow: 5, text: "다운로드 폴더 정리", project: "proj_etc" },
@@ -2196,7 +2065,6 @@ function App({ onSwitchWs }) {
           const m = migrateData(cloudData);
           setTasks(m.tasks || []);
           setProjects(m.projects || INIT_PROJECTS);
-          setFiles(m.files || []);
           setHistory(m.history || []);
           setRecurrings(m.recurrings || []);
           lastSavedAtRef.current = normSavedAt(cloudData.savedAt); /* 채택했으니 기준도 클라우드 값으로(정규화해 보관 — 이후 비교가 전부 ISO 문자열 기준) */
@@ -2474,11 +2342,11 @@ function App({ onSwitchWs }) {
   const firstSaveSkip = useRef(true);
   useEffect(() => {
     if (firstSaveSkip.current) { firstSaveSkip.current = false; return; }
-    const data = { tasks, projects, history, recurrings, files, savedAt: new Date().toISOString() };
+    const data = { tasks, projects, history, recurrings, savedAt: new Date().toISOString() };
     lastSavedAtRef.current = data.savedAt; /* ★C2: 저장한 savedAt을 기준으로 갱신 */
     saveToStorage(data);
     if (cloudLoadedRef.current) cloudSave(data);
-  }, [tasks, projects, history, recurrings, files]);
+  }, [tasks, projects, history, recurrings]);
 
   const showT = (msg, undo) => setToast({ msg, undo });
   const hideT = () => setToast(null);
@@ -2905,7 +2773,7 @@ function App({ onSwitchWs }) {
   };
 
   const exportData = () => {
-    const data = JSON.stringify({ tasks, projects, history, recurrings, files, exportedAt: new Date().toISOString() }, null, 2);
+    const data = JSON.stringify({ tasks, projects, history, recurrings, exportedAt: new Date().toISOString() }, null, 2);
     const blob = new Blob([data], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `task-manager-${TODAY}.json`; a.click(); URL.revokeObjectURL(url);
@@ -2918,7 +2786,6 @@ function App({ onSwitchWs }) {
       if (d.tasks) setTasks(d.tasks); if (d.projects) setProjects(d.projects);
       if (d.history) setHistory(d.history);
       if (d.recurrings) setRecurrings(d.recurrings);
-      if (d.files) setFiles(d.files);
       showT("데이터를 불러왔습니다", null);
     } catch { showT("파일 형식 오류", null); } };
     r.readAsText(file); e.target.value = "";
@@ -3157,7 +3024,7 @@ function App({ onSwitchWs }) {
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
         {tab === "today" && <><WeeklyRoutineStrip recurrings={recurrings} tasks={tasks} history={history} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemoOnly={addRoutineMemo} /><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
-        {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} files={files} setFiles={setFiles} onEdit={handleEdit} onUpdateHistRecaps={updateHistRecaps} onUpdateTaskRecaps={updateTaskRecaps} recurrings={recurrings} onToggleDay={toggleRoutineDay} />}
+        {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} onEdit={handleEdit} onUpdateHistRecaps={updateHistRecaps} onUpdateTaskRecaps={updateTaskRecaps} recurrings={recurrings} onToggleDay={toggleRoutineDay} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} />}
       </div>
       {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} isWork={isWork} />}
