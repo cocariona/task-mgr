@@ -1733,7 +1733,15 @@ const WeeklyRoutineStrip = ({ recurrings, tasks, history, onAddSession, onRemove
   const wk = getWeekId();
   const [memoFor, setMemoFor] = useState(null);
   const [memoText, setMemoText] = useState("");
-  const items = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) > 0); /* count + weekly (2026-08-02) */
+  /* ★한 번에 한 군데만(2026-08-02b · 소유자 지적 "매일 할일로 뜨는 것도 있고 상단에 체크하는 것도 있고 헷갈린다"):
+     count 루틴은 L610 에서 '오늘 할 일' 인스턴스를 아예 안 만들어 **스트립 한 군데**에만 뜬다.
+     weekly 는 인스턴스를 만들므로 스트립에 넣으면 **양쪽에 뜬다** → 그 요일 당일 미완료인 동안만 스트립에서 숨긴다.
+       · 그 요일 당일 · 미완료 → '오늘 할 일'에만(예약 시각이 보여야 하는 자리)
+       · 그 날이 지나 미완료  → 스트립에만(= 소급 체크 자리. 옛 동작에선 여기서 영영 사라졌다)
+       · 완료                → 스트립에 ✓ (인스턴스는 완료로 흡수돼 사라진다)
+     ※ 어느 쪽에서 체크해도 같은 회차키(wk)를 쓰므로 두 자리는 항상 같은 값을 본다. */
+  const onTodayList = (r) => r.type === "weekly" && (tasks || []).some(t => t.recurringId === r.id && (t.recurringPeriod || "") === wk && t.planDate === TODAY && t.status !== "done" && !t.cancelled);
+  const items = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) > 0 && !onTodayList(r)); /* count + weekly (2026-08-02) */
   if (!items.length) return null;
   const doneSet = routineDoneSet(tasks, history);
   const submit = (rid) => { onAddSession(rid, memoText); setMemoFor(null); setMemoText(""); };
