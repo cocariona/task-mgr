@@ -95,9 +95,11 @@ const TABS_BY_WS = {
   work: [
     { id: "today", label: "오늘", icon: "⭐" },
     { id: "projects", label: "과제별", icon: "📁" },
-    /* 회고 탭 복원(2026-06-28): 6/26 제거는 소유자 정정(번복) — 업무도 내가 남긴 회고 확인 + 지난 task 회고 CRUD 필요.
-       마커 폐지에 맞춰 RecapView 업무 타깃 = 마커별 → 프로젝트·develop 버킷·완료별로 재구성. ⚠️ vault 연동스펙 canon 갱신 [개선:B]. */
-    { id: "channels", label: "회고", icon: "🔎" },
+    /* ⛔ 업무 회고 탭 제거(2026-08-02·소유자 결정). 이력: 6/26 제거 → 6/29 소유자 번복(복원) → 8/2 재제거.
+       이번 제거의 전제가 그때와 다르다 — **완료된 task 의 메모를 히스토리에서 나중에 쓸 수 있게 만든 뒤** 지웠다(HistRow canEditMemo).
+       그 전엔 완료 시점에 메모가 비면 영영 못 적었기 때문에 회고 탭이 유일한 사후 입력구였고, 그래서 번복이 옳았다.
+       실사용 실측: 업무 완료 227건 중 회고 2건(0.9%). 그 2건은 제거 전 vault 수확 완료(PM 업무 프레임워크 260802 증류).
+       ⚠ 개인 회고 탭은 그대로 유지. RecapView 내부 isWork 분기는 도달 불가가 될 뿐 **제거하지 않는다**(5곳 동시 정리 실패 시 백지). */
     { id: "history", label: "히스토리", icon: "📜" },
   ],
   /* 과제 맥락(memos) 탭은 계속 제거 유지(2026-06-26) → 로컬 `Desktop\과제 맥락.md`(계정경계·기밀). memos 데이터·배선은 2026-07-27~28 전량 제거(e779400) — RTDB /data 에 memos 키 부재 확인(2026-07-28). 회고(recap)와 별개. */
@@ -1146,8 +1148,10 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
           </div>
           {/* (2026-06-26) 채널 마커(🧠🎯✍️) 폐지 → 지식·교훈·글감 버킷(프로젝트)으로 대체. 예측 폐지. */}
           <div><div style={S.lbl}>📝 메모 / 맥락 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(진행·참고 — 지금 이 일을 하기 위한 것)</span></div><textarea style={S.ta} rows={3} value={f.notes || ""} onChange={e => u("notes", e.target.value)} /></div>
-          {/* 🪞 회고(완료 결과·교훈)는 회고 탭 전용으로 분리(2026-07-01) — 편집창에선 메모(진행/맥락)만. f.recap은 그대로 보존. */}
-          <div style={{ fontSize: 10, color: "#9ca3af" }}>🪞 회고(완료 결과·교훈)는 <b>회고 탭</b>에서 적습니다 — 메모와 분리.</div>
+          {/* 🪞 회고 안내 — 개인은 회고 탭, 업무는 회고 탭이 없어졌으므로(2026-08-02) 히스토리 사후 입력을 가리킨다. f.recap은 그대로 보존. */}
+          <div style={{ fontSize: 10, color: "#9ca3af" }}>{isWork
+            ? <>완료한 뒤 알게 된 것은 <b>히스토리 탭</b>에서 그 항목의 <b>✏️＋</b>로 적습니다 — 끝난 뒤에도 남길 수 있습니다.</>
+            : <>🪞 회고(완료 결과·교훈)는 <b>회고 탭</b>에서 적습니다 — 메모와 분리.</>}</div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <button style={S.gh} onClick={cancel}>취소</button>
             <button style={S.btn()} onClick={commit}>저장</button>
@@ -1508,7 +1512,13 @@ const HistRow = ({ item, date, idx, onRestore, onUncancel, onEditMemo, onDeleteM
      ★서브태스크(isSub) 제외: 완료 서브는 부모 tasks[].subtasks[] 에 **살아있고** history.orig 은 스냅샷(L2370)이라
      여기만 고치면 둘이 갈라진다. 실측(2026-07-25 전수) 완료 서브 메모 **0건** — 실사용 손실 없음.
      필요해지면 부모 subtasks 까지 write-through 로 확장할 것(그 전엔 열지 말 것). */
-  const canEditMemo = item.type === "done" && !item.isSub && (orig.notes || "").trim();
+  /* ★2026-08-02: `(orig.notes||"").trim()` 조건을 뺐다 — **메모가 비어 있어도 ✏️ 를 연다.**
+     구 동작: 완료 시점에 메모가 없었으면 수정 버튼 자체가 안 떠서 **나중에 한 줄 적을 방법이 없었다.**
+     그래서 '지식·공부' task 를 제목만 완료하면 그 내용이 영영 안 남고, /sweep 수확 소스(notes)가 비어
+     아무것도 안 걸렸다(실측 2026-W31: 업무 완료 10건 중 메모 2건).
+     회고 탭을 없애는 전제 조건도 이것이다 — **완료 후에도 쓸 수 있어야 회고의 의의가 산다**(소유자 2026-08-02). */
+  const canEditMemo = item.type === "done" && !item.isSub;
+  const hasMemo = !!(orig.notes || "").trim();
   const isRoutineMemo = canEditMemo && orig.recurringId; /* 루틴만 캘린더 글랜스 재-lay 대상 → 안내문구 분기 */
   return (
     <div onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}>
@@ -1526,10 +1536,10 @@ const HistRow = ({ item, date, idx, onRestore, onUncancel, onEditMemo, onDeleteM
         {item.time && <span style={{ fontSize: 10, color: "#c0c0c0", flexShrink: 0 }}>{item.time}</span>}
         {item.cancelled && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", color: "#059669", borderColor: "#A7F3D0" }} onClick={() => onUncancel(date, idx)} title="취소 복원 — 다시 이번 주 카운트에 포함">↺ 복원</button>}
         {h && item.type === "done" && !item.cancelled && !item.memoOnly && !item.routineKey && !item.isSub && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
-        {h && canEditMemo && !item.cancelled && onEditMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => { setEt(orig.notes || ""); setEditing(true); setOpen(true); }} title={isRoutineMemo ? "메모 수정 — 캘린더 글랜스에 반영" : "메모 수정 — 완료 기록은 그대로"}>✏️</button>}
-        {h && canEditMemo && !item.cancelled && onDeleteMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", color: "#DC2626" }} onClick={() => onDeleteMemo(date, idx)} title={item.memoOnly ? "이 메모 삭제 — 캘린더 글랜스서 제거(↺ 복원 가능)" : (isRoutineMemo ? "메모만 삭제 — 수행 카운트는 유지·캘린더서 제거(되돌리기 토스트로 복원)" : "메모만 삭제 — 완료 기록은 유지(되돌리기 토스트로 복원)")}>🗑</button>}
+        {h && canEditMemo && !item.cancelled && onEditMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", ...(hasMemo ? {} : { color: "#4338CA", borderColor: "#C7D2FE" }) }} onClick={() => { setEt(orig.notes || ""); setEditing(true); setOpen(true); }} title={hasMemo ? (isRoutineMemo ? "메모 수정 — 캘린더 글랜스에 반영" : "메모 수정 — 완료 기록은 그대로") : "메모 추가 — 끝난 뒤에도 무엇을 알게 됐는지 남길 수 있다"}>{hasMemo ? "✏️" : "✏️＋"}</button>}
+        {h && canEditMemo && hasMemo && !item.cancelled && onDeleteMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", color: "#DC2626" }} onClick={() => onDeleteMemo(date, idx)} title={item.memoOnly ? "이 메모 삭제 — 캘린더 글랜스서 제거(↺ 복원 가능)" : (isRoutineMemo ? "메모만 삭제 — 수행 카운트는 유지·캘린더서 제거(되돌리기 토스트로 복원)" : "메모만 삭제 — 완료 기록은 유지(되돌리기 토스트로 복원)")}>🗑</button>}
       </div>
-      {hasCtx && open && <div style={{ marginLeft: 28, marginBottom: 6 }}>
+      {(hasCtx || editing) && open && <div style={{ marginLeft: 28, marginBottom: 6 }}>{/* ★editing 추가(2026-08-02): 메모가 비어 있어도 입력창이 열려야 새로 쓸 수 있다 */}
         {editing && <div style={{ marginTop: 2 }}>
           <textarea value={et} onChange={e => setEt(e.target.value)} autoFocus style={{ width: "100%", minHeight: 64, fontSize: 12, padding: 6, border: "1px solid #C7D2FE", borderRadius: 6, boxSizing: "border-box", resize: "vertical" }} />
           <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
@@ -1697,7 +1707,11 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
 /* ─── 주N회 루틴(2026-07-07): 지정 요일이 유동적인 루틴(예: 보컬 월·수·토)을 '이번 주 N회 목표'로 추적.
    목표=freqPerWeek 우선, 없으면 지정 요일 수(dows.length). 완료수=이번 주 done 회차(옮긴 날·➕추가 세션 포함).
    현재 구조 유지: 요일별 예정 인스턴스·캘린더는 그대로, 위에 '주 N회' 카운트 층만 얹음. ─── */
-const routineWeekTarget = (r) => r.type === "count" ? (r.freqPerWeek || 1) : 0; /* ★주N회 유형만 카운터 대상(2026-07-07): freqPerWeek 목표. 특정일(weekly)·매일·매월은 0=스트립 제외 */
+/* ★2026-08-02: weekly(특정일) 도 스트립 대상으로 편입. 목표=1(불변식 I2가 weekly=요일 1개를 강제).
+   왜: weekly 는 그 요일 당일 '오늘 할 일'에만 뜨고 다음날 isStaleRoutine 으로 사라진다 →
+   그날 앱을 안 열면 그 주 회차를 영영 못 누른다. 실측 사고: 링글은 매주 수강했는데 앱 기록은 2주치가 비었고,
+   주간 정제는 vault 일지 3회 vs 앱 1회였다. 스트립이 곧 소급 체크 자리다. */
+const routineWeekTarget = (r) => r.type === "count" ? (r.freqPerWeek || 1) : r.type === "weekly" ? 1 : 0; /* 매일·매월은 0=스트립 제외 */
 const routineDoneSet = (tasks, history) => { const s = new Set();
   (tasks || []).forEach(t => { if (t.recurringId && t.status === "done" && !t.cancelled) s.add(t.recurringId + "|" + (t.recurringPeriod || t.planDate)); });
   (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && !it.cancelled && !it.memoOnly && it.orig && it.orig.recurringId) s.add(it.orig.recurringId + "|" + (it.orig.recurringPeriod || day.date)); })); /* ★취소(cancelled)=카운트 제외(2026-07-07·B안). ★memoOnly=📝메모만(카운트 무관·2026-07-08)도 제외 */
@@ -1719,7 +1733,7 @@ const WeeklyRoutineStrip = ({ recurrings, tasks, history, onAddSession, onRemove
   const wk = getWeekId();
   const [memoFor, setMemoFor] = useState(null);
   const [memoText, setMemoText] = useState("");
-  const items = (recurrings || []).filter(r => !r.disabled && r.type === "count");
+  const items = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) > 0); /* count + weekly (2026-08-02) */
   if (!items.length) return null;
   const doneSet = routineDoneSet(tasks, history);
   const submit = (rid) => { onAddSession(rid, memoText); setMemoFor(null); setMemoText(""); };
@@ -1757,7 +1771,7 @@ const WeeklyRoutineStrip = ({ recurrings, tasks, history, onAddSession, onRemove
 /* 회고 탭 — 주N회 루틴의 주별 완료수 히스토리(뒤돌아보기, 지난 4주) */
 const WeeklyRoutineHistory = ({ recurrings, tasks, history }) => {
   const [open, setOpen] = useState(false);
-  const items = (recurrings || []).filter(r => !r.disabled && r.type === "count");
+  const items = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) > 0); /* count + weekly (2026-08-02) */
   if (!items.length) return null;
   const doneSet = routineDoneSet(tasks, history);
   const base = new Date(TODAY + "T00:00:00").getTime();
@@ -2480,17 +2494,26 @@ function App({ onSwitchWs }) {
   const addRoutineSession = (rid, memo) => {
     const rec = recurrings.find(r => r.id === rid); if (!rec) return;
     const wk = getWeekId();
-    const period = wk + "-x" + gid(); /* 고유 회차키 → 연타 언더카운트 레이스 없음(적대검증 C1b) */
+    const isWeekly = rec.type === "weekly";
+    /* ★weekly(2026-08-02): **정규 회차키(wk)를 재사용한다.** count 처럼 고유키(wk-x…)를 쓰면 그 주 정규 인스턴스와
+       별건이 되어 2회로 집계된다. routineDoneSet 이 Set 이라 tasks·history 가 같은 키를 내면 1회로 합쳐진다(중복 방지가 구조적). */
+    const period = isWeekly ? wk : wk + "-x" + gid(); /* count: 고유 회차키 → 연타 언더카운트 레이스 없음(적대검증 C1b) */
+    if (isWeekly && weekDoneCount(routineDoneSet(tasks, history), rid, wk) >= 1) { showT("이번 주는 이미 완료로 기록돼 있습니다", null); return; }
+    /* 그 주 대기 인스턴스가 있으면 그것을 완료로 흡수한다 — 안 그러면 tasks[] 에 유령으로 남는다(실측: 링글 rdbvi29 가 그렇게 열린 채였다). */
+    const pend = isWeekly ? (tasks || []).find(t => t.recurringId === rid && (t.recurringPeriod || "") === wk && t.status !== "done" && !t.cancelled) : null;
     const proj = projects.find(p => p.id === rec.project);
     const memoTrim = (memo || "").trim();
-    const orig = { id: gid(), text: rec.text, status: "done", project: rec.project || "proj_etc", recurringId: rid, recurringPeriod: period, notes: memoTrim, planDate: TODAY, planTime: rec.time || "", protocol: rec.protocol || "", createdAt: TODAY, subtasks: [], calEventId: "", calUpdated: 0 };
+    const orig = pend
+      ? { ...pend, status: "done", recurringPeriod: period, notes: memoTrim || pend.notes || "" }
+      : { id: gid(), text: rec.text, status: "done", project: rec.project || "proj_etc", recurringId: rid, recurringPeriod: period, notes: memoTrim, planDate: TODAY, planTime: rec.time || "", protocol: rec.protocol || "", createdAt: TODAY, subtasks: [], calEventId: "", calUpdated: 0 };
     setHistory(prev => { const item = { type: "done", text: orig.text, projectName: proj ? proj.name : "", project: orig.project, orig, time: nowTime() };
       const ex = prev.find(h => h.date === TODAY); if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, item] } : h); return [...prev, { date: TODAY, items: [item] }]; });
+    if (pend) setTasks(prev => prev.filter(t => t.id !== pend.id)); /* 완료로 흡수됐으므로 대기 목록에서 뺀다(일반 완료와 같은 처리) */
     if (memoTrim) { /* 메모는 세션(orig.notes)에만 저장 → routineMemoText가 취소 안 된 세션서 도출. 즉시 반영 위해 새 메모 포함해 재-lay(fresh override). */
       const rest = routineMemoText(rid, history, 9); const withNew = "[" + TODAY.slice(5) + "] " + memoTrim + (rest ? "\n\n" + rest : ""); /* ★오늘 메모를 맨 위로(역순 정합·2026-07-25) */
       layFutureForRecurring(rec, WS, withNew); /* 권장요일 이벤트 desc(실행방법+메모) 즉시 갱신 → 캘린더 glance 이월 */
     }
-    showT("\"" + rec.text + "\" 기록 ✅ (이번 주 +1" + (memoTrim ? " · 메모 저장" : "") + ")", null);
+    showT("\"" + rec.text + "\" 기록 ✅ (" + (isWeekly ? "이번 주 완료" : "이번 주 +1") + (memoTrim ? " · 메모 저장" : "") + ")", null);
   };
 
   /* 주N회 −(2026-07-07): 이번 주 '가장 최근' 완료 1건 취소(잘못 체크·오카운트 정정). history done 우선(➕·요일체크 공통), 없으면 tasks done.
