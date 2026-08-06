@@ -1741,9 +1741,18 @@ const WeeklyRoutineStrip = ({ recurrings, tasks, history, onAddSession, onRemove
        · 완료                → 스트립에 ✓ (인스턴스는 완료로 흡수돼 사라진다)
      ※ 어느 쪽에서 체크해도 같은 회차키(wk)를 쓰므로 두 자리는 항상 같은 값을 본다. */
   const onTodayList = (r) => r.type === "weekly" && (tasks || []).some(t => t.recurringId === r.id && (t.recurringPeriod || "") === wk && t.planDate === TODAY && t.status !== "done" && !t.cancelled);
-  const items = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) > 0 && !onTodayList(r)); /* count + weekly (2026-08-02) */
-  if (!items.length) return null;
+  const pool = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) > 0 && !onTodayList(r)); /* count + weekly (2026-08-02) */
+  if (!pool.length) return null;
   const doneSet = routineDoneSet(tasks, history);
+  /* ★정렬(2026-08-02b): **할 게 남은 것이 앞으로.** 배열 순서(=만든 순서)는 아무 뜻이 없어서
+     자주 놓치는 짧은 루틴이 줄 끝에 묻혔다. ① 미달 먼저 ② 부족분 큰 순 ③ 이른 시각 순 ④ 채운 것은 뒤로. */
+  const items = pool.slice().sort((a, b) => {
+    const la = routineWeekTarget(a) - weekDoneCount(doneSet, a.id, wk);
+    const lb = routineWeekTarget(b) - weekDoneCount(doneSet, b.id, wk);
+    if ((la > 0) !== (lb > 0)) return la > 0 ? -1 : 1;   /* 미달을 앞으로 */
+    if (la !== lb) return lb - la;                        /* 많이 남은 것을 앞으로 */
+    return (a.time || "99:99").localeCompare(b.time || "99:99");
+  });
   const submit = (rid) => { onAddSession(rid, memoText); setMemoFor(null); setMemoText(""); };
   const submitMemo = (rid) => { onAddMemoOnly(rid, memoText); setMemoFor(null); setMemoText(""); }; /* 📝 카운트 없이 메모만(2026-07-08) */
   const cancel = () => { setMemoFor(null); setMemoText(""); };
