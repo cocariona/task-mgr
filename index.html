@@ -2512,10 +2512,15 @@ function App({ onSwitchWs }) {
     const rec = recurrings.find(r => r.id === rid); if (!rec) return;
     const wk = getWeekId();
     const isWeekly = rec.type === "weekly";
-    /* ★weekly(2026-08-02): **정규 회차키(wk)를 재사용한다.** count 처럼 고유키(wk-x…)를 쓰면 그 주 정규 인스턴스와
-       별건이 되어 2회로 집계된다. routineDoneSet 이 Set 이라 tasks·history 가 같은 키를 내면 1회로 합쳐진다(중복 방지가 구조적). */
-    const period = isWeekly ? wk : wk + "-x" + gid(); /* count: 고유 회차키 → 연타 언더카운트 레이스 없음(적대검증 C1b) */
-    if (isWeekly && weekDoneCount(routineDoneSet(tasks, history), rid, wk) >= 1) { showT("이번 주는 이미 완료로 기록돼 있습니다", null); return; }
+    /* ★weekly 초과 기록 허용(2026-08-08 소유자 지시 — "레슨·링글도 다른 것들과 똑같이 초과 등록되게").
+       규칙: **그 주 첫 회차만 정규키(wk), 2회차부터는 고유키(wk-x…)**.
+       · 첫 회차가 정규키인 이유 = 그 주 예정 인스턴스와 같은 키여야 두 표시자리(오늘 할 일 / 주간 스트립)가
+         같은 회차를 가리켜 **한 세션이 2회로 잡히지 않는다**. 이것이 2026-08-02 가드의 실제 목적이었고 그대로 보존한다.
+       · 2회차부터 고유키인 이유 = routineDoneSet 이 Set 이라 같은 키는 합쳐져 **아무리 눌러도 1** 이었다(이번 지시의 증상).
+       · 이중계상 경로가 안 생기는 근거 = 2회차를 누르는 시점엔 그 주 정규 인스턴스가 이미 완료로 흡수돼(아래 pend) tasks[]에 없다.
+       옛 하드블록(`>=1 이면 토스트 후 return`)은 제거 — 그것이 초과 등록을 막던 직접 원인. */
+    const already = weekDoneCount(routineDoneSet(tasks, history), rid, wk);
+    const period = (isWeekly && already === 0) ? wk : wk + "-x" + gid(); /* count: 고유 회차키 → 연타 언더카운트 레이스 없음(적대검증 C1b) */
     /* 그 주 대기 인스턴스가 있으면 그것을 완료로 흡수한다 — 안 그러면 tasks[] 에 유령으로 남는다(실측: 링글 rdbvi29 가 그렇게 열린 채였다). */
     const pend = isWeekly ? (tasks || []).find(t => t.recurringId === rid && (t.recurringPeriod || "") === wk && t.status !== "done" && !t.cancelled) : null;
     const proj = projects.find(p => p.id === rec.project);
@@ -2530,7 +2535,7 @@ function App({ onSwitchWs }) {
       const rest = routineMemoText(rid, history, 9); const withNew = "[" + TODAY.slice(5) + "] " + memoTrim + (rest ? "\n\n" + rest : ""); /* ★오늘 메모를 맨 위로(역순 정합·2026-07-25) */
       layFutureForRecurring(rec, WS, withNew); /* 권장요일 이벤트 desc(실행방법+메모) 즉시 갱신 → 캘린더 glance 이월 */
     }
-    showT("\"" + rec.text + "\" 기록 ✅ (" + (isWeekly ? "이번 주 완료" : "이번 주 +1") + (memoTrim ? " · 메모 저장" : "") + ")", null);
+    showT("\"" + rec.text + "\" 기록 ✅ (" + ((isWeekly && already === 0) ? "이번 주 완료" : "이번 주 +1") + (memoTrim ? " · 메모 저장" : "") + ")", null);
   };
 
   /* 주N회 −(2026-07-07): 이번 주 '가장 최근' 완료 1건 취소(잘못 체크·오카운트 정정). history done 우선(➕·요일체크 공통), 없으면 tasks done.
@@ -2547,8 +2552,8 @@ function App({ onSwitchWs }) {
     if (target.kind === "hist") {
       setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: true } : it) } : h));
       const rec0 = recurrings.find(r => r.id === rid);
-      if (rec0 && rec0.type === "count") layFutureForRecurring(rec0, WS, routineMemoText(rid, history, 10, { excludeId: target.origId })); /* 취소한 세션 메모를 캘린더 desc서 즉시 제거 */
-      showT("이번 주 완료 1건 취소 — 히스토리서 복원 가능", () => { setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: false } : it) } : h)); if (rec0 && rec0.type === "count") layFutureForRecurring(rec0, WS, routineMemoText(rid, history, 10)); hideT(); }); /* R1(2026-07-08): 되돌리기=능동 재-lay(closure history엔 target 아직 non-cancelled→excludeId 없이 메모 포함)로 즉시 캘린더 복귀. futureThrough:"" 리셋 레이스·once-per-mount futureEvtDone 의존 제거 */
+      if (rec0 && routineWeekTarget(rec0) > 0) layFutureForRecurring(rec0, WS, routineMemoText(rid, history, 10, { excludeId: target.origId })); /* 취소한 세션 메모를 캘린더 desc서 즉시 제거 */
+      showT("이번 주 완료 1건 취소 — 히스토리서 복원 가능", () => { setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: false } : it) } : h)); if (rec0 && routineWeekTarget(rec0) > 0) layFutureForRecurring(rec0, WS, routineMemoText(rid, history, 10)); hideT(); }); /* R1(2026-07-08): 되돌리기=능동 재-lay(closure history엔 target 아직 non-cancelled→excludeId 없이 메모 포함)로 즉시 캘린더 복귀. futureThrough:"" 리셋 레이스·once-per-mount futureEvtDone 의존 제거 */
     } else {
       setTasks(prev => prev.map(t => t.id === target.taskId ? { ...t, cancelled: true } : t));
       showT("이번 주 완료 1건 취소 — 복원 가능", () => { setTasks(prev => prev.map(t => t.id === target.taskId ? { ...t, cancelled: false } : t)); hideT(); });
@@ -2792,7 +2797,7 @@ function App({ onSwitchWs }) {
     setHistory(prev => prev.map(h => h.date === date ? { ...h, items: (h.items || []).map((it, i) => i === idx ? { ...it, cancelled: false } : it) } : h));
     const day = (history || []).find(h => h.date === date); const it0 = day && day.items[idx]; const rid = it0 && it0.orig && it0.orig.recurringId;
     const rec0 = rid && recurrings.find(r => r.id === rid);
-    if (rec0 && rec0.type === "count") layFutureForRecurring(rec0, WS, routineMemoText(rid, history, 10, { includeId: it0.orig.id })); /* R1(2026-07-08): 복원=능동 재-lay. closure history엔 이 세션이 아직 cancelled라 includeId로 강제 포함→즉시 캘린더 desc 복귀(futureThrough:"" 리셋·once-per-mount 의존 제거) */
+    if (rec0 && routineWeekTarget(rec0) > 0) layFutureForRecurring(rec0, WS, routineMemoText(rid, history, 10, { includeId: it0.orig.id })); /* R1(2026-07-08): 복원=능동 재-lay. closure history엔 이 세션이 아직 cancelled라 includeId로 강제 포함→즉시 캘린더 desc 복귀(futureThrough:"" 리셋·once-per-mount 의존 제거) */
     showT(it0 && it0.memoOnly ? "메모 복원됨 (카운트 변화 없음)" : "복원됨 — 카운트 +1", null);
   };
 
