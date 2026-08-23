@@ -1663,7 +1663,12 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
       </div>
       {show && <div style={{ ...S.card, marginTop: 4 }}>
         {recurrings.length === 0 && <div style={{ ...S.emp, padding: 12 }}>설정된 반복 태스크가 없습니다</div>}
-        {recurrings.filter(r => !r.disabled).map(r => <RecurringRow key={r.id} r={r} projects={projects} onDelete={() => delR(r.id)} onUpdate={onUpdateRecurring} />)}
+        {/* ★설정 목록도 영역끼리 묶는다(2026-08-11) — 스트립과 같은 순서로 보이게. 배열(=만든 순서)에서는
+            링글이 맨 앞, 영어 스피킹이 뒤쪽이라 같은 영역이 갈려 있었다. **렌더 순서만** 바꾸며 데이터는 안 건드린다. */}
+        {recurrings.filter(r => !r.disabled)
+          .map((r, i) => ({ r, i, a: (() => { const k = (projects || []).findIndex(p => p && p.id === r.project); return k < 0 ? 999 : k; })() }))
+          .sort((x, y) => (x.a - y.a) || (x.i - y.i))
+          .map(({ r }) => <RecurringRow key={r.id} r={r} projects={projects} onDelete={() => delR(r.id)} onUpdate={onUpdateRecurring} />)}
         <div style={S.div} />
         <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
           <select style={{ ...S.sel, fontSize: 12 }} value={rType} onChange={e => setRType(e.target.value)}>
@@ -1729,7 +1734,7 @@ const routineMemoText = (rid, history, n = 10, opts = {}) => {
 };
 /* 오늘 탭 상단 — 주N회 루틴 '이번 주 N/목표' + ＋(세션 기록+메모)/−(최근 1건 취소).
    요일 무관 주간 카운트: 옮겨 간 날·예정 외·지난 날 = 전부 ＋로 +1. ＋ 누르면 메모 입력창(선택)이 열림 → 발견을 적으면 루틴 이월메모에 누적되고 다음 실행 때 캘린더 권장요일 이벤트 설명에 보임(glance). */
-const WeeklyRoutineStrip = ({ recurrings, tasks, history, onAddSession, onRemoveSession, onAddMemoOnly }) => {
+const WeeklyRoutineStrip = ({ recurrings, projects, tasks, history, onAddSession, onRemoveSession, onAddMemoOnly }) => {
   const wk = getWeekId();
   const [memoFor, setMemoFor] = useState(null);
   const [memoText, setMemoText] = useState("");
@@ -1759,8 +1764,26 @@ const WeeklyRoutineStrip = ({ recurrings, tasks, history, onAddSession, onRemove
     if (la !== lb) return lb - la;                        /* 많이 남은 것을 앞으로 */
     return (a.time || "99:99").localeCompare(b.time || "99:99");
   };
+  /* ★같은 영역끼리 붙여 놓기(2026-08-11 소유자 "보컬 연습과 보컬 레슨은 붙어있어야 보기 편하다").
+     묶음 키 = 루틴의 `project`(=영역) — 영어(링글·스피킹) · 보컬(연습·레슨) · 운동(F45·헬스) 가 각각 한 덩어리가 된다.
+     영역 순서 = **그 영역에 남은 부족분 합계가 큰 쪽 먼저**. 2026-08-06 의 '할 게 남은 것을 앞으로' 를
+     항목 단위에서 **영역 단위로 올린 것**이고, 항목 사이 순서는 그 안에서 rankCmp 가 그대로 맡는다.
+     동률이면 앱 과제 목록(projects 배열) 순서를 따라 주마다 자리가 흔들리지 않게 한다. */
+  const areaIdx = (r) => { const i = (projects || []).findIndex(p => p && p.id === r.project); return i < 0 ? 999 : i; };
+  const buildOrder = () => {
+    const groups = new Map();
+    pool.forEach(r => { const k = r.project || "_none"; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
+    return Array.from(groups.values())
+      .map(g => ({
+        list: g.slice().sort(rankCmp),
+        left: g.reduce((n, r) => n + Math.max(0, routineWeekTarget(r) - weekDoneCount(doneSet, r.id, wk)), 0),
+        idx:  areaIdx(g[0]),
+      }))
+      .sort((x, y) => (y.left - x.left) || (x.idx - y.idx))
+      .reduce((acc, x) => acc.concat(x.list.map(r => r.id)), []);
+  };
   if (orderRef.current.wk !== wk) orderRef.current = { wk, ids: null };            /* 주가 바뀌면 재정렬 */
-  if (!orderRef.current.ids) orderRef.current.ids = pool.slice().sort(rankCmp).map(r => r.id);
+  if (!orderRef.current.ids) orderRef.current.ids = buildOrder();
   const frozen = orderRef.current.ids;
   const items = pool.slice().sort((a, b) => {
     const ia = frozen.indexOf(a.id), ib = frozen.indexOf(b.id);
@@ -3083,7 +3106,7 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <><WeeklyRoutineStrip recurrings={recurrings} tasks={tasks} history={history} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemoOnly={addRoutineMemo} /><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
+        {tab === "today" && <><WeeklyRoutineStrip recurrings={recurrings} projects={projects} tasks={tasks} history={history} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemoOnly={addRoutineMemo} /><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
         {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} onEdit={handleEdit} onUpdateHistRecaps={updateHistRecaps} onUpdateTaskRecaps={updateTaskRecaps} recurrings={recurrings} onToggleDay={toggleRoutineDay} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} />}
