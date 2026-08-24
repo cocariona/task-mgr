@@ -730,7 +730,11 @@ const PERSONAL_ROUTINES = [
   { id: "rt_writing", type: "daily", text: "✍️ 글쓰기", project: "rt_writing" },
   /* 캘린더 고정 수업 → task-mgr 소유 루틴(2026-07-04): 기존 네이티브 캘린더 이벤트는 사용자가 삭제, 이후 task-mgr가 tmk 멱등키로 재등록(중복 0).
      링글 1:1 = 월요일, 노래(보컬) 레슨 = 목요일. time 있으면 타임드 이벤트로 push(운동/보컬 루틴과 동일 경로). */
-  { id: "rt_ringle_mon",   type: "weekly", dows: [1], time: "23:00", text: "🇬🇧 링글 1:1 수업", project: "rt_english" },
+  /* ⛔ `rt_ringle_mon` 은 2026-08-24 에 이 목록에서 뺐다(소유자 지시 "보컬 레슨처럼 다뤄지게").
+       시드 목록의 유일한 효과는 ① 없으면 다시 심기 ② SEED_ROUTINE_IDS = 삭제 시 완전 제거 대신 disabled 묘비.
+       링글은 이미 존재해 ①은 역할이 끝났고, ② 때문에 **보컬 레슨(g3qk0rh·비시드)과 삭제 거동만 갈려 있었다.**
+       빼도 잃는 것이 없다 — 루틴 자체·history 15건·캘린더 이벤트는 recurrings 에 그대로 있고 id 도 안 바뀐다.
+       ★`rt_vocal_lesson` 은 남긴다: 지금 **disabled 묘비 상태**라 목록에서 빼면 id 가 사라진 것으로 보여 재시드로 부활한다. */
   { id: "rt_vocal_lesson", type: "weekly", dows: [4], time: "17:00", text: "🎤 노래 레슨",       project: "rt_vocal" },
 ];
 const SEED_ROUTINE_IDS = new Set(PERSONAL_ROUTINES.map(r => r.id)); /* ★M5(2026-07-04): 시드 루틴 삭제는 제거 대신 disabled tombstone → 매 로드 재시드 부활 방지 */
