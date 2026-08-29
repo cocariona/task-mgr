@@ -531,7 +531,13 @@ const calFitParams = (action, params) => {
 };
 /* ★재시도(2026-07-13·push 신뢰성): JSONP 실패(GAS 콜드스타트·onerror·45s 타임아웃)는 흔하고 조용해서 '만들었는데 캘린더 미반영'의 주범.
    실패({success:false}) 시 최대 tries회 재시도(2s 간격). 멱등키(calKey)가 있어 add/update 재시도해도 GAS findByKey가 기존 이벤트 반환=중복 0. list/delete도 안전(읽기·멱등). 콜드스타트는 1차서 GAS 깨어나 2차 성공이 흔함. */
-const calSync = async (action, params, tries = 2) => {
+/* ★add 는 재시도하지 않는다(2026-08-29 · 중복 44건의 근본원인).
+   위 ⓐ 경로(URL 초과 → GAS 완주·쓰기 커밋 → 2홉 400 → onerror)는 **실패가 아니라 응답 유실**이다.
+   여기서 재시도하면 GAS 가 add 를 다시 도는데, 방금 만든 이벤트의 tmk 태그가 아직 안 보여
+   findByKey 가 빈손으로 돌아오고 **하나 더 만든다.** 실측(2026-08-29 07:05): 중복 쌍이 정확히 2초 간격 =
+   여기 setTimeout(2000) 이다. 주석에 있던 '멱등키라 중복 0' 전제는 **태그가 보일 때만** 참이었다.
+   → add 실패는 재시도 대신 calLogFailure 로 남기고, 서버측 백스톱(≤45분)이 다음 회차에 메운다. */
+const calSync = async (action, params, tries = (action === "add" ? 1 : 2)) => {
   /* ★예산 가드는 31개 호출부 전부의 앞에 선다 → 여기서 throw 가 나면 .catch() 없는 호출부(다수)에서 unhandled rejection 으로
      캘린더 동기가 통째로 죽는다. 실패 시 **현행 동작 그대로 폴백**(가드가 없던 것과 동일). */
   let fit;
@@ -607,7 +613,11 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
   const newTasks = [];
   recurrings.forEach(r => {
     if (r.disabled) return; /* ★M5: 삭제 표식된 시드 루틴은 인스턴스 생성 안 함 */
-    if (r.type === "count" || COUNT_MIG_IDS.has(r.id)) return; /* ★주N회(2026-07-07): 오늘 할 일에 요일별 인스턴스 안 만듦 — 오늘 탭 카운터(＋/−)에서만. id-스킵=전환 tick 레이스 방지 */
+    /* ★weekly 도 제외(2026-08-29 소유자 지시 "오늘 할 일에 안 떴으면 좋겠고 항시 스트립에 뜨는 것으로 충분"):
+       종전엔 그 요일 당일에만 '오늘 할 일' 인스턴스를 만들고 주간 스트립에서는 숨겼다(onTodayList·2026-08-02b).
+       그래서 정작 수업 날에 스트립 한 칸이 비어 그 주 그림이 불완전했다. 이제 count 와 같이 **스트립 한 자리**만 쓴다.
+       ※당일 캘린더 이벤트는 futureEvtDone 이 (오늘,+28일] 로 미리 깔아 두므로 인스턴스가 없어도 글랜스는 그대로다. */
+    if (r.type === "count" || r.type === "weekly" || COUNT_MIG_IDS.has(r.id)) return; /* ★주N회(2026-07-07): 오늘 할 일에 요일별 인스턴스 안 만듦 — 오늘 탭 카운터(＋/−)에서만. id-스킵=전환 tick 레이스 방지 */
     const type = r.type || "weekly";
     let period; let effTime = r.time || ""; /* ★effTime: 회차 override 시각 반영(2026-07-13) */
     if (type === "daily") {
@@ -1750,8 +1760,9 @@ const WeeklyRoutineStrip = ({ recurrings, projects, tasks, history, onAddSession
        · 그 날이 지나 미완료  → 스트립에만(= 소급 체크 자리. 옛 동작에선 여기서 영영 사라졌다)
        · 완료                → 스트립에 ✓ (인스턴스는 완료로 흡수돼 사라진다)
      ※ 어느 쪽에서 체크해도 같은 회차키(wk)를 쓰므로 두 자리는 항상 같은 값을 본다. */
-  const onTodayList = (r) => r.type === "weekly" && (tasks || []).some(t => t.recurringId === r.id && (t.recurringPeriod || "") === wk && t.planDate === TODAY && t.status !== "done" && !t.cancelled);
-  const pool = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) > 0 && !onTodayList(r)); /* count + weekly (2026-08-02) */
+  /* ⛔ onTodayList 숨김 폐지(2026-08-29): weekly 가 '오늘 할 일' 인스턴스를 더 이상 만들지 않으므로(L610)
+     양쪽에 뜰 일이 없다 → 숨길 이유도 사라졌다. **항상 스트립에 뜬다** = 그 주 그림이 요일과 무관하게 온전하다. */
+  const pool = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) > 0); /* count + weekly */
   if (!pool.length) return null;
   const doneSet = routineDoneSet(tasks, history);
   /* ★정렬(2026-08-02b): **할 게 남은 것이 앞으로.** 배열 순서(=만든 순서)는 아무 뜻이 없어서

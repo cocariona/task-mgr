@@ -84,16 +84,38 @@ function doGet(e) {
     if (action === "add") {
       var akey = e.parameter.key || "";
       var adate = e.parameter.date || "";
-      if (akey) { // 멱등: 같은 key 이벤트가 이미 있으면 새로 안 만들고 제목/설명만 갱신 후 반환 → 응답유실·이름변경에도 중복 0
-        var dup = findByKey(cal, adate, akey);
-        if (dup) {
-          try { if (e.parameter.title) dup.setTitle(e.parameter.title); dup.setDescription(e.parameter.desc || ""); } catch (u) {}
-          return respond({ success: true, eventId: dup.getId(), updated: dup.getLastUpdated().getTime(), idempotent: true });
+      // ★락(2026-08-29): findByKey(읽기) → createEvent → setTag(쓰기) 사이에 창이 있어, 동시 실행 둘이
+      //   **둘 다 '없다'** 를 보고 각각 만들었다(실측: 같은 회차키 이벤트 2개가 같은 초에 생성).
+      //   스크립트 락으로 add 구간을 직렬화하면 뒤 실행이 앞 실행의 tmk 를 본다.
+      var _lk = null;
+      try { _lk = LockService.getScriptLock(); if (!_lk.tryLock(20000)) _lk = null; } catch (u) { _lk = null; }
+      try {
+        if (akey) { // 멱등: 같은 key 이벤트가 이미 있으면 새로 안 만들고 제목/설명만 갱신 후 반환
+          var dup = findByKey(cal, adate, akey);
+          if (dup) {
+            try { if (e.parameter.title) dup.setTitle(e.parameter.title); dup.setDescription(e.parameter.desc || ""); } catch (u) {}
+            return respond({ success: true, eventId: dup.getId(), updated: dup.getLastUpdated().getTime(), idempotent: true });
+          }
         }
+        var ev = makeEvent(e.parameter.title || "", adate, e.parameter.time || "", e.parameter.desc || "");
+        // ★태깅 실패를 삼키지 않는다(2026-08-29): 옛 코드는 catch(u){} 로 조용히 넘겨 **태그 없는 이벤트**를 남겼고,
+        //   그건 이후 add 의 findByKey 에 영영 안 잡혀 매번 새 이벤트를 낳는다(실측: 키 없는 루틴 잔재 9건).
+        //   → 1회 재시도 후 실제로 읽어 확인하고, 그래도 실패하면 방금 만든 것을 지우고 실패로 답한다.
+        //     (백스톱이 다음 회차에 메우므로 '없는 편'이 '태그 없이 남는 편'보다 안전하다.)
+        if (akey) {
+          var tagged = false;
+          for (var a = 0; a < 2 && !tagged; a++) {
+            try { ev.setTag("tmk", akey); tagged = (ev.getTag("tmk") === akey); } catch (u) { tagged = false; }
+          }
+          if (!tagged) {
+            try { ev.deleteEvent(); } catch (u) {}
+            return respond({ success: false, error: "tag_failed", key: akey });
+          }
+        }
+        return respond({ success: true, eventId: ev.getId(), updated: ev.getLastUpdated().getTime() });
+      } finally {
+        if (_lk) { try { _lk.releaseLock(); } catch (u) {} }
       }
-      var ev = makeEvent(e.parameter.title || "", adate, e.parameter.time || "", e.parameter.desc || "");
-      if (akey) { try { ev.setTag("tmk", akey); } catch (u) {} }
-      return respond({ success: true, eventId: ev.getId(), updated: ev.getLastUpdated().getTime() });
     }
 
     if (action === "update") {
