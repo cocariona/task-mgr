@@ -70,14 +70,32 @@ function doGet(e) {
     return cal.createAllDayEvent(title, date, { description: desc });
   }
 
-  // 멱등키(2026-07-03): 같은 tmk 태그를 가진 이벤트를 해당 날짜 근방(±2~3일)에서 찾음.
+  // 멱등키(2026-07-03): 같은 tmk 태그를 가진 이벤트를 찾는다.
+  // ★검색 창 ±2~3일 → ±120일(2026-09-03 · 중복의 진짜 원인).
+  //   옛 코드는 요청 날짜 근방만 뒤져서, **task 의 날짜가 바뀌면 옛 이벤트를 못 찾고 새로 만들었다.**
+  //   재현: 같은 key 로 D+29 → D+39 로 add 하면 2개가 된다(같은 날짜면 25초 간격이어도 멱등 정상).
+  //   서버측 백스톱은 이미 이 문제를 알고 list-first 로 원거리 same-key 를 잡고 있었다(selftest [5]) — 같은 규칙을 여기 둔다.
   function findByKey(c, dateStr, key) {
-    if (!key || !dateStr) return null;
-    var ds = new Date(dateStr + "T00:00:00"); ds.setDate(ds.getDate() - 2);
-    var de = new Date(dateStr + "T00:00:00"); de.setDate(de.getDate() + 3);
+    if (!key) return null;
+    var base = dateStr ? new Date(dateStr + "T00:00:00") : new Date();
+    var ds = new Date(base); ds.setDate(ds.getDate() - 120);
+    var de = new Date(base); de.setDate(de.getDate() + 120);
     var evs = c.getEvents(ds, de);
     for (var i = 0; i < evs.length; i++) { try { if (evs[i].getTag("tmk") === key) return evs[i]; } catch (u) {} }
     return null;
+  }
+  // 찾은 이벤트를 요청한 날짜/시각으로 옮긴다(update 액션과 같은 규칙).
+  // ★넓게 찾기만 하고 안 옮기면 옛 자리에 그대로 남아 사용자는 "안 옮겨졌다"고 본다.
+  function moveTo(ev, dateStr, time, dur) {
+    if (!dateStr) return;
+    if (time) {
+      var hm = String(time).split(":");
+      var st = new Date(dateStr + "T00:00:00");
+      st.setHours(Number(hm[0]) || 0, Number(hm[1]) || 0, 0, 0);
+      ev.setTime(st, new Date(st.getTime() + (Number(dur || 60)) * 60000));
+    } else {
+      ev.setAllDayDate(new Date(dateStr + "T00:00:00"));
+    }
   }
 
   try {
@@ -93,8 +111,16 @@ function doGet(e) {
         if (akey) { // 멱등: 같은 key 이벤트가 이미 있으면 새로 안 만들고 제목/설명만 갱신 후 반환
           var dup = findByKey(cal, adate, akey);
           if (dup) {
+            var moved = false;
             try { if (e.parameter.title) dup.setTitle(e.parameter.title); dup.setDescription(e.parameter.desc || ""); } catch (u) {}
-            return respond({ success: true, eventId: dup.getId(), updated: dup.getLastUpdated().getTime(), idempotent: true });
+            try { moveTo(dup, adate, e.parameter.time || "", e.parameter.dur); moved = true; }
+            catch (mv) { // 종일↔타임드 전환 제약 등 → 지우고 다시 만들되 태그를 잇는다(id 는 바뀐다)
+              try { dup.deleteEvent(); } catch (u2) {}
+              var rmk = makeEvent(e.parameter.title || "", adate, e.parameter.time || "", e.parameter.desc || "");
+              try { rmk.setTag("tmk", akey); } catch (u3) {}
+              return respond({ success: true, eventId: rmk.getId(), updated: rmk.getLastUpdated().getTime(), idempotent: true, recreated: true });
+            }
+            return respond({ success: true, eventId: dup.getId(), updated: dup.getLastUpdated().getTime(), idempotent: true, moved: moved });
           }
         }
         var ev = makeEvent(e.parameter.title || "", adate, e.parameter.time || "", e.parameter.desc || "");
