@@ -2233,6 +2233,17 @@ function App({ onSwitchWs }) {
      → 잠금을 없애고 `tasks` 를 의존성에 넣어 **남은 것이 없을 때까지** 확인한다.
      루프 위험 없음: 이월할 게 없으면 아래 `!stale.length` 에서 즉시 반환하고, 이월된 항목은
      다음 회차에 stale 이 아니라 캘린더 update 도 다시 호출되지 않는다. */
+  /* ★캘린더 발사만 항목당 1회로 잠근다(2026-09-07 실측 사고).
+     이월 잠금을 푼 직후 첫 이월에서 개인 27건 중 14건이 캘린더에 **두 벌** 생겼다
+     (전부 00:46:23~00:46:51 한 폭발). 기전은 두 겹이다.
+       ① 앱: effect 가 tasks 변화마다 다시 도는데, calSync 응답이 calEventId 를 되돌려주기 전에
+          다음 회차가 돌면 같은 항목에 update 를 또 쏜다. 이월 자체는 같은 값을 다시 넣는 것이라
+          무해하지만 캘린더 호출은 외부 부작용이라 정확히 한 번이어야 한다.
+       ② GAS: `update` 는 eventId 를 못 찾으면 새로 만드는데, `add` 와 달리 findByKey 멱등 검사도
+          LockService 도 없다(personal-calendar-gas.gs). 그래서 동시에 두 번 들어오면 둘 다 만든다.
+     ②는 GAS 재배포가 필요하므로, 앱에서 애초에 두 번 쏘지 않게 막는다. Set 은 마운트당이며
+     워크스페이스 전환은 App 재마운트라 자연히 비워진다. */
+  const rollFwdCalSent = useRef(new Set());
   useEffect(() => {
     if (!cloudLoaded) return;
     const isStaleP = (t) => t.status !== "done" && !t.recurringId && t.planDate && t.planDate < TODAY; /* 수행날짜 지난 미완료(비반복)만 이월. 날짜 없는 백로그는 대상 아님 */
@@ -2247,10 +2258,14 @@ function App({ onSwitchWs }) {
     }));
     stale.forEach(t => { /* 캘린더는 매번 갱신(사용자 요청) — 연동된 것만 update */
       if (!t.calEventId) return;
+      if (rollFwdCalSent.current.has(t.id)) return; /* ★한 항목당 정확히 한 번(아래 주석) */
+      rollFwdCalSent.current.add(t.id);
       const cp = calMakeParams({ ...t, planDate: TODAY }, projects);
       if (cp) calSync("update", { ...cp, eventId: t.calEventId }).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === t.id ? { ...x, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : x)); });
     });
-    staleS.forEach(({ parent, s }) => { if (!s.calEventId) return; const cp = calMakeParams(subCalObj({ ...s, planDate: TODAY }, parent), projects);
+    staleS.forEach(({ parent, s }) => { if (!s.calEventId) return;
+      const sk = parent.id + "/" + s.id; if (rollFwdCalSent.current.has(sk)) return; rollFwdCalSent.current.add(sk);
+      const cp = calMakeParams(subCalObj({ ...s, planDate: TODAY }, parent), projects);
       if (cp) calSync("update", { ...cp, eventId: s.calEventId }).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === parent.id ? { ...x, subtasks: (x.subtasks || []).map(y => y.id === s.id ? { ...y, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : y) } : x)); }); });
   }, [cloudLoaded, tasks]); /* eslint-disable-line */
 

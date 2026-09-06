@@ -20,16 +20,21 @@ function makeEffect(ctx) {
 function simulate(opt) {
   const initial = opt.initial, arrivals = opt.arrivals, oldLock = !!opt.oldLock;
   const today = opt.today || "2026-09-07";
+  /* raceRounds: setTasks 가 아직 반영되지 않은 채 effect 가 다시 도는 상황(2026-09-07 실측 사고).
+     calSync 응답이 calEventId 를 돌려주기 전에 다음 회차가 돌면 같은 항목에 update 를 또 쏘는가를 잰다. */
+  const raceRounds = opt.raceRounds || 0;
   let tasks = initial;
   let cloudLoaded = false;
   let lock = false;
+  let deferSet = false;
   const calCalls = [];
   let setCalls = 0;
   const ctx = {
     TODAY: today,
     projects: [],
+    rollFwdCalSent: { current: new Set() },
     get tasks() { return tasks; },
-    setTasks: function (fn) { setCalls++; tasks = typeof fn === "function" ? fn(tasks) : fn; },
+    setTasks: function (fn) { setCalls++; if (deferSet) return; tasks = typeof fn === "function" ? fn(tasks) : fn; },
     calMakeParams: function (t) { return { title: t.title || t.text || "x", date: t.planDate }; },
     subCalObj: function (s, p) { return Object.assign({}, s, { _p: p.id }); },
     calSync: function (op, p) { calCalls.push({ op: op, id: p.eventId, date: p.date }); return { then: function () {} }; }
@@ -49,7 +54,13 @@ function simulate(opt) {
     }
   };
   /* 클라우드 응답: setCloudLoaded 와 뒤이은 setTasks 들이 개별 렌더를 유발한다 */
-  cloudLoaded = true; flush();
+  cloudLoaded = true;
+  if (raceRounds) { /* 반영 전 재실행을 raceRounds 번 겪게 한 뒤 정상 진행 */
+    deferSet = true;
+    for (let i = 0; i < raceRounds; i++) effect();
+    deferSet = false;
+  }
+  flush();
   for (const batch of arrivals) { tasks = tasks.concat(batch); flush(); }
   return { tasks: tasks, calCalls: calCalls, runs: runs, setCalls: setCalls };
 }
@@ -123,6 +134,18 @@ console.log("\n[4] 캘린더 update 는 항목당 1회 (중복 호출 없음)");
   ok("호출 3회", r.calCalls.length === 3, "실제 " + r.calCalls.length + " — " + JSON.stringify(ids));
   ok("중복 없음", new Set(ids).size === ids.length);
   ok("전부 update", r.calCalls.every(function (c) { return c.op === "update"; }));
+}
+
+console.log("\n[4-b] ★반영이 늦어도 캘린더는 항목당 1회 (2026-09-07 중복 사고 재현)");
+{
+  const mk = function (i) { return T(i, { calEventId: "ev" + i }); };
+  const items = [mk(1), mk(2), mk(3), mk(4), mk(5)];
+  const r = simulate({ initial: items, arrivals: [[mk(6)], [mk(7)]], raceRounds: 4 });
+  const ids = r.calCalls.map(function (c) { return c.id; });
+  const dup = ids.filter(function (v, i) { return ids.indexOf(v) !== i; });
+  ok("중복 발사 0건", dup.length === 0, "중복 " + JSON.stringify(dup));
+  ok("항목 7건 = 호출 7회", r.calCalls.length === 7, "실제 " + r.calCalls.length + "회");
+  ok("잔존 0", leftover(r.tasks) === 0);
 }
 
 console.log("\n[5] 수렴 — 이월할 게 없으면 즉시 멈춘다");
