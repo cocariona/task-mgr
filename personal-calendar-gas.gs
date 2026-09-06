@@ -147,16 +147,36 @@ function doGet(e) {
     if (action === "update") {
       // ★ in-place 수정(2026-07-01): 삭제+재생성 대신 기존 이벤트를 그대로 고침 → eventId 유지.
       //   (delete+recreate 는 앱이 새 id 저장에 실패하면 고아/중복이 쌓였음. in-place 는 실패해도 안전.)
+      // ★락 + 멱등(2026-09-07 · 중복 14쌍 실측): 이 분기의 **재생성 경로 두 곳**에 add 가 가진 방어가
+      //   하나도 없었다 — findByKey 멱등 검사도, LockService 도, setTag 검증도 없었다. 그래서
+      //   같은 항목의 update 두 건이 동시에 들어오면 **각각 새 이벤트를 만들어** 같은 tmk 를 가진
+      //   이벤트가 2개 남았다(실측: 2026-09-07 00:46 한 폭발에 개인 14건이 두 벌). 태그마저 삼켜서
+      //   태그 없는 이벤트도 5건 생겼고, 그건 이후 findByKey 에 영영 안 잡힌다.
+      //   → add 와 같은 3중 방어(락 · 키 멱등 · 태그 검증)를 여기에도 건다.
       var eventId = e.parameter.eventId || "";
-      var ev = null;
-      try { ev = cal.getEventById(eventId); } catch (err) { ev = null; }
       var title = e.parameter.title || "";
       var dateStr = e.parameter.date || "";
       var time = e.parameter.time || "";
       var desc = e.parameter.desc || "";
-      if (!ev) { // 못 찾으면 새로 생성
+      var ukey = e.parameter.key || "";
+      var _ulk = null;
+      try { _ulk = LockService.getScriptLock(); if (!_ulk.tryLock(20000)) _ulk = null; } catch (u) { _ulk = null; }
+      try {
+      var ev = null;
+      try { ev = cal.getEventById(eventId); } catch (err) { ev = null; }
+      if (!ev && ukey) { // ★먼저 키로 찾는다 — 있으면 그것이 이 항목의 이벤트다(새로 만들지 않는다)
+        var uexist = findByKey(cal, dateStr, ukey);
+        if (uexist) ev = uexist;
+      }
+      if (!ev) { // 정말 없을 때만 새로 생성 — 태그 실패를 삼키지 않는다(add 와 동일 계약)
         var nev = makeEvent(title, dateStr, time, desc);
-        if (e.parameter.key) { try { nev.setTag("tmk", e.parameter.key); } catch (u) {} }
+        if (ukey) {
+          var ntag = false;
+          for (var un = 0; un < 2 && !ntag; un++) {
+            try { nev.setTag("tmk", ukey); ntag = (nev.getTag("tmk") === ukey); } catch (u) { ntag = false; }
+          }
+          if (!ntag) { try { nev.deleteEvent(); } catch (u) {} return respond({ success: false, error: "tag_failed", key: ukey }); }
+        }
         return respond({ success: true, eventId: nev.getId(), updated: nev.getLastUpdated().getTime(), recreated: true });
       }
       try {
@@ -173,14 +193,23 @@ function doGet(e) {
             ev.setAllDayDate(new Date(dateStr + "T00:00:00"));
           }
         }
-        if (e.parameter.key) { try { ev.setTag("tmk", e.parameter.key); } catch (u) {} } // 옛 이벤트도 키 태깅 → 이후 멱등/재연결 가능
+        if (ukey) { try { ev.setTag("tmk", ukey); } catch (u) {} } // 옛 이벤트도 키 태깅 → 이후 멱등/재연결 가능
         return respond({ success: true, eventId: ev.getId(), updated: ev.getLastUpdated().getTime() });
       } catch (moderr) {
-        // in-place 수정이 막히면(종일↔타임드 전환 제약 등) 삭제+재생성 폴백
+        // in-place 수정이 막히면(종일↔타임드 전환 제약 등) 삭제+재생성 폴백 — 여기도 태그를 검증한다
         try { ev.deleteEvent(); } catch (e2) {}
         var rev = makeEvent(title, dateStr, time, desc);
-        if (e.parameter.key) { try { rev.setTag("tmk", e.parameter.key); } catch (u) {} }
+        if (ukey) {
+          var rtag = false;
+          for (var ur = 0; ur < 2 && !rtag; ur++) {
+            try { rev.setTag("tmk", ukey); rtag = (rev.getTag("tmk") === ukey); } catch (u) { rtag = false; }
+          }
+          if (!rtag) { try { rev.deleteEvent(); } catch (u) {} return respond({ success: false, error: "tag_failed", key: ukey }); }
+        }
         return respond({ success: true, eventId: rev.getId(), updated: rev.getLastUpdated().getTime(), recreated: true });
+      }
+      } finally {
+        if (_ulk) { try { _ulk.releaseLock(); } catch (u) {} }
       }
     }
 
