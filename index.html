@@ -113,8 +113,21 @@ const TABS_BY_WS = {
 
 /* 로컬 시간 기준 오늘 날짜 (UTC가 아닌 KST 등 현지 시간) */
 let TODAY = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })();
-/* 자정 경과 시 자동 갱신 (60초마다 체크) — ★리로드 前 대기중 저장 flush(2026-07-04) */
-setInterval(async () => { const d = new Date(); const now = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; if (now !== TODAY) { TODAY = now; try { await flushCloudSave(); } catch {} window.location.reload(); } }, 60000);
+/* 자정 경과 시 자동 갱신 — ★리로드 前 대기중 저장 flush(2026-07-04)
+   ★복귀 시에도 확인(2026-09-07): 모바일 브라우저는 **배경으로 내려간 탭의 타이머를 멈춘다**.
+      60초 주기만 두면 앱을 나가 있는 동안 자정을 놓치고, 돌아와도 TODAY 가 옛 날짜로 남아
+      이월이 다시 돌지 않는다. 앱으로 돌아오는 순간 다시 본다. */
+const checkDayRollover = async () => {
+  const d = new Date();
+  const now = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  if (now === TODAY) return;
+  TODAY = now;
+  try { await flushCloudSave(); } catch {}
+  window.location.reload();
+};
+setInterval(checkDayRollover, 60000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkDayRollover(); });
+window.addEventListener("focus", checkDayRollover);
 /* ★탭 닫기/숨김 시 대기중 저장 flush(2026-07-04, best-effort keepalive) */
 window.addEventListener("pagehide", () => { try { flushCloudSave(); } catch {} });
 const gid = () => Math.random().toString(36).slice(2, 9);
@@ -2211,10 +2224,17 @@ function App({ onSwitchWs }) {
 
   /* 지난 미처리 자동 이월(2026-07-01): 미완료 + 수행날짜 지난(비반복) 할일 → 수행날짜 오늘로 + 캘린더 갱신.
      → '지난 계획 미처리'가 항상 비어 사실상 사라짐(다 오늘 할 일로). 미래 예약·반복/루틴은 안 건드림. */
-  const rollFwdDone = useRef(false);
+  /* ★잠금 제거 + tasks 재검사(2026-09-07 · 실측 부분 이월의 원인).
+     옛 코드는 `rollFwdDone` 으로 **마운트당 1회**만 돌았다. 그런데 이 앱은 ReactDOM.render(구형)라
+     클라우드 응답 안의 상태 갱신들이 한 번에 묶이지 않고 하나씩 반영된다 → 이월이 목록을 훑는 순간
+     아직 도착하지 않은 항목은 그 회차에서 빠지고, 잠금 때문에 **다시는 검사받지 못한다.**
+     실측(2026-09-07 업무): 15건 중 12건만 이월되고 3건이 남았으며, 그 3건의 날짜는 이전 회차에서
+     하루만 옮겨진 09-05 였다(개인도 27건 중 1건이 같은 상태). 즉 매번 몇 건씩 흘리고 있었다.
+     → 잠금을 없애고 `tasks` 를 의존성에 넣어 **남은 것이 없을 때까지** 확인한다.
+     루프 위험 없음: 이월할 게 없으면 아래 `!stale.length` 에서 즉시 반환하고, 이월된 항목은
+     다음 회차에 stale 이 아니라 캘린더 update 도 다시 호출되지 않는다. */
   useEffect(() => {
-    if (!cloudLoaded || rollFwdDone.current) return;
-    rollFwdDone.current = true;
+    if (!cloudLoaded) return;
     const isStaleP = (t) => t.status !== "done" && !t.recurringId && t.planDate && t.planDate < TODAY; /* 수행날짜 지난 미완료(비반복)만 이월. 날짜 없는 백로그는 대상 아님 */
     const isStaleS = (s) => s.status !== "done" && s.planDate && s.planDate < TODAY; /* ★minor(2026-07-04): 서브태스크도 이월(배너·오늘에 방치되던 것) */
     const stale = tasks.filter(isStaleP);
@@ -2232,7 +2252,7 @@ function App({ onSwitchWs }) {
     });
     staleS.forEach(({ parent, s }) => { if (!s.calEventId) return; const cp = calMakeParams(subCalObj({ ...s, planDate: TODAY }, parent), projects);
       if (cp) calSync("update", { ...cp, eventId: s.calEventId }).then(r => { if (r?.eventId) setTasks(p => p.map(x => x.id === parent.id ? { ...x, subtasks: (x.subtasks || []).map(y => y.id === s.id ? { ...y, calEventId: r.eventId, calUpdated: r.updated || Date.now() } : y) } : x)); }); });
-  }, [cloudLoaded]); /* eslint-disable-line */
+  }, [cloudLoaded, tasks]); /* eslint-disable-line */
 
   /* S4a: 개인 프로젝트 5종 보강(기존 데이터에 신규 추가, 정본 순서·id 보존) */
   const personalProjDone = useRef(false);
