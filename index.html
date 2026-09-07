@@ -59,7 +59,9 @@
       .form-row > div > * { width: 100% !important; flex: none !important; box-sizing: border-box !important; }
       .form-row .star-btn { width: 40px !important; }
       .task-row { padding: 10px 8px !important; }
-      .task-row .grip { display: none; }
+      /* ★손잡이는 휴대폰에서도 보인다(2026-09-07): 순서변경의 유일한 잡는 자리다.
+         옛 규칙은 display:none 이라, 터치로는 시작조차 안 되는 옛 방식 위에 손잡이마저 감춰 두었다. */
+      .task-row .grip { font-size: 17px !important; padding: 4px 6px !important; margin-left: -2px; }
       .hdr-wrap { flex-direction: column; gap: 8px; align-items: flex-start !important; }
       .plan-fields { flex-direction: column !important; }
       .plan-fields > * { width: 100% !important; flex: none !important; box-sizing: border-box !important; }
@@ -1011,23 +1013,22 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
     setAddSub(false); setShowSubs(true);
   };
 
-  /* 드래그 props (상/하 삽입 위치 표시) */
+  /* 카드에 남는 HTML5 드래그는 **섹션 이동 전용**이다(오늘로 보내기 / 오늘에서 내리기).
+     ★순서변경은 손잡이의 포인터 드래그로 옮겼다(2026-09-07). 옛 코드는 카드 자체가 순서변경 드롭을
+     받으면서 e.stopPropagation() 을 부르지 않아, 전체 현황에서 순서를 바꾸려 놓으면 부모의
+     '오늘에서 내리기' 가 함께 발동해 수행날짜와 캘린더까지 바뀌었다. 그 겹침이 여기서 사라진다. */
   const dh = dragHandlers || {};
-  const clearIndicator = (el) => { el.classList.remove("drop-indicator-before", "drop-indicator-after"); };
-  const dragProps = dh.onDragStart ? {
+  const dragProps = dh.onPointerDown ? {
     draggable: true,
-    onDragStart: (e) => { dh.onDragStart(task.id); e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/task-id", task.id); } catch {} e.currentTarget.style.opacity = "0.35"; e.currentTarget.style.transform = "scale(0.98)"; },
-    onDragEnd: (e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = ""; dh.onDragEnd?.(); },
-    onDragOver: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; const rect = e.currentTarget.getBoundingClientRect(); const midY = rect.top + rect.height / 2; clearIndicator(e.currentTarget); e.currentTarget.classList.add(e.clientY < midY ? "drop-indicator-before" : "drop-indicator-after"); e.currentTarget.dataset.dropPos = e.clientY < midY ? "before" : "after"; },
-    onDragEnter: (e) => { e.preventDefault(); },
-    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) clearIndicator(e.currentTarget); },
-    onDrop: (e) => { e.preventDefault(); const pos = e.currentTarget.dataset.dropPos || "before"; clearIndicator(e.currentTarget); dh.onDrop?.(task.id, pos); },
+    onDragStart: (e) => { e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/task-id", task.id); } catch {} e.currentTarget.style.opacity = "0.35"; },
+    onDragEnd: (e) => { e.currentTarget.style.opacity = ""; },
   } : {};
 
   return (
-    <div {...dragProps}>
-      <div className="task-row" style={{ ...S.row, background: h ? "#f8fafc" : task.focus ? "#FFFDF5" : "transparent", cursor: dh.onDragStart ? "grab" : "default", transition: "border 0.15s, transform 0.15s" }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)} onTouchStart={() => setH(true)}>
-        {dh.onDragStart && <span className="grip" style={{ color: "#d1d5db", fontSize: 11, cursor: "grab", flexShrink: 0, marginTop: 3, userSelect: "none" }} title="드래그하여 순서 변경">⠿</span>}
+    <div {...dragProps} data-task-card={task.id}>
+      <div className="task-row" style={{ ...S.row, background: h ? "#f8fafc" : task.focus ? "#FFFDF5" : "transparent", transition: "border 0.15s, transform 0.15s" }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)} onTouchStart={() => setH(true)}>
+        {dh.onPointerDown && <span className="grip" style={{ color: "#9ca3af", fontSize: 15, cursor: "grab", flexShrink: 0, marginTop: 1, padding: "2px 4px", userSelect: "none", touchAction: "none" }} title="여기를 잡고 끌어 순서 변경"
+          onPointerDown={(e) => dh.onPointerDown(task.id, e)} onPointerMove={dh.onPointerMove} onPointerUp={dh.onPointerUp} onPointerCancel={dh.onPointerCancel}>⠿</span>}
         <StarBtn on={task.focus} onClick={() => onFocus(task.id)} />
         <button onClick={() => onDone(task.id)} title="완료"
           style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${STATUSES[task.status]?.color || "#ccc"}`, background: "transparent", cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
@@ -1078,13 +1079,57 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
 };
 
 /* ─── 드래그 정렬 훅 ─── */
+/* ★포인터 기반 순서변경(2026-09-07 · 소유자 「모바일 PC 전부 안 됨」).
+   옛 방식은 HTML5 draggable 이었는데 그것은 **휴대폰 터치로는 시작조차 되지 않는다**(브라우저가 손가락에
+   dragstart 를 발생시키지 않는다). 소유자는 평소 휴대폰으로 쓰므로 그 경로가 통째로 죽어 있었다.
+   → Pointer Events 로 바꾼다. 마우스·터치·펜이 같은 코드를 타므로 PC 와 휴대폰이 한 경로가 된다.
+   손잡이(⠿)를 잡을 때만 시작한다: 카드 아무 데나 잡으면 목록 스크롤과 싸우게 된다.
+   버튼은 늘리지 않는다(소유자 요청) — 이미 있는 손잡이를 휴대폰에서도 보이게 하는 것으로 끝낸다. */
 const useDragReorder = (onReorder) => {
-  const dragRef = useRef(null);
+  const st = useRef(null);
+  const clearAll = () => {
+    document.querySelectorAll(".drop-indicator-before, .drop-indicator-after")
+      .forEach(el => el.classList.remove("drop-indicator-before", "drop-indicator-after"));
+  };
+  const finish = (commit) => {
+    const s = st.current; if (!s) return;
+    st.current = null;
+    clearAll();
+    if (s.card) { s.card.style.opacity = ""; s.card.style.transform = ""; }
+    document.body.style.userSelect = "";
+    if (commit && s.moved && s.target && s.target.id !== s.id) onReorder(s.id, s.target.id, s.target.pos);
+  };
   return {
-    onDragStart: (id) => { dragRef.current = id; },
-    onDragEnter: () => {},
-    onDragEnd: () => { dragRef.current = null; },
-    onDrop: (targetId, pos) => { if (dragRef.current && dragRef.current !== targetId) { onReorder(dragRef.current, targetId, pos); dragRef.current = null; } },
+    onPointerDown: (id, e) => {
+      if (e.button != null && e.button > 0) return; /* 왼쪽 버튼·터치만 */
+      e.preventDefault(); e.stopPropagation();      /* HTML5 dragstart 와 텍스트 선택을 함께 막는다 */
+      const card = e.currentTarget.closest("[data-task-card]");
+      st.current = { id, card, moved: false, target: null };
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+      document.body.style.userSelect = "none";
+      if (card) { card.style.opacity = "0.45"; card.style.transform = "scale(0.99)"; }
+    },
+    onPointerMove: (e) => {
+      const s = st.current; if (!s) return;
+      e.preventDefault();
+      s.moved = true;
+      const under = document.elementFromPoint(e.clientX, e.clientY);
+      const card = under && under.closest ? under.closest("[data-task-card]") : null;
+      clearAll();
+      if (!card || card === s.card) { s.target = null; return; }
+      const tid = card.dataset.taskCard;
+      if (!tid || tid === s.id) { s.target = null; return; }
+      const r = card.getBoundingClientRect();
+      /* 삽입 위치는 **카드 본체(.task-row)** 의 중앙으로 잰다 — 하위 항목을 펼친 카드는
+         바깥 상자가 훨씬 길어서 바깥 기준으로 재면 겨냥한 자리와 결과가 어긋난다. */
+      const row = card.querySelector(".task-row");
+      const rr = row ? row.getBoundingClientRect() : r;
+      const pos = e.clientY < rr.top + rr.height / 2 ? "before" : "after";
+      card.classList.add(pos === "before" ? "drop-indicator-before" : "drop-indicator-after");
+      s.target = { id: tid, pos };
+    },
+    onPointerUp: () => finish(true),
+    onPointerCancel: () => finish(false),
   };
 };
 
@@ -1290,8 +1335,13 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
      날짜가 있으면(미래 포함) 그 날 자동 표출 = 백로그도 특정 시점 surface(someday 상태 폐지 2026-07-04). */
   const onToday = (t) => !!(t.planDate && t.planDate <= TODAY && !isStaleRoutine(t));
   const { focusedTasks, focusedSubs } = useMemo(() => {
-    const pk = (t) => projSortKey(projects.find(p => p.id === t.project)); /* 루틴>프로젝트>버킷>기타 */
-    const ft = tasks.filter(t => t.status !== "done" && onToday(t)).sort((a, b) => pk(a) - pk(b));
+    /* ★자동 재정렬 제거(2026-09-07 · 소유자 「나머지는 내가 알아서 정렬할 수 있게」).
+       옛 코드는 projSortKey(루틴>프로젝트>버킷>기타) 로 매 렌더마다 다시 줄을 세웠다. 그 값이 네 가지뿐이라
+       **다른 무리에 속한 카드끼리는 순서를 바꿀 수 없었다** — 드롭은 성공하는데 카드가 자기 무리 안의
+       엉뚱한 자리로 튀거나, 무리에 혼자면 제자리로 돌아왔다. 이제 목록 순서의 정본은 tasks 배열이고,
+       그 배열은 손잡이 드래그가 직접 고친다. 과제 종류 정렬은 **과제 선택 드롭다운에만** 남긴다
+       (sortProjsForSelect). */
+    const ft = tasks.filter(t => t.status !== "done" && onToday(t));
     const fs = [];
     tasks.forEach(t => { (t.subtasks || []).forEach(s => { if (s.status !== "done" && s.planDate && s.planDate <= TODAY) fs.push({ sub: s, parent: t }); }); });
     return { focusedTasks: ft, focusedSubs: fs };
