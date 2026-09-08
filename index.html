@@ -955,6 +955,7 @@ const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit, onCal, dragHa
     <div style={{ ...S.row, padding: "4px 8px", opacity: isDone ? 0.45 : 1 }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)} data-sub-card={dragId || undefined}>
       {dragHandlers && dragHandlers.onPointerDown && dragId && <span className="grip" style={{ color: "#9ca3af", fontSize: 14, cursor: "grab", flexShrink: 0, marginTop: 1, padding: "2px 3px", userSelect: "none", touchAction: "none" }} title="여기를 잡고 끌어 순서 변경"
         onPointerDown={(e) => dragHandlers.onPointerDown(dragId, e)} onPointerMove={dragHandlers.onPointerMove} onPointerUp={dragHandlers.onPointerUp} onPointerCancel={dragHandlers.onPointerCancel}>⠿</span>}
+      <span style={{ color: "#9ca3af", fontSize: 12, fontWeight: 700, flexShrink: 0, marginTop: 1, userSelect: "none" }} title="하위 할일">↳</span>
       <StarBtn on={sub.focus} onClick={onToggleFocus} />
       <button onClick={onToggleDone} title={isDone ? "되돌리기" : "완료"}
         style={{ width: 16, height: 16, borderRadius: "50%", border: `2px solid ${STATUSES[sub.status]?.color || "#ccc"}`, background: isDone ? STATUSES.done.color : "transparent", cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
@@ -1397,7 +1398,11 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
   const renderItem = (item) => {
     if (item.type === "task") return <TaskRow key={item.data.id} task={item.data} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={{ ...dragHandlers, subDrag: subDragHandlers }} />;
     return (
-      <div key={item.data.id} style={{ paddingLeft: 8 }}>
+      <div key={item.data.id} style={item.underParent
+        /* ★상위 바로 아래에 붙은 하위는 카드를 펼쳤을 때와 **같은 모양**으로 보인다(2026-09-08):
+           들여쓰기 + 왼쪽 세로선. 상위 이름을 다시 적는 대신 위치와 선으로 소속을 보인다. */
+        ? { marginLeft: 20, borderLeft: "2px solid #d1d5db", paddingLeft: 4 }
+        : { paddingLeft: 8 }}>
         {!item.underParent && <div style={{ fontSize: 10, color: "#9ca3af", paddingLeft: 30 }}>↳ {item.parent.text}</div>}
         <SubRow sub={item.data} dragHandlers={subDragHandlers} dragId={item.parent.id + "|" + item.data.id}
           onToggleFocus={() => toggleSubInParent(item.parent.id, item.data.id, "focus")}
