@@ -946,13 +946,15 @@ const StarBtn = ({ on, onClick }) => (
 );
 
 /* ─── SubRow (서브태스크 행) ─── */
-const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit, onCal }) => {
+const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit, onCal, dragHandlers, dragId }) => {
   const [h, setH] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const isDone = sub.status === "done";
   const dl = sub.scheduledDate ? deadlineInfo(sub.scheduledDate) : null;
   return (
-    <div style={{ ...S.row, padding: "4px 8px", opacity: isDone ? 0.45 : 1 }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}>
+    <div style={{ ...S.row, padding: "4px 8px", opacity: isDone ? 0.45 : 1 }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)} data-sub-card={dragId || undefined}>
+      {dragHandlers && dragHandlers.onPointerDown && dragId && <span className="grip" style={{ color: "#9ca3af", fontSize: 14, cursor: "grab", flexShrink: 0, marginTop: 1, padding: "2px 3px", userSelect: "none", touchAction: "none" }} title="여기를 잡고 끌어 순서 변경"
+        onPointerDown={(e) => dragHandlers.onPointerDown(dragId, e)} onPointerMove={dragHandlers.onPointerMove} onPointerUp={dragHandlers.onPointerUp} onPointerCancel={dragHandlers.onPointerCancel}>⠿</span>}
       <StarBtn on={sub.focus} onClick={onToggleFocus} />
       <button onClick={onToggleDone} title={isDone ? "되돌리기" : "완료"}
         style={{ width: 16, height: 16, borderRadius: "50%", border: `2px solid ${STATUSES[sub.status]?.color || "#ccc"}`, background: isDone ? STATUSES.done.color : "transparent", cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
@@ -1059,7 +1061,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
       {showSubs && subs.length > 0 && (
         <div style={{ marginLeft: 20, borderLeft: "2px solid #e5e7eb", paddingLeft: 4, marginBottom: 4 }}>
           {subs.map(s => (
-            <SubRow key={s.id} sub={s}
+            <SubRow key={s.id} sub={s} dragHandlers={dh.subDrag} dragId={dh.subDrag ? task.id + "|" + s.id : null}
               onToggleFocus={() => onUpdate && onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, focus: !x.focus } : x) })}
               onToggleDone={() => onUpdate && onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, status: x.status === "done" ? "action" : "done" } : x) })}
               onDel={() => onUpdate && onUpdate({ ...task, subtasks: subs.filter(x => x.id !== s.id) })}
@@ -1085,7 +1087,8 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
    → Pointer Events 로 바꾼다. 마우스·터치·펜이 같은 코드를 타므로 PC 와 휴대폰이 한 경로가 된다.
    손잡이(⠿)를 잡을 때만 시작한다: 카드 아무 데나 잡으면 목록 스크롤과 싸우게 된다.
    버튼은 늘리지 않는다(소유자 요청) — 이미 있는 손잡이를 휴대폰에서도 보이게 하는 것으로 끝낸다. */
-const useDragReorder = (onReorder) => {
+const useDragReorder = (onReorder, attr = "data-task-card") => {
+  const SEL = "[" + attr + "]";
   const st = useRef(null);
   const clearAll = () => {
     document.querySelectorAll(".drop-indicator-before, .drop-indicator-after")
@@ -1103,7 +1106,7 @@ const useDragReorder = (onReorder) => {
     onPointerDown: (id, e) => {
       if (e.button != null && e.button > 0) return; /* 왼쪽 버튼·터치만 */
       e.preventDefault(); e.stopPropagation();      /* HTML5 dragstart 와 텍스트 선택을 함께 막는다 */
-      const card = e.currentTarget.closest("[data-task-card]");
+      const card = e.currentTarget.closest(SEL);
       st.current = { id, card, moved: false, target: null };
       try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
       document.body.style.userSelect = "none";
@@ -1114,10 +1117,10 @@ const useDragReorder = (onReorder) => {
       e.preventDefault();
       s.moved = true;
       const under = document.elementFromPoint(e.clientX, e.clientY);
-      const card = under && under.closest ? under.closest("[data-task-card]") : null;
+      const card = under && under.closest ? under.closest(SEL) : null;
       clearAll();
       if (!card || card === s.card) { s.target = null; return; }
-      const tid = card.dataset.taskCard;
+      const tid = card.getAttribute(attr);
       if (!tid || tid === s.id) { s.target = null; return; }
       const r = card.getBoundingClientRect();
       /* 삽입 위치는 **카드 본체(.task-row)** 의 중앙으로 잰다 — 하위 항목을 펼친 카드는
@@ -1315,8 +1318,17 @@ const ScheduleAlerts = ({ tasks, projects, onEdit }) => {
 };
 
 /* ═══ 오늘 뷰 (서브태스크 집중 포함) ═══ */
-const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onReorder, onPlanToday, onClearToday }) => {
+const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onReorder, onReorderSub, onPlanToday, onClearToday }) => {
   const dragHandlers = useDragReorder(onReorder);
+  /* ★하위 항목 순서 변경(2026-09-08): 상위 항목과 같은 방식이되 대상 속성만 다르다.
+     dragId 는 "상위id|하위id" 라서 여기서 상위가 같은지 먼저 본다 — 다르면 아무 일도 하지 않는다. */
+  const subDragHandlers = useDragReorder((from, to, pos) => {
+    const f = String(from).split("|"), t = String(to).split("|");
+    if (f.length !== 2 || t.length !== 2 || f[0] !== t[0]) return;
+    onReorderSub && onReorderSub(f[0], f[1], t[1], pos);
+  }, "data-sub-card");
+
+
   const [dragOverToday, setDragOverToday] = useState(false);
   const [dragOverRest, setDragOverRest] = useState(false);
   /* '오늘 할 일'에서 전체 현황으로 끌어다 놓으면 수행날짜 비움(오늘에서 내림) */
@@ -1368,11 +1380,11 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
   };
 
   const renderItem = (item) => {
-    if (item.type === "task") return <TaskRow key={item.data.id} task={item.data} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={dragHandlers} />;
+    if (item.type === "task") return <TaskRow key={item.data.id} task={item.data} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={{ ...dragHandlers, subDrag: subDragHandlers }} />;
     return (
       <div key={item.data.id} style={{ paddingLeft: 8 }}>
         <div style={{ fontSize: 10, color: "#9ca3af", paddingLeft: 30 }}>↳ {item.parent.text}</div>
-        <SubRow sub={item.data}
+        <SubRow sub={item.data} dragHandlers={subDragHandlers} dragId={item.parent.id + "|" + item.data.id}
           onToggleFocus={() => toggleSubInParent(item.parent.id, item.data.id, "focus")}
           onToggleDone={() => toggleSubInParent(item.parent.id, item.data.id, "done")}
           onDel={() => onUpdate && onUpdate({ ...item.parent, subtasks: (item.parent.subtasks || []).filter(s => s.id !== item.data.id) })}
@@ -1417,8 +1429,8 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
         </div>
         {showRest && (
           <div>
-            {unfocusedActions.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#3B82F6", marginBottom: 6 }}>🔵 다음행동 ({unfocusedActions.length})</div>{unfocusedActions.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={dragHandlers} />)}</div>}
-            {waitingAll.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#F59E0B", marginBottom: 6 }}>⏳ 대기중 ({waitingAll.length})</div>{waitingAll.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={dragHandlers} />)}</div>}
+            {unfocusedActions.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#3B82F6", marginBottom: 6 }}>🔵 다음행동 ({unfocusedActions.length})</div>{unfocusedActions.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={{ ...dragHandlers, subDrag: subDragHandlers }} />)}</div>}
+            {waitingAll.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#F59E0B", marginBottom: 6 }}>⏳ 대기중 ({waitingAll.length})</div>{waitingAll.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={{ ...dragHandlers, subDrag: subDragHandlers }} />)}</div>}
           </div>
         )}
       </div>
@@ -1427,13 +1439,20 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
 };
 
 /* ═══ 과제별 뷰 ═══ */
-const ProjectsView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, onReorder, isWork }) => {
+const ProjectsView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, onReorder, onReorderSub, isWork }) => {
   const [open, setOpen] = useState(new Set(projects.filter(p => tasks.some(t => t.project === p.id && t.status !== "done")).map(p => p.id)));
   const [np, setNp] = useState("");
   const [editId, setEditId] = useState(null);
   const [editName, setEditName] = useState("");
   const tog = id => setOpen(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const dragHandlers = useDragReorder(onReorder);
+  /* ★하위 항목 순서 변경(2026-09-08): 상위 항목과 같은 방식이되 대상 속성만 다르다.
+     dragId 는 "상위id|하위id" 라서 여기서 상위가 같은지 먼저 본다 — 다르면 아무 일도 하지 않는다. */
+  const subDragHandlers = useDragReorder((from, to, pos) => {
+    const f = String(from).split("|"), t = String(to).split("|");
+    if (f.length !== 2 || t.length !== 2 || f[0] !== t[0]) return;
+    onReorderSub && onReorderSub(f[0], f[1], t[1], pos);
+  }, "data-sub-card");
   const isDefault = (id) => PERSONAL_PROJECTS.some(d => d.id === id);
   const startEdit = (e, p) => { e.stopPropagation(); setEditId(p.id); setEditName(p.name); };
   const saveEdit = () => { if (editName.trim()) onEditProj(editId, editName.trim()); setEditId(null); setEditName(""); };
@@ -1483,7 +1502,7 @@ const ProjectsView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onA
         </div>
         {o && <div style={{ paddingLeft: 8, marginBottom: 12 }}>
           {SK.map(s => { const items = pt.filter(t => t.status === s); if (!items.length) return null;
-            return <div key={s} style={{ marginBottom: 4 }}>{items.map(t => <TaskRow key={t.id} task={t} projects={projects} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={dragHandlers} />)}</div>; })}
+            return <div key={s} style={{ marginBottom: 4 }}>{items.map(t => <TaskRow key={t.id} task={t} projects={projects} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={{ ...dragHandlers, subDrag: subDragHandlers }} />)}</div>; })}
           {pt.length === 0 && <div style={{ ...S.emp, padding: 16 }}>
             할 일 없음{rc > 0 && <><br/><span style={{ fontSize: 11 }}>반복 태스크 {rc}개는 오늘 탭·캘린더에서 돕니다 (여긴 일회성 할일만)</span></>}
           </div>}
@@ -2537,6 +2556,24 @@ function App({ onSwitchWs }) {
     });
   };
 
+  /* ★하위 항목 순서 변경(2026-09-08): 상위 항목의 subtasks 배열 안에서만 자리를 옮긴다.
+     하위 항목의 순서는 그 상위 항목 안에서만 뜻이 있으므로, 다른 상위 항목 사이로 끌면
+     아무 일도 일어나지 않는다(호출 전에 걸러낸다). */
+  const reorderSub = (parentId, fromId, toId, pos) => {
+    setTasks(prev => prev.map(t => {
+      if (t.id !== parentId) return t;
+      const arr = [...(t.subtasks || [])];
+      const fi = arr.findIndex(x => x.id === fromId);
+      if (fi < 0) return t;
+      const [item] = arr.splice(fi, 1);
+      let ti = arr.findIndex(x => x.id === toId);
+      if (ti < 0) return t;
+      if (pos === "after") ti++;
+      arr.splice(ti, 0, item);
+      return { ...t, subtasks: arr };
+    }));
+  };
+
   /* 히스토리에 항목 추가하는 유틸 */
   const addHistItem = (item) => {
     setHistory(prev => {
@@ -3206,8 +3243,8 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <><WeeklyRoutineStrip recurrings={recurrings} projects={projects} tasks={tasks} history={history} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemoOnly={addRoutineMemo} /><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
-        {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} isWork={isWork} />}
+        {tab === "today" && <><WeeklyRoutineStrip recurrings={recurrings} projects={projects} tasks={tasks} history={history} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemoOnly={addRoutineMemo} /><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onReorderSub={reorderSub} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
+        {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} onReorderSub={reorderSub} isWork={isWork} />}
         {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} onEdit={handleEdit} onUpdateHistRecaps={updateHistRecaps} onUpdateTaskRecaps={updateTaskRecaps} recurrings={recurrings} onToggleDay={toggleRoutineDay} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} />}
       </div>
