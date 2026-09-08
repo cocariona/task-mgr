@@ -1368,7 +1368,22 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
     const groups = {};
     SK.forEach(k => { groups[k] = []; });
     focusedTasks.forEach(t => groups[t.status]?.push({ type: "task", data: t }));
-    focusedSubs.forEach(({ sub, parent }) => groups[sub.status]?.push({ type: "sub", data: sub, parent }));
+    /* ★하위 항목을 그 상위 항목 **바로 아래**에 넣는다(2026-09-08 · 소유자 실측).
+       옛 코드는 상위를 전부 넣은 뒤 하위를 통째로 뒤에 몰아넣었다. 그래서 하위는 목록 끝에 홀로
+       떨어졌고, 상위를 끌어 옮겨도 따라오지 않았다. 게다가 하위의 순서 변경은 같은 상위 안에서만
+       뜻이 있으므로, 그 상위의 하위가 오늘 하나뿐이면 **옮길 상대가 없어 아예 움직이지 않았다**
+       (업무 「기술전문위원회 과제설명회 발표자료 준비」 아래 「질문 리스트 정리, 공유」 1건이 그 경우).
+       상위 밑에 붙이면 상위를 옮길 때 하위가 함께 따라가므로 그 자체로 해결된다.
+       상위가 같은 상태 그룹에 없으면(상태가 다르거나 상위가 오늘 목록에 없으면) 종전대로 뒤에 붙인다. */
+    focusedSubs.forEach(({ sub, parent }) => {
+      const g = groups[sub.status];
+      if (!g) return;
+      const at = g.findIndex(x => x.type === "task" && x.data.id === parent.id);
+      if (at < 0) { g.push({ type: "sub", data: sub, parent, underParent: false }); return; }
+      let i = at + 1; /* 이미 이 상위에 붙은 하위가 있으면 그 뒤로 */
+      while (i < g.length && g[i].type === "sub" && g[i].parent.id === parent.id) i++;
+      g.splice(i, 0, { type: "sub", data: sub, parent, underParent: true });
+    });
     return SK.map(k => ({ k, label: STATUSES[k].label, items: groups[k] })).filter(g => g.items.length > 0);
   }, [focusedTasks, focusedSubs]);
 
@@ -1383,7 +1398,7 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
     if (item.type === "task") return <TaskRow key={item.data.id} task={item.data} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={{ ...dragHandlers, subDrag: subDragHandlers }} />;
     return (
       <div key={item.data.id} style={{ paddingLeft: 8 }}>
-        <div style={{ fontSize: 10, color: "#9ca3af", paddingLeft: 30 }}>↳ {item.parent.text}</div>
+        {!item.underParent && <div style={{ fontSize: 10, color: "#9ca3af", paddingLeft: 30 }}>↳ {item.parent.text}</div>}
         <SubRow sub={item.data} dragHandlers={subDragHandlers} dragId={item.parent.id + "|" + item.data.id}
           onToggleFocus={() => toggleSubInParent(item.parent.id, item.data.id, "focus")}
           onToggleDone={() => toggleSubInParent(item.parent.id, item.data.id, "done")}
