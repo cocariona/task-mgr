@@ -622,7 +622,6 @@ const migrateData = (data) => {
     if (t.planDate === undefined) t = { ...t, planDate: "" };
     if (t.calEventId === undefined) t = { ...t, calEventId: "" };
     if (t.calUpdated === undefined) t = { ...t, calUpdated: 0 };
-    if (t.marks === undefined) t = { ...t, marks: [] };
     if (t.recap === undefined) t = { ...t, recap: "" };
     if (t.recaps === undefined) t = { ...t, recaps: (t.recap ? [{ id: "lg_" + t.id, text: t.recap, ts: (t.createdAt || TODAY) }] : []) }; /* recap 문자열 → recaps 배열(2026-07-01) */
     if (t.subtasks?.length) t = { ...t, subtasks: t.subtasks.map(s => {
@@ -808,7 +807,7 @@ const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit, dragHandlers,
 
 /* ─── SubAddForm (서브태스크 추가) ─── */
 const SubAddForm = ({ onAdd, onCancel }) => {
-  const [t, setT] = useState(""); const [s, setS] = useState("action"); const [sd, setSd] = useState(""); const [pd, setPd] = useState(TODAY); const [f, setF] = useState(false); const r = useRef();
+  const [t, setT] = useState(""); const [s, setS] = useState("action"); const [sd, setSd] = useState(""); const [pd, setPd] = useState(""); const [f, setF] = useState(false); const r = useRef();
   useEffect(() => { r.current?.focus(); }, []);
   const go = () => { if (!t.trim()) return; onAdd({ text: t.trim(), status: s, focus: f, scheduledDate: sd, scheduledLabel: "", planDate: pd }); };
   return (
@@ -836,7 +835,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
 
   const handleAddSub = ({ text, status, focus, scheduledDate, scheduledLabel, planDate }) => {
     if (!onUpdate) return;
-    const pd = planDate || TODAY;
+    const pd = planDate || "";
     onUpdate({ ...task, subtasks: [...subs, { id: gid(), text, status, focus, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: pd, notes: "", createdAt: TODAY }] }); /* 별=집중(날짜와 분리, 2026-06-30) */
     setAddSub(false); setShowSubs(true);
   };
@@ -961,9 +960,9 @@ const useDragReorder = (onReorder, attr = "data-task-card") => {
 
 /* ─── AddForm ─── */
 const AddForm = ({ projects, onAdd, defProj }) => {
-  const [t, setT] = useState(""); const [s, setS] = useState("action"); const [p, setP] = useState(defProj || ""); const [f, setF] = useState(false); const [sd, setSd] = useState(""); const [sl, setSl] = useState(""); const [pd, setPd] = useState(TODAY); const r = useRef();
+  const [t, setT] = useState(""); const [s, setS] = useState("action"); const [p, setP] = useState(defProj || ""); const [f, setF] = useState(false); const [sd, setSd] = useState(""); const [sl, setSl] = useState(""); const [pd, setPd] = useState(""); const r = useRef();
   /* 프로젝트/과제 미선택 상태로 시작(2026-07-04, 소유자) — 첫 항목 자동선택 안 함. 고르지 않으면 추가 안 됨(오분류 방지). */
-  const go = () => { if (!t.trim() || !p) return; onAdd({ text: t.trim(), status: s, project: p, focus: f, scheduledDate: sd, scheduledLabel: sl, planDate: pd }); setT(""); setS("action"); setF(false); setSd(""); setSl(""); setPd(TODAY); r.current?.focus(); };
+  const go = () => { if (!t.trim() || !p) return; onAdd({ text: t.trim(), status: s, project: p, focus: f, scheduledDate: sd, scheduledLabel: sl, planDate: pd }); setT(""); setS("action"); setF(false); setSd(""); setSl(""); setPd(""); r.current?.focus(); };
   return (
     <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
       <input ref={r} style={S.inp} placeholder="새 할일 입력..." value={t} onChange={e => setT(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} />
@@ -1009,7 +1008,7 @@ const ClearTodayModal = ({ task, onApply, onCancel }) => {
   );
 };
 const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
-  const [f, setF] = useState({ marks: [], recap: "", ...task });
+  const [f, setF] = useState({ ...task });
   const u = (k, v) => setF(p => ({ ...p, [k]: v }));
   const overlayDown = useRef(false); /* 바깥클릭 닫기는 '오버레이에서 시작한 클릭'만 — textarea 드래그가 오버레이에서 끝나도 안 닫히게(2026-06-29) */
   /* (2026-07-31) 첨부 제거로 저장/취소의 파일 부수효과(업로드 롤백·삭제 예약·업로드 중 저장 잠금)도 함께 사라짐 — 둘 다 순수 동작 */
@@ -1046,10 +1045,8 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
           </div>
           {/* (2026-06-26) 채널 마커(🧠🎯✍️) 폐지 → 지식·교훈·글감 버킷(프로젝트)으로 대체. 예측 폐지. */}
           <div><div style={S.lbl}>📝 메모 / 맥락 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(진행·참고 — 지금 이 일을 하기 위한 것)</span></div><textarea style={S.ta} rows={3} value={f.notes || ""} onChange={e => u("notes", e.target.value)} /></div>
-          {/* 🪞 회고 안내 — 개인은 회고 탭, 업무는 회고 탭이 없어졌으므로(2026-08-02) 히스토리 사후 입력을 가리킨다. f.recap은 그대로 보존. */}
-          <div style={{ fontSize: 10, color: "#9ca3af" }}>{isWork
-            ? <>완료한 뒤 알게 된 것은 <b>히스토리 탭</b>에서 그 항목의 <b>✏️＋</b>로 적습니다 — 끝난 뒤에도 남길 수 있습니다.</>
-            : <>🪞 회고(완료 결과·교훈)는 <b>회고 탭</b>에서 적습니다 — 메모와 분리.</>}</div>
+          {/* 회고 안내 — 회고 탭은 2026-09-12 에 없어졌다. 업무·개인 모두 히스토리 사후 입력을 가리킨다. */}
+          <div style={{ fontSize: 10, color: "#9ca3af" }}>완료한 뒤 알게 된 것은 <b>히스토리 탭</b>에서 그 항목의 <b>✏️＋</b>로 적습니다 — 끝난 뒤에도 남길 수 있습니다.</div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <button style={S.gh} onClick={cancel}>취소</button>
             <button style={S.btn()} onClick={commit}>저장</button>
@@ -2211,13 +2208,6 @@ function App({ onSwitchWs }) {
     });
   };
   /* (2026-06-23 ④-b) setRoutineHist 제거 — 루틴=daily 반복 할일, RoutineSection 폐지. */
-  /* 완료/해소된 task의 회고를 히스토리 orig.recap에 기록 (#11) */
-  /* 여러 회고(recaps 배열) 저장(2026-07-01). recap 문자열은 조인 유지(하네스/스냅샷 호환). */
-  const joinRecaps = (rs) => (rs || []).map(r => r.text).filter(Boolean).join("\n\n");
-  const updateHistRecaps = (date, origId, recaps) => {
-    setHistory(prev => prev.map(h => h.date === date ? { ...h, items: h.items.map(it => (it.orig && it.orig.id === origId) ? { ...it, orig: { ...it.orig, recaps, recap: joinRecaps(recaps) } } : it) } : h));
-  };
-  const updateTaskRecaps = (id, recaps) => setTasks(p => p.map(t => t.id === id ? { ...t, recaps, recap: joinRecaps(recaps) } : t));
   /* 반복 정의 수정(실행방법·시간) + 진행중 인스턴스에 전파 + 연결된 캘린더 이벤트 갱신(2026-07-01) */
   const updateRecurring = (id, patch) => {
     const newRec = { ...(recurrings.find(r => r.id === id) || {}), ...patch };
