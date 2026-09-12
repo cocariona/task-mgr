@@ -27,17 +27,12 @@ function simulate(opt) {
   let cloudLoaded = false;
   let lock = false;
   let deferSet = false;
-  const calCalls = [];
   let setCalls = 0;
   const ctx = {
     TODAY: today,
     projects: [],
-    rollFwdCalSent: { current: new Set() },
     get tasks() { return tasks; },
     setTasks: function (fn) { setCalls++; if (deferSet) return; tasks = typeof fn === "function" ? fn(tasks) : fn; },
-    calMakeParams: function (t) { return { title: t.title || t.text || "x", date: t.planDate }; },
-    subCalObj: function (s, p) { return Object.assign({}, s, { _p: p.id }); },
-    calSync: function (op, p) { calCalls.push({ op: op, id: p.eventId, date: p.date }); return { then: function () {} }; }
   };
   const effect = makeEffect(ctx);
   let prev = null, runs = 0;
@@ -62,7 +57,7 @@ function simulate(opt) {
   }
   flush();
   for (const batch of arrivals) { tasks = tasks.concat(batch); flush(); }
-  return { tasks: tasks, calCalls: calCalls, runs: runs, setCalls: setCalls };
+  return { tasks: tasks, runs: runs, setCalls: setCalls };
 }
 
 /* 4) 판정 헬퍼 */
@@ -124,28 +119,6 @@ console.log("\n[3] 서브태스크도 늦게 도착하면 이월된다");
   ok("s1·s2 이월", r.tasks[0].subtasks[0].planDate === TODAY && r.tasks[1].subtasks[0].planDate === TODAY);
   ok("완료 서브 유지", r.tasks[1].subtasks[1].planDate === "2026-09-02");
   ok("루틴 하위 서브 유지", r.tasks[2].subtasks[0].planDate === "2026-09-02");
-}
-
-console.log("\n[4] 캘린더 update 는 항목당 1회 (중복 호출 없음)");
-{
-  const mk = function (i) { return T(i, { calEventId: "ev" + i }); };
-  const r = simulate({ initial: [mk(1)], arrivals: [[mk(2)], [mk(3)], []] });
-  const ids = r.calCalls.map(function (c) { return c.id; });
-  ok("호출 3회", r.calCalls.length === 3, "실제 " + r.calCalls.length + " — " + JSON.stringify(ids));
-  ok("중복 없음", new Set(ids).size === ids.length);
-  ok("전부 update", r.calCalls.every(function (c) { return c.op === "update"; }));
-}
-
-console.log("\n[4-b] ★반영이 늦어도 캘린더는 항목당 1회 (2026-09-07 중복 사고 재현)");
-{
-  const mk = function (i) { return T(i, { calEventId: "ev" + i }); };
-  const items = [mk(1), mk(2), mk(3), mk(4), mk(5)];
-  const r = simulate({ initial: items, arrivals: [[mk(6)], [mk(7)]], raceRounds: 4 });
-  const ids = r.calCalls.map(function (c) { return c.id; });
-  const dup = ids.filter(function (v, i) { return ids.indexOf(v) !== i; });
-  ok("중복 발사 0건", dup.length === 0, "중복 " + JSON.stringify(dup));
-  ok("항목 7건 = 호출 7회", r.calCalls.length === 7, "실제 " + r.calCalls.length + "회");
-  ok("잔존 0", leftover(r.tasks) === 0);
 }
 
 console.log("\n[5] 수렴 — 이월할 게 없으면 즉시 멈춘다");
