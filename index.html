@@ -43,9 +43,6 @@
     button, select, input { touch-action: manipulation; }
     input[type="date"] { min-height: 36px; }
     /* 드래그 삽입선 애니메이션 */
-    @keyframes dropPulse { 0%,100% { opacity: 0.7; } 50% { opacity: 1; } }
-    .drop-indicator-before { border-top: 3px solid #3B82F6 !important; }
-    .drop-indicator-after { border-bottom: 3px solid #3B82F6 !important; }
     /* 모바일 반응형 */
     @media (max-width: 640px) {
       body { font-size: 14px; }
@@ -61,7 +58,6 @@
       .task-row { padding: 10px 8px !important; }
       /* ★손잡이는 휴대폰에서도 보인다(2026-09-07): 순서변경의 유일한 잡는 자리다.
          옛 규칙은 display:none 이라, 터치로는 시작조차 안 되는 옛 방식 위에 손잡이마저 감춰 두었다. */
-      .task-row .grip { font-size: 17px !important; padding: 4px 6px !important; margin-left: -2px; }
       .hdr-wrap { flex-direction: column; gap: 8px; align-items: flex-start !important; }
       .plan-fields { flex-direction: column !important; }
       .plan-fields > * { width: 100% !important; flex: none !important; box-sizing: border-box !important; }
@@ -528,7 +524,7 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
     newTasks.push({
       id: gid(), text: r.text, status: "action", project: r.project || "proj_etc",
       scheduledDate: "", scheduledLabel: "", planDate: TODAY,
-      createdAt: TODAY, notes: carried, focus: false, subtasks: [], calEventId: "", calUpdated: 0, planTime: effTime, protocol: r.protocol || "", /* focus=집중 · planTime=반복시간(회차 override 반영) · protocol=실행방법(선택, 2026-07-01) */
+      createdAt: TODAY, notes: carried, focus: false, subtasks: [], planTime: effTime, protocol: r.protocol || "", /* focus=집중 · planTime=반복시간(회차 override 반영) · protocol=실행방법(선택, 2026-07-01) */
       recurringId: r.id, recurringPeriod: period
     });
   });
@@ -620,14 +616,9 @@ const migrateData = (data) => {
     }
     /* planDate 필드 없으면 추가 (기존 데이터 호환) */
     if (t.planDate === undefined) t = { ...t, planDate: "" };
-    if (t.calEventId === undefined) t = { ...t, calEventId: "" };
-    if (t.calUpdated === undefined) t = { ...t, calUpdated: 0 };
-    if (t.recap === undefined) t = { ...t, recap: "" };
-    if (t.recaps === undefined) t = { ...t, recaps: (t.recap ? [{ id: "lg_" + t.id, text: t.recap, ts: (t.createdAt || TODAY) }] : []) }; /* recap 문자열 → recaps 배열(2026-07-01) */
     if (t.subtasks?.length) t = { ...t, subtasks: t.subtasks.map(s => {
       let ns = s.status === "scheduled" ? { ...s, status: "action" } : { ...s };
       if (ns.planDate === undefined) ns = { ...ns, planDate: "" };
-      if (ns.calUpdated === undefined) ns = { ...ns, calUpdated: 0 };
       return ns;
     })};
     return t;
@@ -772,15 +763,13 @@ const StarBtn = ({ on, onClick }) => (
 );
 
 /* ─── SubRow (서브태스크 행) ─── */
-const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit, dragHandlers, dragId }) => {
+const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
   const [h, setH] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const isDone = sub.status === "done";
   const dl = sub.scheduledDate ? deadlineInfo(sub.scheduledDate) : null;
   return (
-    <div style={{ ...S.row, padding: "4px 8px", opacity: isDone ? 0.45 : 1 }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)} data-sub-card={dragId || undefined}>
-      {dragHandlers && dragHandlers.onPointerDown && dragId && <span className="grip" style={{ color: "#9ca3af", fontSize: 14, cursor: "grab", flexShrink: 0, marginTop: 1, padding: "2px 3px", userSelect: "none", touchAction: "none" }} title="여기를 잡고 끌어 순서 변경"
-        onPointerDown={(e) => dragHandlers.onPointerDown(dragId, e)} onPointerMove={dragHandlers.onPointerMove} onPointerUp={dragHandlers.onPointerUp} onPointerCancel={dragHandlers.onPointerCancel}>⠿</span>}
+    <div style={{ ...S.row, padding: "4px 8px", opacity: isDone ? 0.45 : 1 }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}>
       <span style={{ color: "#9ca3af", fontSize: 12, fontWeight: 700, flexShrink: 0, marginTop: 1, userSelect: "none" }} title="하위 할일">↳</span>
       <StarBtn on={sub.focus} onClick={onToggleFocus} />
       <button onClick={onToggleDone} title={isDone ? "되돌리기" : "완료"}
@@ -824,7 +813,7 @@ const SubAddForm = ({ onAdd, onCancel }) => {
 };
 
 /* ─── TaskRow (서브태스크 확장 + 드래그 정렬) ─── */
-const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onUpdate, dragHandlers }) => {
+const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onUpdate }) => {
   const [h, setH] = useState(false);
   const [showSubs, setShowSubs] = useState(false);
   const [addSub, setAddSub] = useState(false);
@@ -844,18 +833,10 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
      ★순서변경은 손잡이의 포인터 드래그로 옮겼다(2026-09-07). 옛 코드는 카드 자체가 순서변경 드롭을
      받으면서 e.stopPropagation() 을 부르지 않아, 전체 현황에서 순서를 바꾸려 놓으면 부모의
      '오늘에서 내리기' 가 함께 발동해 수행날짜와 캘린더까지 바뀌었다. 그 겹침이 여기서 사라진다. */
-  const dh = dragHandlers || {};
-  const dragProps = dh.onPointerDown ? {
-    draggable: true,
-    onDragStart: (e) => { e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/task-id", task.id); } catch {} e.currentTarget.style.opacity = "0.35"; },
-    onDragEnd: (e) => { e.currentTarget.style.opacity = ""; },
-  } : {};
 
   return (
-    <div {...dragProps} data-task-card={task.id}>
+    <div>
       <div className="task-row" style={{ ...S.row, background: h ? "#f8fafc" : task.focus ? "#FFFDF5" : "transparent", transition: "border 0.15s, transform 0.15s" }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)} onTouchStart={() => setH(true)}>
-        {dh.onPointerDown && <span className="grip" style={{ color: "#9ca3af", fontSize: 15, cursor: "grab", flexShrink: 0, marginTop: 1, padding: "2px 4px", userSelect: "none", touchAction: "none" }} title="여기를 잡고 끌어 순서 변경"
-          onPointerDown={(e) => dh.onPointerDown(task.id, e)} onPointerMove={dh.onPointerMove} onPointerUp={dh.onPointerUp} onPointerCancel={dh.onPointerCancel}>⠿</span>}
         <StarBtn on={task.focus} onClick={() => onFocus(task.id)} />
         <button onClick={() => onDone(task.id)} title="완료"
           style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${STATUSES[task.status]?.color || "#ccc"}`, background: "transparent", cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
@@ -884,7 +865,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
       {showSubs && subs.length > 0 && (
         <div style={{ marginLeft: 20, borderLeft: "2px solid #e5e7eb", paddingLeft: 4, marginBottom: 4 }}>
           {subs.map(s => (
-            <SubRow key={s.id} sub={s} dragHandlers={dh.subDrag} dragId={dh.subDrag ? task.id + "|" + s.id : null}
+            <SubRow key={s.id} sub={s}
               onToggleFocus={() => onUpdate && onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, focus: !x.focus } : x) })}
               onToggleDone={() => onUpdate && onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, status: x.status === "done" ? "action" : "done" } : x) })}
               onDel={() => onUpdate && onUpdate({ ...task, subtasks: subs.filter(x => x.id !== s.id) })}
@@ -909,56 +890,6 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
    → Pointer Events 로 바꾼다. 마우스·터치·펜이 같은 코드를 타므로 PC 와 휴대폰이 한 경로가 된다.
    손잡이(⠿)를 잡을 때만 시작한다: 카드 아무 데나 잡으면 목록 스크롤과 싸우게 된다.
    버튼은 늘리지 않는다(소유자 요청) — 이미 있는 손잡이를 휴대폰에서도 보이게 하는 것으로 끝낸다. */
-const useDragReorder = (onReorder, attr = "data-task-card") => {
-  const SEL = "[" + attr + "]";
-  const st = useRef(null);
-  const clearAll = () => {
-    document.querySelectorAll(".drop-indicator-before, .drop-indicator-after")
-      .forEach(el => el.classList.remove("drop-indicator-before", "drop-indicator-after"));
-  };
-  const finish = (commit) => {
-    const s = st.current; if (!s) return;
-    st.current = null;
-    clearAll();
-    if (s.card) { s.card.style.opacity = ""; s.card.style.transform = ""; }
-    document.body.style.userSelect = "";
-    if (commit && s.moved && s.target && s.target.id !== s.id) onReorder(s.id, s.target.id, s.target.pos);
-  };
-  return {
-    onPointerDown: (id, e) => {
-      if (e.button != null && e.button > 0) return; /* 왼쪽 버튼·터치만 */
-      e.preventDefault(); e.stopPropagation();      /* HTML5 dragstart 와 텍스트 선택을 함께 막는다 */
-      const card = e.currentTarget.closest(SEL);
-      st.current = { id, card, moved: false, target: null };
-      try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
-      document.body.style.userSelect = "none";
-      if (card) { card.style.opacity = "0.45"; card.style.transform = "scale(0.99)"; }
-    },
-    onPointerMove: (e) => {
-      const s = st.current; if (!s) return;
-      e.preventDefault();
-      s.moved = true;
-      const under = document.elementFromPoint(e.clientX, e.clientY);
-      const card = under && under.closest ? under.closest(SEL) : null;
-      clearAll();
-      if (!card || card === s.card) { s.target = null; return; }
-      const tid = card.getAttribute(attr);
-      if (!tid || tid === s.id) { s.target = null; return; }
-      const r = card.getBoundingClientRect();
-      /* 삽입 위치는 **카드 본체(.task-row)** 의 중앙으로 잰다 — 하위 항목을 펼친 카드는
-         바깥 상자가 훨씬 길어서 바깥 기준으로 재면 겨냥한 자리와 결과가 어긋난다. */
-      const row = card.querySelector(".task-row");
-      const rr = row ? row.getBoundingClientRect() : r;
-      const pos = e.clientY < rr.top + rr.height / 2 ? "before" : "after";
-      card.classList.add(pos === "before" ? "drop-indicator-before" : "drop-indicator-after");
-      s.target = { id: tid, pos };
-    },
-    onPointerUp: () => finish(true),
-    onPointerCancel: () => finish(false),
-  };
-};
-
-/* ─── AddForm ─── */
 const AddForm = ({ projects, onAdd, defProj }) => {
   const [t, setT] = useState(""); const [s, setS] = useState("action"); const [p, setP] = useState(defProj || ""); const [f, setF] = useState(false); const [sd, setSd] = useState(""); const [sl, setSl] = useState(""); const [pd, setPd] = useState(""); const r = useRef();
   /* 프로젝트/과제 미선택 상태로 시작(2026-07-04, 소유자) — 첫 항목 자동선택 안 함. 고르지 않으면 추가 안 됨(오분류 방지). */
@@ -1031,7 +962,7 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
             <div style={{ ...S.lbl, color: "#6366F1", fontWeight: 600 }}>📆 언제할지 (선택)</div>
             <div className="plan-fields" style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <input type="date" style={{ ...S.fld, width: 160, flex: "none" }} value={f.planDate || ""} onChange={e => u("planDate", e.target.value)} />
-              <span style={{ fontSize: 11, color: "#6366F1" }}>🕒</span><input type="time" style={{ ...S.fld, width: 120, flex: "none" }} value={f.planTime || ""} onChange={e => u("planTime", e.target.value)} title="시간(선택) — 넣으면 캘린더에 타임드 일정" />
+              <span style={{ fontSize: 11, color: "#6366F1" }}>🕒</span><input type="time" style={{ ...S.fld, width: 120, flex: "none" }} value={f.planTime || ""} onChange={e => u("planTime", e.target.value)} title="시간(선택)" />
             </div>
           </div>
           <div>
@@ -1138,31 +1069,9 @@ const ScheduleAlerts = ({ tasks, projects, onEdit }) => {
 };
 
 /* ═══ 오늘 뷰 (서브태스크 집중 포함) ═══ */
-const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onReorder, onReorderSub, onPlanToday, onClearToday }) => {
-  const dragHandlers = useDragReorder(onReorder);
-  /* ★하위 항목 순서 변경(2026-09-08): 상위 항목과 같은 방식이되 대상 속성만 다르다.
-     dragId 는 "상위id|하위id" 라서 여기서 상위가 같은지 먼저 본다 — 다르면 아무 일도 하지 않는다. */
-  const subDragHandlers = useDragReorder((from, to, pos) => {
-    const f = String(from).split("|"), t = String(to).split("|");
-    if (f.length !== 2 || t.length !== 2 || f[0] !== t[0]) return;
-    onReorderSub && onReorderSub(f[0], f[1], t[1], pos);
-  }, "data-sub-card");
+const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onPlanToday, onClearToday }) => {
 
 
-  const [dragOverToday, setDragOverToday] = useState(false);
-  const [dragOverRest, setDragOverRest] = useState(false);
-  /* '오늘 할 일'에서 전체 현황으로 끌어다 놓으면 수행날짜 비움(오늘에서 내림) */
-  const restDropProps = {
-    onDragOver: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (!dragOverRest) setDragOverRest(true); },
-    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOverRest(false); },
-    onDrop: (e) => { e.preventDefault(); setDragOverRest(false); const id = e.dataTransfer.getData("text/task-id"); if (id && onClearToday) onClearToday(id); },
-  };
-  /* 아래(전체 현황)의 할일을 '오늘 할 일'로 끌어다 놓으면 수행날짜가 오늘로(2026-06-30) */
-  const todayDropProps = {
-    onDragOver: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (!dragOverToday) setDragOverToday(true); },
-    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOverToday(false); },
-    onDrop: (e) => { e.preventDefault(); setDragOverToday(false); const id = e.dataTransfer.getData("text/task-id"); if (id && onPlanToday) onPlanToday(id); },
-  };
   /* 오늘 할 일 = 수행날짜가 오늘이거나 지난(미완료) — 별(집중)과 무관(2026-06-30). 지난 미완료 루틴 제외.
      날짜가 있으면(미래 포함) 그 날 자동 표출 = 백로그도 특정 시점 surface(someday 상태 폐지 2026-07-04). */
   const onToday = (t) => !!(t.planDate && t.planDate <= TODAY && !isStaleRoutine(t));
@@ -1215,7 +1124,7 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
   };
 
   const renderItem = (item) => {
-    if (item.type === "task") return <TaskRow key={item.data.id} task={item.data} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={{ ...dragHandlers, subDrag: subDragHandlers }} />;
+    if (item.type === "task") return <TaskRow key={item.data.id} task={item.data} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} />;
     return (
       <div key={item.data.id} style={item.underParent
         /* ★상위 바로 아래에 붙은 하위는 카드를 펼쳤을 때와 **같은 모양**으로 보인다(2026-09-08):
@@ -1223,7 +1132,7 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
         ? { marginLeft: 20, borderLeft: "2px solid #d1d5db", paddingLeft: 4 }
         : { paddingLeft: 8 }}>
         {!item.underParent && <div style={{ fontSize: 10, color: "#9ca3af", paddingLeft: 30 }}>↳ {item.parent.text}</div>}
-        <SubRow sub={item.data} dragHandlers={subDragHandlers} dragId={item.parent.id + "|" + item.data.id}
+        <SubRow sub={item.data}
           onToggleFocus={() => toggleSubInParent(item.parent.id, item.data.id, "focus")}
           onToggleDone={() => toggleSubInParent(item.parent.id, item.data.id, "done")}
           onDel={() => onUpdate && onUpdate({ ...item.parent, subtasks: (item.parent.subtasks || []).filter(s => s.id !== item.data.id) })}
@@ -1246,9 +1155,9 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
       <AddForm projects={projects} onAdd={onAdd} />
       {totalFocused > 0 ? (
         <div style={{ marginTop: 16 }}>
-          <div style={{ ...S.focusBanner, outline: dragOverToday ? "2px dashed #F59E0B" : "none" }} {...todayDropProps}>
+          <div style={S.focusBanner}>
             <div style={{ fontSize: 13, fontWeight: 600, color: "#92400E", marginBottom: 4 }}>📆 오늘 할 일 ({totalFocused})</div>
-            <div style={{ fontSize: 11, color: "#A16207" }}>수행날짜가 오늘이거나 지난 항목 · 아래 할일을 여기로 끌어다 놓으면 오늘로</div>
+            <div style={{ fontSize: 11, color: "#A16207" }}>수행날짜가 오늘이거나 지난 항목</div>
           </div>
           {focusGroups.map(g => (
             <div key={g.k} style={{ marginBottom: 8 }}>
@@ -1258,17 +1167,17 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
           ))}
         </div>
       ) : (
-        <div style={{ ...S.emp, marginTop: 16, outline: dragOverToday ? "2px dashed #F59E0B" : "none", borderRadius: 8 }} {...todayDropProps}>아래 할일을 여기로 끌어다 놓거나, 할일의 수행날짜(📆)를 오늘로 설정하세요</div>
+        <div style={{ ...S.emp, marginTop: 16 }}>할일의 수행날짜(📆)를 오늘로 설정하세요</div>
       )}
-      <div style={{ marginTop: 20 }} {...restDropProps}>
-        <div style={{ ...S.secT, cursor: "pointer", userSelect: "none", outline: dragOverRest ? "2px dashed #9ca3af" : "none", borderRadius: 6, padding: dragOverRest ? "4px 6px" : 0 }} onClick={() => setShowRest(!showRest)} title="여기로 끌어다 놓으면 오늘에서 내림(수행날짜 비움)">
-          {showRest ? "▼" : "▶"} 전체 현황 <span style={{ fontSize: 10, color: "#c4c4c4", fontWeight: 400 }}>{dragOverRest ? "· 놓으면 오늘에서 내림" : ""}</span>
+      <div style={{ marginTop: 20 }}>
+        <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setShowRest(!showRest)}>
+          {showRest ? "▼" : "▶"} 전체 현황
           <span style={S.cnt(unfocusedActions.length + waitingAll.length)}>{unfocusedActions.length + waitingAll.length}</span>
         </div>
         {showRest && (
           <div>
-            {unfocusedActions.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#3B82F6", marginBottom: 6 }}>🔵 다음행동 ({unfocusedActions.length})</div>{unfocusedActions.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={{ ...dragHandlers, subDrag: subDragHandlers }} />)}</div>}
-            {waitingAll.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#F59E0B", marginBottom: 6 }}>⏳ 대기중 ({waitingAll.length})</div>{waitingAll.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={{ ...dragHandlers, subDrag: subDragHandlers }} />)}</div>}
+            {unfocusedActions.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#3B82F6", marginBottom: 6 }}>🔵 다음행동 ({unfocusedActions.length})</div>{unfocusedActions.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} />)}</div>}
+            {waitingAll.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#F59E0B", marginBottom: 6 }}>⏳ 대기중 ({waitingAll.length})</div>{waitingAll.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} />)}</div>}
           </div>
         )}
       </div>
@@ -1277,20 +1186,12 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
 };
 
 /* ═══ 과제별 뷰 ═══ */
-const ProjectsView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, onReorder, onReorderSub, isWork }) => {
+const ProjectsView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, isWork }) => {
   const [open, setOpen] = useState(new Set(projects.filter(p => tasks.some(t => t.project === p.id && t.status !== "done")).map(p => p.id)));
   const [np, setNp] = useState("");
   const [editId, setEditId] = useState(null);
   const [editName, setEditName] = useState("");
   const tog = id => setOpen(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const dragHandlers = useDragReorder(onReorder);
-  /* ★하위 항목 순서 변경(2026-09-08): 상위 항목과 같은 방식이되 대상 속성만 다르다.
-     dragId 는 "상위id|하위id" 라서 여기서 상위가 같은지 먼저 본다 — 다르면 아무 일도 하지 않는다. */
-  const subDragHandlers = useDragReorder((from, to, pos) => {
-    const f = String(from).split("|"), t = String(to).split("|");
-    if (f.length !== 2 || t.length !== 2 || f[0] !== t[0]) return;
-    onReorderSub && onReorderSub(f[0], f[1], t[1], pos);
-  }, "data-sub-card");
   const isDefault = (id) => PERSONAL_PROJECTS.some(d => d.id === id);
   const startEdit = (e, p) => { e.stopPropagation(); setEditId(p.id); setEditName(p.name); };
   const saveEdit = () => { if (editName.trim()) onEditProj(editId, editName.trim()); setEditId(null); setEditName(""); };
@@ -1340,9 +1241,9 @@ const ProjectsView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onA
         </div>
         {o && <div style={{ paddingLeft: 8, marginBottom: 12 }}>
           {SK.map(s => { const items = pt.filter(t => t.status === s); if (!items.length) return null;
-            return <div key={s} style={{ marginBottom: 4 }}>{items.map(t => <TaskRow key={t.id} task={t} projects={projects} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} dragHandlers={{ ...dragHandlers, subDrag: subDragHandlers }} />)}</div>; })}
+            return <div key={s} style={{ marginBottom: 4 }}>{items.map(t => <TaskRow key={t.id} task={t} projects={projects} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} />)}</div>; })}
           {pt.length === 0 && <div style={{ ...S.emp, padding: 16 }}>
-            할 일 없음{rc > 0 && <><br/><span style={{ fontSize: 11 }}>반복 태스크 {rc}개는 오늘 탭·캘린더에서 돕니다 (여긴 일회성 할일만)</span></>}
+            할 일 없음{rc > 0 && <><br/><span style={{ fontSize: 11 }}>반복 태스크 {rc}개는 오늘 탭·루틴 탭에서 돕니다 (여긴 일회성 할일만)</span></>}
           </div>}
           <div style={S.div} /><AddForm projects={projects} onAdd={onAdd} defProj={p.id} />
         </div>}
@@ -1439,7 +1340,7 @@ const HistRow = ({ item, date, idx, onRestore, onUncancel, onEditMemo, onDeleteM
   const [editing, setEditing] = useState(false); const [et, setEt] = useState(""); /* 루틴 메모 인라인 수정(2026-07-25) */
   const t = HTYPE[item.type] || HTYPE.done;
   const orig = item.orig || {};
-  const hasCtx = item.type === "done" && (orig.notes || orig.recap); /* 완료 할일의 맥락(메모)·회고를 히스토리서도 조회(2026-07-01) */
+  const hasCtx = item.type === "done" && orig.notes; /* 완료 할일의 메모를 히스토리서도 조회(2026-07-01) */
   /* ★완료 메모 수정/삭제 대상(2026-07-25 확장·소유자): 루틴 세션 메모 한정 → **모든 완료 항목의 메모**(업무·개인 공통).
      근거: doneTask 가 tasks[] 에서 제거하고 orig 에 full 스냅샷을 넣으므로(L2670·L2675) 최상위 완료 항목은
      **history.orig 이 유일 정본** = 여기서 고치는 게 곧 원본 수정(되돌리기도 orig 에서 복원 → 정합).
@@ -1462,16 +1363,16 @@ const HistRow = ({ item, date, idx, onRestore, onUncancel, onEditMemo, onDeleteM
         {item.isSub && <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }} title={item.parentText ? "↳ " + item.parentText : "하위 할일"}>↳</span>}
         <span style={{ flex: 1, ...(item.cancelled ? { textDecoration: "line-through", color: "#9ca3af" } : {}) }}>{item.text}</span>
         {item.cancelled && <span style={{ fontSize: 9, color: "#DC2626", background: "#FEF2F2", border: "1px solid #FECACA", padding: "0 4px", borderRadius: 4, flexShrink: 0 }}>취소됨</span>}
-        {item.memoOnly && !item.cancelled && <span style={{ fontSize: 9, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", padding: "0 4px", borderRadius: 4, flexShrink: 0 }} title="📝 메모만 — 카운트에 안 들어감(캘린더 이월용)">📝 메모만</span>}
-        {hasCtx && <span onClick={() => setOpen(!open)} title="메모·회고 보기" style={{ cursor: "pointer", fontSize: 10, color: open ? "#92400E" : "#B45309", background: open ? "#FEF3C7" : "#FFFBEB", border: "1px solid #FDE68A", padding: "1px 5px", borderRadius: 4, userSelect: "none", flexShrink: 0 }}>{orig.notes ? "📝" : ""}{orig.recap ? "🪞" : ""}</span>}
+        {item.memoOnly && !item.cancelled && <span style={{ fontSize: 9, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", padding: "0 4px", borderRadius: 4, flexShrink: 0 }} title="📝 메모만 — 수행 카운트에는 안 들어감 · 루틴 탭 영역 카드에 모임">📝 메모만</span>}
+        {hasCtx && <span onClick={() => setOpen(!open)} title="메모 보기" style={{ cursor: "pointer", fontSize: 10, color: open ? "#92400E" : "#B45309", background: open ? "#FEF3C7" : "#FFFBEB", border: "1px solid #FDE68A", padding: "1px 5px", borderRadius: 4, userSelect: "none", flexShrink: 0 }}>{orig.notes ? "📝" : ""}{orig.recap ? "🪞" : ""}</span>}
         {item.type === "status" && item.from && <span style={{ fontSize: 10, color: "#9ca3af" }}>{STATUSES[item.from]?.label || item.from}→{STATUSES[item.to]?.label || item.to}</span>}
         {item.detail && <span style={{ fontSize: 10, color: "#8B5CF6" }}>{item.detail}</span>}
         {item.subCount > 0 && <span style={{ fontSize: 10, color: "#9ca3af" }}>+{item.subCount} sub</span>}
         {item.time && <span style={{ fontSize: 10, color: "#c0c0c0", flexShrink: 0 }}>{item.time}</span>}
         {item.cancelled && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", color: "#059669", borderColor: "#A7F3D0" }} onClick={() => onUncancel(date, idx)} title="취소 복원 — 다시 이번 주 카운트에 포함">↺ 복원</button>}
         {h && item.type === "done" && !item.cancelled && !item.memoOnly && !item.routineKey && !item.isSub && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
-        {h && canEditMemo && !item.cancelled && onEditMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", ...(hasMemo ? {} : { color: "#4338CA", borderColor: "#C7D2FE" }) }} onClick={() => { setEt(orig.notes || ""); setEditing(true); setOpen(true); }} title={hasMemo ? (isRoutineMemo ? "메모 수정 — 캘린더 글랜스에 반영" : "메모 수정 — 완료 기록은 그대로") : "메모 추가 — 끝난 뒤에도 무엇을 알게 됐는지 남길 수 있다"}>{hasMemo ? "✏️" : "✏️＋"}</button>}
-        {h && canEditMemo && hasMemo && !item.cancelled && onDeleteMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", color: "#DC2626" }} onClick={() => onDeleteMemo(date, idx)} title={item.memoOnly ? "이 메모 삭제 — 캘린더 글랜스서 제거(↺ 복원 가능)" : (isRoutineMemo ? "메모만 삭제 — 수행 카운트는 유지·캘린더서 제거(되돌리기 토스트로 복원)" : "메모만 삭제 — 완료 기록은 유지(되돌리기 토스트로 복원)")}>🗑</button>}
+        {h && canEditMemo && !item.cancelled && onEditMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", ...(hasMemo ? {} : { color: "#4338CA", borderColor: "#C7D2FE" }) }} onClick={() => { setEt(orig.notes || ""); setEditing(true); setOpen(true); }} title={hasMemo ? (isRoutineMemo ? "메모 수정 (루틴 탭 영역 카드에 반영)" : "메모 수정 — 완료 기록은 그대로") : "메모 추가 — 끝난 뒤에도 무엇을 알게 됐는지 남길 수 있다"}>{hasMemo ? "✏️" : "✏️＋"}</button>}
+        {h && canEditMemo && hasMemo && !item.cancelled && onDeleteMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", color: "#DC2626" }} onClick={() => onDeleteMemo(date, idx)} title={item.memoOnly ? "이 메모 삭제 — 루틴 탭 영역 카드에서 제거(↺ 복원 가능)" : (isRoutineMemo ? "메모만 삭제 — 수행 카운트는 유지 · 영역 카드에서 제거(되돌리기 토스트로 복원)" : "메모만 삭제 — 완료 기록은 유지(되돌리기 토스트로 복원)")}>🗑</button>}
       </div>
       {(hasCtx || editing) && open && <div style={{ marginLeft: 28, marginBottom: 6 }}>{/* ★editing 추가(2026-08-02): 메모가 비어 있어도 입력창이 열려야 새로 쓸 수 있다 */}
         {editing && <div style={{ marginTop: 2 }}>
@@ -1482,7 +1383,6 @@ const HistRow = ({ item, date, idx, onRestore, onUncancel, onEditMemo, onDeleteM
           </div>
         </div>}
         {!editing && orig.notes && <div style={{ ...S.note, marginTop: 2 }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.6, marginRight: 5 }}>📝 메모</span>{orig.notes}</div>}
-        {!editing && orig.recap && <div style={{ ...S.note, color: "#7C3AED", marginTop: 2 }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.6, marginRight: 5 }}>🪞 회고</span>{orig.recap}</div>}
       </div>}
     </div>
   );
@@ -1523,9 +1423,9 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
       {open && <div style={{ marginTop: 4 }}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
           <input value={txt} onChange={e => setTxt(e.target.value)} placeholder="이름" style={{ ...S.inp, fontSize: 12, maxWidth: 180 }} />
-          <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>🕒</span><input type="time" value={tm} onChange={e => setTm(e.target.value)} style={{ ...S.fld, width: 110, flex: "none", fontSize: 11 }} title="시간(선택) — 캘린더 타임드" /></div>
+          <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>🕒</span><input type="time" value={tm} onChange={e => setTm(e.target.value)} style={{ ...S.fld, width: 110, flex: "none", fontSize: 11 }} title="시간(선택)" /></div>
           <PrSel value={prj} onChange={setPrj} projects={projects} />
-          {type === "count" && <div style={{ display: "flex", gap: 3, alignItems: "center", flexWrap: "wrap" }}><span style={{ fontSize: 11, color: "#6b7280" }}>주</span><input type="number" min={1} max={14} value={fq} onChange={e => setFq(e.target.value)} style={{ ...S.fld, width: 46, fontSize: 11, flexShrink: 0 }} title="주 목표 횟수" /><span style={{ fontSize: 11, color: "#6b7280" }}>회·권장</span>{DAYS_KO.map((dn, i) => { const on = dws.includes(i); return <button key={i} type="button" onClick={() => setDws(on ? dws.filter(x => x !== i) : [...dws, i])} style={{ ...S.gh, fontSize: 11, padding: "3px 7px", background: on ? "#EEF2FF" : "#fff", color: on ? "#4338CA" : "#9ca3af", borderColor: on ? "#A5B4FC" : "#e5e7eb", fontWeight: on ? 700 : 400 }} title={dn + "요일 (권장·캘린더 glance)"}>{dn}</button>; })}</div>}
+          {type === "count" && <div style={{ display: "flex", gap: 3, alignItems: "center", flexWrap: "wrap" }}><span style={{ fontSize: 11, color: "#6b7280" }}>주</span><input type="number" min={1} max={14} value={fq} onChange={e => setFq(e.target.value)} style={{ ...S.fld, width: 46, fontSize: 11, flexShrink: 0 }} title="주 목표 횟수" /><span style={{ fontSize: 11, color: "#6b7280" }}>회·권장</span>{DAYS_KO.map((dn, i) => { const on = dws.includes(i); return <button key={i} type="button" onClick={() => setDws(on ? dws.filter(x => x !== i) : [...dws, i])} style={{ ...S.gh, fontSize: 11, padding: "3px 7px", background: on ? "#EEF2FF" : "#fff", color: on ? "#4338CA" : "#9ca3af", borderColor: on ? "#A5B4FC" : "#e5e7eb", fontWeight: on ? 700 : 400 }} title={dn + "요일 (권장 요일, 선택)"}>{dn}</button>; })}</div>}
           {type === "weekly" && <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
             {DAYS_KO.map((dn, i) => { const on = dws.includes(i); return <button key={i} type="button" onClick={() => setDws(on ? dws.filter(x => x !== i) : [...dws, i])} style={{ ...S.gh, fontSize: 11, padding: "3px 7px", background: on ? "#EEF2FF" : "#fff", color: on ? "#4338CA" : "#9ca3af", borderColor: on ? "#A5B4FC" : "#e5e7eb", fontWeight: on ? 700 : 400 }}>{dn}</button>; })}
           </div>}
@@ -1534,7 +1434,7 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
         <textarea value={d} onChange={e => setD(e.target.value)} rows={4} placeholder={"실행 방법 (고정 참고). 예:\n[실행] F45 클래스 참석\n[tier별] 최소=푸시업10+스쿼트10 / 보통=F45 / 최대=F45 그대로"}
           style={{ ...S.ta, minHeight: 0, fontSize: 12 }} />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
-          <span style={{ fontSize: 10, color: "#9ca3af" }}>→ 캘린더 이벤트 설명 맨 위에 고정 표시(오늘 노트는 그 아래)</span>
+          <span style={{ fontSize: 10, color: "#9ca3af" }}>→ 루틴 탭 영역 카드 맨 위에 표시(메모는 그 아래)</span>
           {dirty && <button style={{ ...S.btn("#4338CA"), fontSize: 11 }} onClick={() => onUpdate(r.id, { protocol: d.trim() })}>실행방법 저장</button>}
         </div>
       </div>}
@@ -1565,7 +1465,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
     setNt(""); setNdows([]); setDom(1); setLastDay(false); setRTime(""); setFreqN(3); setRProto("");
   };
   /* ★M5: 시드 루틴은 제거 대신 disabled 표식(재시드 부활 방지). 사용자 생성 반복은 완전 제거. */
-  const delR = (id) => { setRecurrings(p => SEED_ROUTINE_IDS.has(id) ? p.map(r => r.id === id ? { ...r, disabled: true, futureThrough: "" } : r) : p.filter(r => r.id !== id)); }; /* 삭제/비활성 시 미래 placeholder 고아 제거(2026-07-06) */
+  const delR = (id) => { setRecurrings(p => SEED_ROUTINE_IDS.has(id) ? p.map(r => r.id === id ? { ...r, disabled: true } : r) : p.filter(r => r.id !== id)); }; /* 삭제/비활성 시 미래 placeholder 고아 제거(2026-07-06) */
   return (
     <div style={{ marginTop: 16 }}>
       <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setShow(!show)}>
@@ -1590,7 +1490,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
               <span style={{ fontSize: 12, color: "#6b7280" }}>주</span>
               <input type="number" min={1} max={14} value={freqN} onChange={e => setFreqN(e.target.value)} style={{ ...S.fld, width: 46, fontSize: 12, flexShrink: 0 }} title="주 목표 횟수 — 요일 자유, 오늘 탭 카운터 ＋/−" />
               <span style={{ fontSize: 11, color: "#6b7280" }}>회 · 권장</span>
-              {DAYS_KO.map((d, i) => { const on = ndows.includes(i); return <button key={i} type="button" onClick={() => setNdows(on ? ndows.filter(x => x !== i) : [...ndows, i])} style={{ ...S.gh, fontSize: 11, padding: "3px 7px", background: on ? "#EEF2FF" : "#fff", color: on ? "#4338CA" : "#9ca3af", borderColor: on ? "#A5B4FC" : "#e5e7eb", fontWeight: on ? 700 : 400 }} title={d + "요일 (권장·캘린더 glance용, 선택)"}>{d}</button>; })}
+              {DAYS_KO.map((d, i) => { const on = ndows.includes(i); return <button key={i} type="button" onClick={() => setNdows(on ? ndows.filter(x => x !== i) : [...ndows, i])} style={{ ...S.gh, fontSize: 11, padding: "3px 7px", background: on ? "#EEF2FF" : "#fff", color: on ? "#4338CA" : "#9ca3af", borderColor: on ? "#A5B4FC" : "#e5e7eb", fontWeight: on ? 700 : 400 }} title={d + "요일 (권장 요일, 선택)"}>{d}</button>; })}
             </div>
           ) : rType === "daily" ? null : rType === "weekly" ? (
             <div style={{ display: "flex", gap: 2, flexWrap: "wrap", flexShrink: 0 }}>
@@ -1608,11 +1508,11 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
             </div>
           )}
           <input style={{ ...S.inp, fontSize: 12 }} placeholder="반복할 할일..." value={nt} onChange={e => setNt(e.target.value)} onKeyDown={e => e.key === "Enter" && addR()} />
-          <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>🕒</span><input type="time" style={{ ...S.fld, width: 110, flex: "none", fontSize: 11 }} value={rTime} onChange={e => setRTime(e.target.value)} title="시간(선택) — 넣으면 캘린더에 타임드 일정" /></div>
+          <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>🕒</span><input type="time" style={{ ...S.fld, width: 110, flex: "none", fontSize: 11 }} value={rTime} onChange={e => setRTime(e.target.value)} title="시간(선택)" /></div>
           <PrSel value={np} onChange={setNp} projects={projects} />
           <button style={S.btn()} onClick={addR}>추가</button>
         </div>
-        <textarea value={rProto} onChange={e => setRProto(e.target.value)} rows={2} placeholder="실행 방법(선택) — [실행]/[tier별] 등. 캘린더 이벤트 설명 맨 위 고정. (기존 반복은 목록의 📋로 편집)"
+        <textarea value={rProto} onChange={e => setRProto(e.target.value)} rows={2} placeholder="실행 방법(선택) — [신호]/[강제]/[실행]/[tier별] 등. 루틴 탭 영역 카드 맨 위에 보인다. (기존 반복은 목록의 📋로 편집)"
           style={{ ...S.ta, minHeight: 0, fontSize: 12, marginTop: 6 }} />
       </div>}
     </div>
@@ -1743,9 +1643,9 @@ const WeeklyRoutineStrip = ({ recurrings, projects, tasks, history, onAddSession
         <textarea autoFocus value={memoText} onChange={e => setMemoText(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(active.id); } if (e.key === "Escape") cancel(); }}
           rows={Math.min(8, (memoText.match(/\n/g) || []).length + 1)}
-          placeholder="메모(선택·여러 줄) — 발견/느낀 점, 캘린더로 이월. Ctrl+Enter=기록 / [기록+1]=세션 카운트 / [📝 메모만]=카운트 없이 메모만" style={{ ...S.ta, fontSize: 12, flex: 1, minWidth: 180, minHeight: 0, resize: "vertical" }} />
+          placeholder="메모(선택·여러 줄) — 발견/느낀 점 — 같은 영역의 다음 회차에서 보입니다. Ctrl+Enter=기록 / [기록+1]=세션 카운트 / [📝 메모만]=카운트 없이 메모만" style={{ ...S.ta, fontSize: 12, flex: 1, minWidth: 180, minHeight: 0, resize: "vertical" }} />
         <button style={{ ...S.btn("#4338CA"), fontSize: 11, marginTop: 2 }} onClick={() => submit(active.id)} title="세션 1건 기록(카운트 +1) + 메모">기록 +1</button>
-        <button style={{ ...S.gh, fontSize: 11, marginTop: 2, color: "#4338CA", borderColor: "#C7D2FE" }} onClick={() => submitMemo(active.id)} title="카운트 없이 메모만 저장 — 캘린더로 이월(레슨만 받은 날 등)">📝 메모만</button>
+        <button style={{ ...S.gh, fontSize: 11, marginTop: 2, color: "#4338CA", borderColor: "#C7D2FE" }} onClick={() => submitMemo(active.id)} title="카운트 없이 메모만 저장(레슨만 받은 날 등) — 루틴 탭 영역 카드에 모임">📝 메모만</button>
         <button style={{ ...S.gh, fontSize: 11, marginTop: 2 }} onClick={cancel}>취소</button>
       </div>}
     </div>
@@ -1773,7 +1673,7 @@ const WeeklyRoutineHistory = ({ recurrings, tasks, history }) => {
             })}
           </div>
         ))}
-        <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 6 }}>목표=지정 요일 수(옮긴 날·➕추가 세션 포함). 이번 주 진행·➕는 '오늘 할 일' 상단에서.</div>
+        <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 6 }}>목표=지정 요일 수(옮긴 날·➕추가 세션 포함). 이번 주 진행·➕는 이 탭 맨 위 스트립에서.</div>
       </div>}
     </div>
   );
@@ -2032,7 +1932,7 @@ function App({ onSwitchWs }) {
     const T = { q1omsdk: 3, h7gayxj: 5, w02xa9w: 1, dcfei54: 1, rt_english: 7 };
     if (!recurrings.some(r => T[r.id] && r.type !== "count")) return;
     const DEF_DOWS = { rt_english: [0, 1, 2, 3, 4, 5, 6] }; /* ★RC-1(적대검증 F4): 영어=daily→dows 없음이라 권장요일 이벤트 0개 되던 것 보완=매일 권장. 나머지 4개는 기존 dows(월수토·평일·토) 유지 */
-    setRecurrings(prev => prev.map(r => (T[r.id] && r.type !== "count") ? { ...r, type: "count", freqPerWeek: T[r.id], futureThrough: "", dows: (r.dows && r.dows.length) ? r.dows : (r.dow != null ? [r.dow] : (DEF_DOWS[r.id] || [])) } : r));
+    setRecurrings(prev => prev.map(r => (T[r.id] && r.type !== "count") ? { ...r, type: "count", freqPerWeek: T[r.id], dows: (r.dows && r.dows.length) ? r.dows : (r.dow != null ? [r.dow] : (DEF_DOWS[r.id] || [])) } : r));
     /* 오늘 할일 미완료 인스턴스만 tasks서 제거(주N회는 오늘할일 안 씀). 연결 캘린더 이벤트는 안 지움=권장요일 리마인더로 남김. */
     const doomed = tasks.filter(t => T[t.recurringId] && t.status !== "done");
     if (doomed.length) setTasks(prev => prev.filter(t => !doomed.some(d => d.id === t.id)));
@@ -2143,39 +2043,6 @@ function App({ onSwitchWs }) {
   const nowTime = () => { const d = new Date(); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
 
   /* 드래그 정렬: fromId를 toId 바로 앞으로 이동 */
-  const reorderTask = (fromId, toId, pos) => {
-    setTasks(prev => {
-      const arr = [...prev];
-      const fromIdx = arr.findIndex(t => t.id === fromId);
-      if (fromIdx < 0) return prev;
-      const [item] = arr.splice(fromIdx, 1);
-      let toIdx = arr.findIndex(t => t.id === toId);
-      if (toIdx < 0) return prev;
-      if (pos === "after") toIdx++;
-      arr.splice(toIdx, 0, item);
-      return arr;
-    });
-  };
-
-  /* ★하위 항목 순서 변경(2026-09-08): 상위 항목의 subtasks 배열 안에서만 자리를 옮긴다.
-     하위 항목의 순서는 그 상위 항목 안에서만 뜻이 있으므로, 다른 상위 항목 사이로 끌면
-     아무 일도 일어나지 않는다(호출 전에 걸러낸다). */
-  const reorderSub = (parentId, fromId, toId, pos) => {
-    setTasks(prev => prev.map(t => {
-      if (t.id !== parentId) return t;
-      const arr = [...(t.subtasks || [])];
-      const fi = arr.findIndex(x => x.id === fromId);
-      if (fi < 0) return t;
-      const [item] = arr.splice(fi, 1);
-      let ti = arr.findIndex(x => x.id === toId);
-      if (ti < 0) return t;
-      if (pos === "after") ti++;
-      arr.splice(ti, 0, item);
-      return { ...t, subtasks: arr };
-    }));
-  };
-
-  /* 히스토리에 항목 추가하는 유틸 */
   const addHistItem = (item) => {
     setHistory(prev => {
       const ex = prev.find(h => h.date === TODAY);
@@ -2211,7 +2078,7 @@ function App({ onSwitchWs }) {
   /* 반복 정의 수정(실행방법·시간) + 진행중 인스턴스에 전파 + 연결된 캘린더 이벤트 갱신(2026-07-01) */
   const updateRecurring = (id, patch) => {
     const newRec = { ...(recurrings.find(r => r.id === id) || {}), ...patch };
-    setRecurrings(p => p.map(r => r.id === id ? { ...r, ...patch, futureThrough: "" } : r));
+    setRecurrings(p => p.map(r => r.id === id ? { ...r, ...patch } : r));
     /* 인스턴스+캘린더 전파 키(text/project/time/protocol). dows·type은 정의만 바꾸고 미래 생성에 반영 */
     if (!["protocol", "time", "text", "project"].some(k => k in patch)) return;
     const merge = (t) => ({ ...t,
@@ -2230,7 +2097,7 @@ function App({ onSwitchWs }) {
       setTasks(prev => prev.filter(t => !(t.recurringId === rid && (t.recurringPeriod === date || t.planDate === date) && t.status !== "done")));
       setHistory(prev => {
         if (prev.some(h => h.date === date && (h.items || []).some(it => it.type === "done" && it.orig && it.orig.recurringId === rid))) return prev;
-        const orig = { id: gid(), text: rec ? rec.text : "루틴", status: "done", project: rec ? rec.project : "proj_etc", recurringId: rid, recurringPeriod: date, notes: "", planDate: date, createdAt: date, subtasks: [], calEventId: "", calUpdated: 0 };
+        const orig = { id: gid(), text: rec ? rec.text : "루틴", status: "done", project: rec ? rec.project : "proj_etc", recurringId: rid, recurringPeriod: date, notes: "", planDate: date, createdAt: date, subtasks: [] };
         const item = { type: "done", text: orig.text, projectName: proj ? proj.name : "", project: orig.project, orig, time: "" };
         const ex = prev.find(h => h.date === date);
         if (ex) return prev.map(h => h.date === date ? { ...h, items: [...h.items, item] } : h);
@@ -2265,7 +2132,7 @@ function App({ onSwitchWs }) {
     const memoTrim = (memo || "").trim();
     const orig = pend
       ? { ...pend, status: "done", recurringPeriod: period, notes: memoTrim || pend.notes || "" }
-      : { id: gid(), text: rec.text, status: "done", project: rec.project || "proj_etc", recurringId: rid, recurringPeriod: period, notes: memoTrim, planDate: TODAY, planTime: rec.time || "", protocol: rec.protocol || "", createdAt: TODAY, subtasks: [], calEventId: "", calUpdated: 0 };
+      : { id: gid(), text: rec.text, status: "done", project: rec.project || "proj_etc", recurringId: rid, recurringPeriod: period, notes: memoTrim, planDate: TODAY, planTime: rec.time || "", protocol: rec.protocol || "", createdAt: TODAY, subtasks: [] };
     setHistory(prev => { const item = { type: "done", text: orig.text, projectName: proj ? proj.name : "", project: orig.project, orig, time: nowTime() };
       const ex = prev.find(h => h.date === TODAY); if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, item] } : h); return [...prev, { date: TODAY, items: [item] }]; });
     if (pend) setTasks(prev => prev.filter(t => t.id !== pend.id)); /* 완료로 흡수됐으므로 대기 목록에서 뺀다(일반 완료와 같은 처리) */
@@ -2286,7 +2153,7 @@ function App({ onSwitchWs }) {
     if (target.kind === "hist") {
       setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: true } : it) } : h));
       const rec0 = recurrings.find(r => r.id === rid);
-      showT("이번 주 완료 1건 취소 — 히스토리서 복원 가능", () => { setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: false } : it) } : h)); if (rec0 && routineWeekTarget(rec0) > 0) layFutureForRecurring(rec0, WS, routineMemoText(rid, history, 10)); hideT(); }); /* R1(2026-07-08): 되돌리기=능동 재-lay(closure history엔 target 아직 non-cancelled→excludeId 없이 메모 포함)로 즉시 캘린더 복귀. futureThrough:"" 리셋 레이스·once-per-mount futureEvtDone 의존 제거 */
+      showT("이번 주 완료 1건 취소 — 히스토리서 복원 가능", () => { setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: false } : it) } : h)); hideT(); }); /* R1(2026-07-08): 되돌리기=능동 재-lay(closure history엔 target 아직 non-cancelled→excludeId 없이 메모 포함)로 즉시 캘린더 복귀. futureThrough:"" 리셋 레이스·once-per-mount futureEvtDone 의존 제거 */
     } else {
       setTasks(prev => prev.map(t => t.id === target.taskId ? { ...t, cancelled: true } : t));
       showT("이번 주 완료 1건 취소 — 복원 가능", () => { setTasks(prev => prev.map(t => t.id === target.taskId ? { ...t, cancelled: false } : t)); hideT(); });
@@ -2303,7 +2170,7 @@ function App({ onSwitchWs }) {
     const wk = getWeekId();
     const period = wk + "-m" + gid(); /* 메모전용 회차키(카운트 로직과 안 겹침) */
     const proj = projects.find(p => p.id === rec.project);
-    const orig = { id: gid(), text: rec.text, status: "done", project: rec.project || "proj_etc", recurringId: rid, recurringPeriod: period, notes: memoTrim, planDate: TODAY, planTime: rec.time || "", protocol: rec.protocol || "", createdAt: TODAY, subtasks: [], calEventId: "", calUpdated: 0 };
+    const orig = { id: gid(), text: rec.text, status: "done", project: rec.project || "proj_etc", recurringId: rid, recurringPeriod: period, notes: memoTrim, planDate: TODAY, planTime: rec.time || "", protocol: rec.protocol || "", createdAt: TODAY, subtasks: [] };
     setHistory(prev => { const item = { type: "done", memoOnly: true, text: orig.text, projectName: proj ? proj.name : "", project: orig.project, orig, time: nowTime() };
       const ex = prev.find(h => h.date === TODAY); if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, item] } : h); return [...prev, { date: TODAY, items: [item] }]; });
     showT("\"" + rec.text + "\" 메모 저장 ✅ (카운트 변화 없음)", null);
@@ -2346,7 +2213,7 @@ function App({ onSwitchWs }) {
     const tid = gid();
     const pd = planDate || ""; /* ★2026-07-04: 폼 날짜 그대로(빈 값 허용) — 날짜 비우면 과제 안 백로그, 날짜 있으면 그 날 뜸. 강제 today 폐지 */
     const autoFocus = focus; /* 별=집중(날짜와 분리, 2026-06-30) — 오늘 표출은 수행날짜로 */
-    const newTask = { id: tid, text, status, project, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: pd, createdAt: TODAY, notes: "", focus: autoFocus, subtasks: [], calEventId: "", calUpdated: 0 };
+    const newTask = { id: tid, text, status, project, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: pd, createdAt: TODAY, notes: "", focus: autoFocus, subtasks: [] };
     setTasks(p => [...p, newTask]);
     addHistItem({ type: "added", text, projectName: proj?.name || "", project, time: nowTime() });
   };
@@ -2390,7 +2257,7 @@ function App({ onSwitchWs }) {
     if (!editTarget) return;
     if (editTarget.parentId) {
       /* (폐지 2026-06-30) 수행날짜=오늘 자동별표 제거 — 별=집중 업무(날짜 무관) */
-      setTasks(p => p.map(t => t.id === editTarget.parentId ? { ...t, subtasks: (t.subtasks || []).map(s => s.id === updated.id ? { ...updated, calEventId: s.calEventId || updated.calEventId, calUpdated: s.calUpdated || updated.calUpdated } : s) } : t));
+      setTasks(p => p.map(t => t.id === editTarget.parentId ? { ...t, subtasks: (t.subtasks || []).map(s => s.id === updated.id ? { ...updated, } : s) } : t));
       /* 서브태스크 완료 이력 동기(부모 과제 기준) */
       const par = tasks.find(t => t.id === editTarget.parentId);
       if (par) syncSubDoneHist(par, { ...par, subtasks: (par.subtasks || []).map(s => s.id === updated.id ? updated : s) });
@@ -2399,8 +2266,7 @@ function App({ onSwitchWs }) {
       /* ★편집모달 덮어쓰기 방지(2026-07-04): 모달이 열려있는 동안 비동기로 찍힌 calEventId/calUpdated를
          스냅샷이 덮지 않게 현재값 우선 보존(서브도 id별로). 편집 필드는 updated 적용. */
       setTasks(p => p.map(t => t.id === updated.id ? { ...updated,
-        calEventId: t.calEventId || updated.calEventId, calUpdated: t.calUpdated || updated.calUpdated,
-        subtasks: (updated.subtasks || []).map(ns => { const c = (t.subtasks || []).find(x => x.id === ns.id); return c ? { ...ns, calEventId: ns.calEventId || c.calEventId, calUpdated: ns.calUpdated || c.calUpdated } : ns; }) } : t));
+        subtasks: (updated.subtasks || []).map(ns => { const c = (t.subtasks || []).find(x => x.id === ns.id); return c ? { ...ns } : ns; }) } : t));
       if (!prev) return;
       const proj = projects.find(p => p.id === updated.project);
       const changes = [];
@@ -2548,9 +2414,9 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onReorderSub={reorderSub} onPlanToday={planToday} onClearToday={clearToday} />}
+        {tab === "today" && <TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} />}
         {tab === "routine" && <><WeeklyRoutineStrip recurrings={recurrings} projects={projects} tasks={tasks} history={history} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemoOnly={addRoutineMemo} /><AreaMemoPanel recurrings={recurrings} projects={projects} history={history} /><WeeklyRoutineHistory recurrings={recurrings} tasks={tasks} history={history} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
-        {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} onReorderSub={reorderSub} isWork={isWork} />}
+        {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} isWork={isWork} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} />}
       </div>
       {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} isWork={isWork} />}
