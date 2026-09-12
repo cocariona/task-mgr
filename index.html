@@ -1499,7 +1499,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
           <PrSel value={np} onChange={setNp} projects={projects} />
           <button style={S.btn()} onClick={addR}>추가</button>
         </div>
-        <textarea value={rProto} onChange={e => setRProto(e.target.value)} rows={2} placeholder="실행 방법(선택) — [신호]/[강제]/[실행]/[tier별] 등. 루틴 탭 영역 카드 맨 위에 보인다. (기존 반복은 목록의 📋로 편집)"
+        <textarea value={rProto} onChange={e => setRProto(e.target.value)} rows={2} placeholder="실행 방법(선택) — [신호]/[강제]/[실행]/[tier별] 등. 이 목록의 ✏️📋 에서만 보고 고친다. (기존 반복도 같은 버튼)"
           style={{ ...S.ta, minHeight: 0, fontSize: 12, marginTop: 6 }} />
       </div>}
     </div>
@@ -1684,8 +1684,7 @@ const SweptMemos = ({ items }) => {
   );
 };
 /* ★영역 카드(2026-09-12 소유자 결정): 영역마다 그 영역 루틴들의 메모를 한 흐름으로 보여 준다.
-   실행방법(protocol)도 여기서 보인다 — 종전에는 캘린더 설명란과 반복 설정 편집창에만 있어서,
-   캘린더를 걷어내면 실행방법을 볼 자리가 앱에 하나도 남지 않았다. */
+   실행방법(protocol)은 반복 설정의 📋 에서 본다 — 카드에는 메모만 둔다(2026-09-13 소유자). */
 const AreaMemoPanel = ({ recurrings, projects, history }) => {
   const [openArea, setOpenArea] = useState("");
   const live = (recurrings || []).filter(r => !r.disabled);
@@ -1711,12 +1710,6 @@ const AreaMemoPanel = ({ recurrings, projects, history }) => {
               <span style={{ marginLeft: "auto", fontSize: 11, color: fresh.length ? "#4338CA" : "#9ca3af", fontWeight: fresh.length ? 600 : 400 }}>메모 {fresh.length}</span>
             </div>
             {open && <div style={{ marginTop: 7 }}>
-              {mine.filter(r => (r.protocol || "").trim()).map(r => (
-                <div key={r.id} style={{ fontSize: 11, background: "#F9FAFB", border: "1px solid #e5e7eb", borderRadius: 6, padding: "6px 8px", marginBottom: 5, whiteSpace: "pre-wrap", color: "#374151" }}>
-                  <b style={{ color: "#4338CA" }}>{r.text}</b> — 실행방법
-                  <div style={{ marginTop: 3 }}>{r.protocol}</div>
-                </div>
-              ))}
               {!res.items.length && <div style={{ fontSize: 11, color: "#9ca3af" }}>아직 메모가 없습니다. 스트립의 ＋ 로 적으면 여기 모입니다.</div>}
               {fresh.map((m, i) => (
                 <div key={i} style={{ fontSize: 12, padding: "5px 0", borderBottom: "1px dotted #e5e7eb" }}>
@@ -2378,7 +2371,7 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} />}
+        {tab === "today" && <><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
         {tab === "routine" && <><WeeklyRoutineStrip recurrings={recurrings} projects={projects} tasks={tasks} history={history} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemoOnly={addRoutineMemo} /><AreaMemoPanel recurrings={recurrings} projects={projects} history={history} /><WeeklyRoutineHistory recurrings={recurrings} tasks={tasks} history={history} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} isWork={isWork} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} />}
