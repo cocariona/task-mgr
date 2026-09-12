@@ -107,8 +107,8 @@ const TABS_BY_WS = {
   /* 과제 맥락(memos) 탭은 계속 제거 유지(2026-06-26) → 로컬 `Desktop\과제 맥락.md`(계정경계·기밀). memos 데이터·배선은 2026-07-27~28 전량 제거(e779400) — RTDB /data 에 memos 키 부재 확인(2026-07-28). 회고(recap)와 별개. */
   personal: [
     { id: "today", label: "오늘", icon: "⭐" },
+    { id: "routine", label: "루틴", icon: "🔁" },
     { id: "projects", label: "유형별", icon: "📁" },
-    { id: "channels", label: "회고", icon: "🔎" },
     { id: "history", label: "히스토리", icon: "📜" },
   ],
 };
@@ -495,11 +495,8 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
   const newTasks = [];
   recurrings.forEach(r => {
     if (r.disabled) return; /* ★M5: 삭제 표식된 시드 루틴은 인스턴스 생성 안 함 */
-    /* ★weekly 도 제외(2026-08-29 소유자 지시 "오늘 할 일에 안 떴으면 좋겠고 항시 스트립에 뜨는 것으로 충분"):
-       종전엔 그 요일 당일에만 '오늘 할 일' 인스턴스를 만들고 주간 스트립에서는 숨겼다(onTodayList·2026-08-02b).
-       그래서 정작 수업 날에 스트립 한 칸이 비어 그 주 그림이 불완전했다. 이제 count 와 같이 **스트립 한 자리**만 쓴다.
-       ※당일 캘린더 이벤트는 futureEvtDone 이 (오늘,+28일] 로 미리 깔아 두므로 인스턴스가 없어도 글랜스는 그대로다. */
-    if (r.type === "count" || r.type === "weekly" || COUNT_MIG_IDS.has(r.id)) return; /* ★주N회(2026-07-07): 오늘 할 일에 요일별 인스턴스 안 만듦 — 오늘 탭 카운터(＋/−)에서만. id-스킵=전환 tick 레이스 방지 */
+    /* ★weekly 복원(2026-09-12 소유자 결정): 캘린더를 걷으면서 당일 글랜스가 사라져, 그 요일 당일에만 인스턴스를 만들던 2026-08-02b 동작으로 되돌린다. 주간 그림은 루틴 탭 스트립이 따로 갖는다 — 다른 탭이라 "한 화면에 두 자리" 문제가 아니다. */
+    if (r.type === "count" || COUNT_MIG_IDS.has(r.id)) return; /* 주N회(count)만 제외 — 오늘 할 일에 인스턴스를 안 만들고 스트립 카운터(＋/−)에서만 센다. id-스킵=전환 tick 레이스 방지 */
     const type = r.type || "weekly";
     let period; let effTime = r.time || ""; /* ★effTime: 회차 override 시각 반영(2026-07-13) */
     if (type === "daily") {
@@ -1510,14 +1507,8 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
   const [prj, setPrj] = useState(r.project || "");
   const [dws, setDws] = useState(wdays);
   const [fq, setFq] = useState(r.freqPerWeek || 1); /* 주N회 목표 편집(2026-07-07) */
-  const [ovWk, setOvWk] = useState(""); const [ovDate, setOvDate] = useState(""); const [ovTime, setOvTime] = useState(""); /* ★회차 override 편집(2026-07-13·단일요일 weekly) */
   useEffect(() => { setD(r.protocol || ""); setTxt(r.text || ""); setTm(r.time || ""); setPrj(r.project || ""); setDws(r.dows || (r.dow != null ? [r.dow] : [])); setFq(r.freqPerWeek || 1); }, [r.id, r.protocol, r.text, r.time, r.project, r.dow, r.freqPerWeek]); /* eslint-disable-line */
   /* ★회차 이동(2026-07-13): 단일요일 weekly(링글·레슨)만. 앞으로의 4회차(그 요일 날짜+회차키 wk)를 보여주고 회차별 override 지정/해제 */
-  const isSingleWeekly = type === "weekly" && wdays.length === 1;
-  const upcoming = (() => { if (!isSingleWeekly) return []; const dowN = wdays[0]; const out = []; const dd = new Date(TODAY + "T00:00:00"); for (let i = 0; i < 35 && out.length < 4; i++) { if (dd.getDay() === dowN) out.push({ wk: weekIdOf(dd), defDate: dateStrOf(dd) }); dd.setDate(dd.getDate() + 1); } return out; })();
-  const pickOcc = (wk, defDate) => { const cur = (r.overrides || {})[wk]; setOvWk(wk); setOvDate((cur && cur.date) || defDate); setOvTime((cur && cur.time) || r.time || ""); };
-  const saveOv = () => { if (!ovWk || !ovDate || ovDate < TODAY) return; onUpdate(r.id, { overrides: { ...(r.overrides || {}), [ovWk]: { date: ovDate, time: ovTime } } }); setOvWk(""); }; /* ★과거 날짜 금지(2026-07-13 적대검증): 유실·stale 이벤트 방지 */
-  const clearOv = (wk) => { const o = { ...(r.overrides || {}) }; delete o[wk]; onUpdate(r.id, { overrides: o }); if (ovWk === wk) setOvWk(""); };
   const dirty = d !== (r.protocol || "");
   const sortJoin = (a) => [...a].sort((x, y) => x - y).join(",");
   const dirtySched = txt.trim() !== (r.text || "") || tm !== (r.time || "") || prj !== (r.project || "") || (type === "weekly" && sortJoin(dws) !== sortJoin(wdays)) || (type === "count" && (String(fq) !== String(r.freqPerWeek || 1) || sortJoin(dws) !== sortJoin(wdays)));
@@ -1543,23 +1534,6 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
           </div>}
           {dirtySched && <button style={{ ...S.btn("#4338CA"), fontSize: 11 }} onClick={saveSched}>일정 저장</button>}
         </div>
-        {isSingleWeekly && <div style={{ marginBottom: 6, background: "#F9FAFB", borderRadius: 6, padding: "5px 7px" }}>
-          <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 3 }}>📅 특정 회차 이동 <span style={{ color: "#9ca3af" }}>(그 주만 다른 날·시간으로 — 캘린더+할일 그 날로, 회차키 유지)</span></div>
-          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
-            {upcoming.map(o => { const ov = (r.overrides || {})[o.wk]; const on = ovWk === o.wk; return (
-              <span key={o.wk} style={{ display: "inline-flex", alignItems: "center", gap: 1 }}>
-                <button type="button" onClick={() => pickOcc(o.wk, o.defDate)} style={{ ...S.gh, fontSize: 10, padding: "2px 6px", background: on ? "#EEF2FF" : ov ? "#FEF3C7" : "#fff", borderColor: on ? "#A5B4FC" : ov ? "#FDE68A" : "#e5e7eb", fontWeight: (on || ov) ? 700 : 400 }} title={ov ? ("이동됨 → " + ov.date + (ov.time ? " " + ov.time : "")) : (o.defDate + " (기본 요일)")}>{((ov && ov.date) || o.defDate).slice(5)}{ov ? " ↦" : ""}</button>
-                {ov && <button type="button" onClick={() => clearOv(o.wk)} style={{ ...S.gh, fontSize: 10, padding: "1px 4px", color: "#EF4444", lineHeight: 1 }} title="이 회차 이동 취소(기본 요일로)">×</button>}
-              </span>
-            ); })}
-          </div>
-          {ovWk && <div style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
-            <input type="date" min={TODAY} value={ovDate} onChange={e => setOvDate(e.target.value)} style={{ ...S.fld, fontSize: 11, width: 138, flex: "none" }} />
-            <input type="time" value={ovTime} onChange={e => setOvTime(e.target.value)} style={{ ...S.fld, fontSize: 11, width: 96, flex: "none" }} title="시간(선택)" />
-            <button type="button" style={{ ...S.btn("#4338CA"), fontSize: 10 }} onClick={saveOv}>이동 저장</button>
-            <button type="button" style={{ ...S.gh, fontSize: 10 }} onClick={() => setOvWk("")}>취소</button>
-          </div>}
-        </div>}
         <textarea value={d} onChange={e => setD(e.target.value)} rows={4} placeholder={"실행 방법 (고정 참고). 예:\n[실행] F45 클래스 참석\n[tier별] 최소=푸시업10+스쿼트10 / 보통=F45 / 최대=F45 그대로"}
           style={{ ...S.ta, minHeight: 0, fontSize: 12 }} />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
@@ -1662,15 +1636,30 @@ const routineDoneSet = (tasks, history) => { const s = new Set();
   (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && !it.cancelled && !it.memoOnly && it.orig && it.orig.recurringId) s.add(it.orig.recurringId + "|" + (it.orig.recurringPeriod || day.date)); })); /* ★취소(cancelled)=카운트 제외(2026-07-07·B안). ★memoOnly=📝메모만(카운트 무관·2026-07-08)도 제외 */
   return s; };
 const weekDoneCount = (doneSet, rid, wk) => { let n = 0; doneSet.forEach(k => { const i = k.indexOf("|"); const id = k.slice(0, i), per = k.slice(i + 1); if (id === rid && (per === wk || per.indexOf(wk + "-") === 0)) n++; }); return n; };
-/* ★루틴 이월메모(2026-07-07·B안): 취소 안 된 세션 메모(orig.notes)를 히스토리서 도출 → 캘린더 권장요일 이벤트 설명에 최근 n줄.
-   취소(−)하면 그 세션이 자동 제외돼 메모도 캘린더서 사라짐. 별도 누적 저장 없음(=단일진실). n=최근 몇 개(늘어남=히스토리에 다 남음).
-   opts.excludeId=이 세션 메모 제외(−직후), opts.includeId=취소된 이 세션도 강제 포함(히스토리탭 복원 시 closure history가 아직 cancelled라서). */
-const routineMemoText = (rid, history, n = 10, opts = {}) => {
-  const sw = ROUTINE_SWEPT[rid] || ""; /* ★§14.7: 정제 완료일 이후 세션 note만 glance(sw="" → 전부 통과) */
-  const out = [];
-  (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && it.orig && it.orig.recurringId === rid && (it.orig.notes || "").trim() && it.orig.id !== opts.excludeId && (!it.cancelled || it.orig.id === opts.includeId) && (day.date || "") > sw) out.push({ date: day.date || "", text: (it.orig.notes || "").trim() }); }));
-  out.sort((a, b) => b.date.localeCompare(a.date)); /* ★최신 위로(역순·2026-07-25 소유자) */
-  return out.slice(0, n).map(m => "[" + (m.date || "").slice(5) + "] " + m.text).join("\n\n"); /* ★날짜 블록 사이 빈 줄로 구분(여러 줄 메모도 날짜별 명확) */
+/* ★영역 단위 메모(2026-09-12 소유자 결정): 어느 루틴 칸에 적었든 같은 영역이면 다음 회차에 도착한다.
+   보컬을 예로 들면 레슨에서 받은 교정과 연습에서 나온 발견이 한 흐름이어야 하는데, 종전에는 같은
+   recurringId 끼리만 모여서 레슨 칸에 적은 것이 연습 회차에서 영영 안 보였다(보컬이 돌던 이유는
+   소유자가 손으로 옮겨 적었기 때문이고 시스템이 합쳐 준 적은 없다).
+   ★출처를 반드시 붙인다 — 코치가 한 말인지 내가 찾은 것인지 구분돼야 한다.
+   ★정제 기준도 영역 단위로 본다: 그 영역 루틴들의 sweptThrough 중 **가장 이른** 값을 쓴다.
+     하나라도 정제가 안 됐으면 그 영역은 덜 접힌다(정제 전 메모가 사라지지 않는 쪽이 안전하다). */
+const areaMemos = (projectId, recurrings, history) => {
+  const mine = (recurrings || []).filter(r => r.project === projectId);
+  if (!mine.length) return { items: [], swept: "" };
+  const nameOf = {}; mine.forEach(r => { nameOf[r.id] = r.text || ""; });
+  let swept = null;
+  mine.forEach(r => { const v = ROUTINE_SWEPT[r.id] || ""; if (swept === null || v < swept) swept = v; });
+  swept = swept || "";
+  const items = [];
+  (history || []).forEach(day => (day.items || []).forEach(it => {
+    const o = it.orig;
+    if (it.type !== "done" || it.cancelled || !o || !nameOf[o.recurringId]) return;
+    const text = (o.notes || "").trim(); if (!text) return;
+    const date = day.date || "";
+    items.push({ date, from: nameOf[o.recurringId], text, swept: !!swept && date <= swept });
+  }));
+  items.sort((a, b) => b.date.localeCompare(a.date)); /* 최신 위로(2026-07-25 소유자) */
+  return { items, swept };
 };
 /* 오늘 탭 상단 — 주N회 루틴 '이번 주 N/목표' + ＋(세션 기록+메모)/−(최근 1건 취소).
    요일 무관 주간 카운트: 옮겨 간 날·예정 외·지난 날 = 전부 ＋로 +1. ＋ 누르면 메모 입력창(선택)이 열림 → 발견을 적으면 루틴 이월메모에 누적되고 다음 실행 때 캘린더 권장요일 이벤트 설명에 보임(glance). */
@@ -1792,232 +1781,73 @@ const WeeklyRoutineHistory = ({ recurrings, tasks, history }) => {
     </div>
   );
 };
-const RoutineStreak = ({ recurrings, tasks, history, onToggleDay }) => {
+/* ★정제된 메모 접기(2026-09-12): 일요일 정제로 일지에 옮겨 적은 것은 기본으로 접는다.
+   앱에서 안 보여도 잃는 것이 없다 — 정제본이 영역 일지에 남아 있다. */
+const SweptMemos = ({ items }) => {
   const [open, setOpen] = useState(false);
-  const routines = (recurrings || []).filter(r => (r.type || "weekly") === "daily");
-  if (!routines.length) return null;
-  const N = 10;
-  const base = new Date(TODAY + "T00:00:00").getTime();
-  const days = [];
-  for (let i = N; i >= 1; i--) { const d = new Date(base - i * 86400000); days.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`); }
-  const doneSet = new Set();
-  (tasks || []).forEach(t => { if (t.recurringId && t.status === "done") doneSet.add(t.recurringId + "|" + (t.recurringPeriod || t.planDate)); });
-  (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && it.orig && it.orig.recurringId) doneSet.add(it.orig.recurringId + "|" + (it.orig.recurringPeriod || day.date)); }));
   return (
-    <div style={{ marginTop: 12 }}>
-      <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setOpen(!open)}>
-        {open ? "▼" : "▶"} 🔁 지난 루틴 체크
+    <div style={{ marginTop: 6 }}>
+      <div onClick={() => setOpen(!open)} style={{ fontSize: 11, color: "#9ca3af", cursor: "pointer", userSelect: "none" }}>
+        {open ? "▼" : "▶"} 정제된 메모 {items.length}건 — 일지에 옮겨 적음
       </div>
-      {open && <div style={{ ...S.card, marginTop: 4, overflowX: "auto" }}>
-        <div style={{ display: "flex", gap: 3, marginBottom: 4, paddingLeft: 94 }}>
-          {days.map(d => <span key={d} style={{ width: 24, textAlign: "center", fontSize: 8, color: "#9ca3af", flexShrink: 0 }}>{d.slice(5).replace("-", ".")}</span>)}
+      {open && items.map((m, i) => (
+        <div key={i} style={{ fontSize: 11.5, padding: "4px 0", color: "#6b7280", borderBottom: "1px dotted #f3f4f6" }}>
+          <span style={{ fontSize: 10, color: "#9ca3af" }}>{(m.date || "").slice(5)} · {m.from}에서</span>
+          <div style={{ whiteSpace: "pre-wrap" }}>{m.text}</div>
         </div>
-        {routines.map(r => (
-          <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 3, padding: "3px 0" }}>
-            <span style={{ width: 90, flexShrink: 0, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.text}</span>
-            {days.map(d => { const done = doneSet.has(r.id + "|" + d);
-              return <button key={d} onClick={() => onToggleDay(r.id, d, !done)} title={d + (done ? " 완료" : " 미완료")}
-                style={{ width: 24, height: 24, borderRadius: 5, border: "1px solid #e5e7eb", background: done ? "#10B981" : "#fff", color: done ? "#fff" : "#d1d5db", fontSize: 11, cursor: "pointer", flexShrink: 0 }}>{done ? "✓" : ""}</button>;
-            })}
-          </div>
-        ))}
-        <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 6 }}>칸 클릭 = 그날 루틴 완료 체크/해제(지난 날 소급). 오늘은 위 '오늘 할 일'에서.</div>
-      </div>}
+      ))}
     </div>
   );
 };
-
-/* ═══ 회고 (통합) — 업무: 마커별 / 개인: 루틴·프로젝트별(보기+입력). 완료=history ═══ */
-/* (2026-07-31) 회고별 파일 첨부 제거 — 회고 CRUD(추가·편집·삭제) 자체는 그대로 */
-/* 한 회고 항목 — 편집 후 '저장' 버튼(수정 시에만 표시) + 삭제 */
-const RecapItem = ({ r, onSave, onDel }) => {
-  const [d, setD] = useState(r.text || "");
-  useEffect(() => { setD(r.text || ""); }, [r.text, r.id]);
-  const dirty = d !== (r.text || "");
-  return (
-    <div style={{ background: "#FAF5FF", border: "1px solid #E9D5FF", borderRadius: 6, padding: "5px 7px", marginBottom: 4 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-        <span style={{ fontSize: 9, color: "#a78bfa", flexShrink: 0 }}>🪞 {fd((r.ts || "").slice(0, 10))}</span>
-        <div style={{ flex: 1 }} />
-        {dirty && <button style={{ ...S.btn("#7C3AED"), fontSize: 10, padding: "2px 8px" }} onClick={() => onSave(d)}>저장</button>}
-        <button style={{ ...S.gh, fontSize: 9, color: "#EF4444", padding: "0 4px" }} onClick={onDel}>🗑</button>
-      </div>
-      <textarea value={d} onChange={e => setD(e.target.value)} rows={2}
-        style={{ ...S.ta, minHeight: 0, fontSize: 12, background: dirty ? "#FFFDF5" : "#fff", borderColor: dirty ? "#FCD34D" : "#E9D5FF" }} />
-    </div>
-  );
-};
-/* 여러 회고 = (접기 가능한) 목록 + '추가' 버튼(명시 저장) */
-const RecapEntries = ({ recaps, onChange }) => {
-  const list = recaps || [];
-  const [draft, setDraft] = useState("");
-  const [open, setOpen] = useState(false); /* 기존 회고는 기본 접힘 */
-  const add = () => { if (!draft.trim()) return; onChange([...list, { id: gid(), text: draft.trim(), ts: new Date().toISOString() }]); setDraft(""); };
-  return (
-    <div style={{ marginTop: 4 }}>
-      {list.length > 0 && <div onClick={() => setOpen(!open)} style={{ fontSize: 11, color: "#7C3AED", fontWeight: 600, cursor: "pointer", userSelect: "none", padding: "2px 0", display: "flex", alignItems: "center", gap: 5 }}>
-        <span style={{ fontSize: 10 }}>{open ? "▼" : "▶"}</span> 🪞 회고 {list.length}개 {open ? "접기" : "펴기"}
-      </div>}
-      {open && list.map(r => <RecapItem key={r.id} r={r}
-        onSave={txt => onChange(list.map(x => x.id === r.id ? { ...x, text: txt } : x))}
-        onDel={() => { if (window.confirm("이 회고를 삭제할까요?")) onChange(list.filter(x => x.id !== r.id)); }} />)}
-      <div style={{ display: "flex", gap: 4, alignItems: "stretch", marginTop: 2 }}>
-        <textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="🪞 회고 추가 (결과·교훈·다음에 반영할 것)" rows={2}
-          onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) add(); }}
-          style={{ ...S.ta, minHeight: 0, fontSize: 12, flex: 1, background: "#FAF5FF", borderColor: "#DDD6FE" }} />
-        <button style={{ ...S.btn("#7C3AED"), whiteSpace: "nowrap" }} onClick={add}>+ 저장</button>
-      </div>
-    </div>
-  );
-};
-/* 완료 회고 카드 — 여러 회고 목록 + 추가 */
-const RecapCompletionCard = ({ e, onSaveRecaps }) => {
-  const has = (e.recaps || []).length > 0;
-  const [open, setOpen] = useState(has); /* 회고 입력은 선택적으로 펼침(2026-07-04) — 완료 목록이 길어지지 않게. 이미 회고 있으면 열림 */
-  return (
-    <div style={{ ...S.card, padding: "8px 10px", marginBottom: 6, borderColor: has ? "#eef0f2" : "#DDD6FE" }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-        <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }}>{(e.date || "").slice(5)}</span>
-        <span style={{ flex: 1, fontSize: 13, color: "#374151" }}>{e.text} {e.sub && e.parent && <span style={{ fontSize: 10, color: "#9ca3af" }} title="하위 할일">↳ {e.parent}</span>} {e.proj && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{e.proj}</span>}</span>
-        {!has && (open
-          ? <button onClick={() => setOpen(false)} style={{ ...S.gh, fontSize: 9, flexShrink: 0, padding: "1px 6px" }}>접기</button>
-          : <button onClick={() => setOpen(true)} style={{ fontSize: 9, color: "#7C3AED", background: "#F3E8FF", borderRadius: 4, padding: "2px 7px", flexShrink: 0, border: "none", cursor: "pointer", fontWeight: 600 }}>🪞 회고 추가</button>)}
-      </div>
-      {e.notes && <div style={{ ...S.note, marginLeft: 0 }}>{e.notes}</div>}
-      {open && (e.origId
-        ? <RecapEntries recaps={e.recaps} onChange={rs => onSaveRecaps(e.date, e.origId, rs)} />
-        : (e.recaps || []).map(r => <div key={r.id} style={{ ...S.note, color: "#7C3AED", marginLeft: 0 }}>🪞 {r.text}</div>))}
-    </div>
-  );
-};
-/* 진행중 할일 회고 행 — 회고탭 '진행중'에서도 회고 여러 개(2026-07-01) */
-const ActiveRecapRow = ({ t, isWork, pname, onEdit, onSaveRecaps }) => {
-  const dl = t.scheduledDate ? deadlineInfo(t.scheduledDate) : null;
-  return (
-    <div style={{ padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13 }}>
-        {dl && <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>}
-        <div style={{ flex: 1, minWidth: 0 }}>{t.text} {isWork && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{pname(t.project)}</span>}{t.notes && <div style={S.note}><span style={{ fontSize: 8, fontWeight: 700, opacity: 0.6, marginRight: 4 }}>📝</span>{t.notes}</div>}</div>
-        <button style={{ ...S.gh, fontSize: 10 }} onClick={() => onEdit(t)}>✏️</button>
-      </div>
-      <RecapEntries recaps={t.recaps} onChange={rs => onSaveRecaps(t.id, rs)} />
-    </div>
-  );
-};
-const RecapView = ({ isWork, tasks, history, projects, onEdit, onUpdateHistRecaps, onUpdateTaskRecaps, recurrings, onToggleDay }) => {
-  /* 완료(alldone) 칩 제거(2026-07-04, 소유자): 완료 회고는 각 프로젝트 칩의 '완료(N)' 섹션 + 루틴 칩에서 이미 보임 → 중복 제거.
-     업무=프로젝트별 / 개인=루틴별+프로젝트별. 완료 task는 해당 프로젝트 칩 하단 완료 섹션에 뜸. */
-  /* 회고탭 루틴 분류 = 공유 isRoutineProj(2026-07-12): "반복 붙은 프로젝트=루틴" 자동 도출(모듈 ROUTINE_REC_PROJ_IDS, App이 매 렌더 동기) → 휴식(mm2tdvi 소속) 등 자동 루틴 + 운동/보컬/글쓰기 라이브 반복(F45·헬스·q1omsdk·dcfei54) 매핑. 하드코딩 SD_ROUTINES 폐지. */
-  const targets = (isWork
-    ? (projects || []).map(p => ({ kind: "project", key: p.id, label: p.name }))
-    : [...(projects || []).filter(p => isRoutineProj(p)).sort((a, b) => (a.order || 0) - (b.order || 0)).map(p => ({ kind: "routine", key: p.id, label: p.name })),
-       ...(projects || []).filter(p => !isBucketProj(p) && !isRoutineProj(p)).sort((a, b) => (a.order || 0) - (b.order || 0)).map(p => ({ kind: "project", key: p.id, label: p.name }))]);
-  const [selKey, setSelKey] = useState(targets[0] ? targets[0].kind + ":" + targets[0].key : "");
-  const cur = targets.find(t => (t.kind + ":" + t.key) === selKey) || targets[0] || { kind: "none", key: "", label: "" };
-  const pname = (id) => projects.find(p => p.id === id)?.name || "";
-  const [logsAll, setLogsAll] = useState({});
-  const [notes, setNotes] = useState({});
-  const [err, setErr] = useState("");
-  const [showAllDone, setShowAllDone] = useState(false);
-  const [doneOpen, setDoneOpen] = useState(false); /* '회고 완료'(이미 작성) 카드 접기/펼치기 — 기본 접힘(2026-06-30) */
-  useEffect(() => { setShowAllDone(false); setDoneOpen(false); }, [selKey]);
-  useEffect(() => { (async () => {
-    if (isWork || !fbUser()) return;
-    try { const [l, n] = await Promise.all([sdFetch("/logs"), sdFetch("/notes")]); setLogsAll(l || {}); setNotes(n || {}); }
-    catch (e) { setErr((e && e.message) || String(e)); }
-  })(); }, []); /* eslint-disable-line */
-
-  const active = useMemo(() => cur.kind === "project" ? tasks.filter(t => t.status !== "done" && t.project === cur.key) : cur.kind === "routine" ? tasks.filter(t => t.status !== "done" && t.project === cur.key && !t.recurringId) : [], [tasks, cur.kind, cur.key]); /* 루틴 칩=그 영역의 비반복 일회성 할일만(반복 인스턴스는 기록·노트/오늘탭 스트립서 봄) — 2026-07-12 */
-  const doneHist = useMemo(() => {
-    const out = [];
-    (history || []).forEach(day => (day.items || []).forEach(it => {
-      if (it.type !== "done" || !it.orig) return;
-      const ok = cur.kind === "alldone" ? !it.orig.recurringId : cur.kind === "project" ? it.orig.project === cur.key : cur.kind === "routine" ? (it.orig.project === cur.key && !it.orig.recurringId) : false; /* 루틴 칩도 그 영역의 비반복 일회성 완료+회고를 노출(반복 인스턴스 제외=기록·노트서 봄)(2026-07-12). project/alldone 칩은 불변 */
-      if (ok) out.push({ key: (it.orig.id || it.text) + day.date, origId: it.orig.id, text: it.text, notes: it.orig.notes, recaps: it.orig.recaps || (it.orig.recap ? [{ id: "lg_" + (it.orig.id || ""), text: it.orig.recap, ts: day.date }] : []), proj: it.projectName || pname(it.orig.project), date: day.date, sub: it.isSub, parent: it.parentText });
-    }));
-    return out;
-  }, [history, cur.kind, cur.key]);
-  /* 회고 대기(미작성) 먼저 → 최근순. 기본=미작성+최근2주만, 이전은 '더 보기'(무한 증가 방지) */
-  const doneView = useMemo(() => {
-    const cut = new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10);
-    const has = (e) => (e.recaps || []).length > 0;
-    const sorted = [...doneHist].sort((a, b) => { const ar = has(a) ? 1 : 0, br = has(b) ? 1 : 0; if (ar !== br) return ar - br; return (b.date || "").localeCompare(a.date || ""); });
-    const shown = showAllDone ? sorted : sorted.filter(e => !has(e) || (e.date || "") >= cut);
-    return { shown, hidden: sorted.length - shown.length, total: sorted.length, pending: shown.filter(e => !has(e)), recapped: shown.filter(has) };
-  }, [doneHist, showAllDone]);
-  const routineEntries = useMemo(() => {
-    if (cur.kind !== "routine") return [];
-    const out = [];
-    /* B: 루틴 = 그 영역 프로젝트(cur.key=프로젝트 id)에 붙은 모든 반복의 인스턴스 집계(운동=F45+헬스 등, 2026-07-12).
-       ★메모 있는 세션만 표시(소유자 2026-07-12) — done만 있고 메모 없는 세션은 제외(완료 수는 상단 '주간 루틴' 스트립·/sweep이 측정). done/완료 라벨(src)·"✓예정/✓완료" 플레이스홀더 폐지. */
-    const ridSet = new Set((recurrings || []).filter(r => r.project === cur.key).map(r => r.id));
-    if (ridSet.size) {
-      tasks.forEach(t => { if (t.recurringId && ridSet.has(t.recurringId) && t.notes && !t.cancelled) out.push({ key: "t" + t.id, date: t.recurringPeriod || t.planDate || "", text: t.notes }); });
-      (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && !it.cancelled && it.orig && ridSet.has(it.orig.recurringId) && it.orig.notes) out.push({ key: "h" + (it.orig.id || "") + day.date, date: it.orig.recurringPeriod || day.date, text: it.orig.notes }); })); /* ★memoOnly(📝메모만)=순수 메모 세션이므로 포함(요청2=메모 있는 세션 표시, 카운트만 중립). 취소·무메모만 제외 */
-    }
-    /* 과거(B 전) /selfdev/logs·notes 보존 표시 — 영역명(cur.label) 키. 메모 있는 것만 */
-    Object.entries(logsAll).forEach(([date, day]) => { const r = day && day[cur.label]; if (r && r.memo) out.push({ key: "l" + date, date, text: r.memo }); });
-    Object.entries(notes).forEach(([id, n]) => { if (n && n.routine === cur.label && n.text) out.push({ key: "n" + id, date: n.date || "", text: n.text }); });
-    return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  }, [logsAll, notes, tasks, history, recurrings, cur.kind, cur.key, cur.label]);
-
+/* ★영역 카드(2026-09-12 소유자 결정): 영역마다 그 영역 루틴들의 메모를 한 흐름으로 보여 준다.
+   실행방법(protocol)도 여기서 보인다 — 종전에는 캘린더 설명란과 반복 설정 편집창에만 있어서,
+   캘린더를 걷어내면 실행방법을 볼 자리가 앱에 하나도 남지 않았다. */
+const AreaMemoPanel = ({ recurrings, projects, history }) => {
+  const [openArea, setOpenArea] = useState("");
+  const live = (recurrings || []).filter(r => !r.disabled);
+  const areas = []; const seen = new Set();
+  live.forEach(r => { const pid = r.project || "proj_etc"; if (seen.has(pid)) return; seen.add(pid);
+    areas.push({ id: pid, name: ((projects || []).find(p => p.id === pid) || {}).name || "기타" }); });
+  if (!areas.length) return null;
   return (
     <div style={{ marginTop: 12 }}>
-      {/* 지난 루틴 체크 그리드 폐지(2026-07-07): 루틴 체크는 오늘 탭 1곳(주N회 카운터/특정일 오늘할일)으로 일원화. 회고엔 읽기전용 주간 히스토리만 */}
-      {!isWork && <WeeklyRoutineHistory recurrings={recurrings} tasks={tasks} history={history} />}
-      <div style={{ display: "flex", gap: 4, marginBottom: 10, flexWrap: "wrap" }}>
-        {targets.map(t => { const k = t.kind + ":" + t.key; const on = k === (cur.kind + ":" + cur.key);
-          const pal = t.kind === "routine" ? { bg: "#EDE9FE", fg: "#6D28D9", bd: "#C4B5FD", dot: "#8B5CF6" }
-                    : t.kind === "project" ? { bg: "#ECFDF5", fg: "#047857", bd: "#6EE7B7", dot: "#10B981" }
-                    : t.kind === "alldone" ? { bg: "#F0FDF4", fg: "#15803D", bd: "#86EFAC", dot: "#22C55E" }
-                    : { bg: "#EFF6FF", fg: "#1D4ED8", bd: "#93C5FD", dot: "#3B82F6" };
-          return (
-          <button key={k} onClick={() => setSelKey(k)}
-            style={{ ...S.gh, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5, background: on ? pal.bg : "#fff", color: on ? pal.fg : "#6b7280", borderColor: on ? pal.bd : "#e5e7eb", fontWeight: on ? 700 : 400 }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: pal.dot, flexShrink: 0 }} />{t.label}</button>
-        ); })}
-      </div>
-
-      {cur.kind === "routine" && <div style={S.card}>
-        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{cur.label} 기록·노트 ({routineEntries.length})</div>
-        {routineEntries.length === 0 && <div style={{ ...S.emp, padding: 12 }}>아직 남긴 메모 없음 · 완료 수는 위 '🔁 주간 루틴'에서</div>}
-        {routineEntries.map(e => <div key={e.key} style={{ display: "flex", gap: 8, fontSize: 13, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" }}>
-          <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0, marginTop: 2 }}>{(e.date || "").slice(5)}</span>
-          <span style={{ flex: 1, whiteSpace: "pre-wrap" }}>{e.text}</span>
-        </div>)}
-      </div>}
-
-      {(cur.kind === "project" || (cur.kind === "routine" && active.length > 0)) && <div style={S.card}>
-        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>진행중 ({active.length}){cur.kind === "routine" && <span style={{ fontSize: 10, fontWeight: 400, color: "#9ca3af", marginLeft: 6 }}>· 일회성 할일</span>}</div>
-        {active.length === 0 && <div style={{ ...S.emp, padding: 12 }}>없음</div>}
-        {active.map(t => <ActiveRecapRow key={t.id} t={t} isWork={isWork} pname={pname} onEdit={onEdit} onSaveRecaps={onUpdateTaskRecaps} />)}
-      </div>}
-
-      {(cur.kind === "project" || (cur.kind === "routine" && doneView.total > 0)) && <div>
-        <div style={{ fontSize: 12, fontWeight: 600, margin: "10px 2px 6px" }}>완료 ({doneView.total}){cur.kind === "routine" && <span style={{ fontSize: 10, fontWeight: 400, color: "#9ca3af" }}> · 일회성 할일</span>}{doneView.pending.length > 0 && <span style={{ fontSize: 10, color: "#7C3AED", fontWeight: 600 }}> · 회고 대기 {doneView.pending.length}</span>}</div>
-        {doneView.total === 0 && <div style={{ ...S.emp, padding: 12 }}>완료 기록 없음 (task 완료 시 모임)</div>}
-        {doneView.pending.map(e => <RecapCompletionCard key={e.key} e={e} onSaveRecaps={onUpdateHistRecaps} />)}
-        {doneView.recapped.length > 0 && <>
-          <div onClick={() => setDoneOpen(!doneOpen)} style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, cursor: "pointer", userSelect: "none", padding: "6px 2px", display: "flex", alignItems: "center", gap: 5 }}>
-            <span style={{ fontSize: 10 }}>{doneOpen ? "▼" : "▶"}</span> ✅ 회고 완료 {doneView.recapped.length}건 {doneOpen ? "접기" : "펼치기"}
+      <div style={S.secT}>📝 영역별 메모</div>
+      {areas.map(a => {
+        const res = areaMemos(a.id, recurrings, history);
+        const fresh = res.items.filter(m => !m.swept);
+        const done = res.items.filter(m => m.swept);
+        const open = openArea === a.id;
+        const mine = live.filter(r => r.project === a.id);
+        return (
+          <div key={a.id} style={{ ...S.card, marginTop: 4, padding: "8px 10px" }}>
+            <div onClick={() => setOpenArea(open ? "" : a.id)} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
+              <span style={{ fontSize: 11, color: "#6b7280" }}>{open ? "▼" : "▶"}</span>
+              <span style={{ fontWeight: 700, fontSize: 13 }}>{a.name}</span>
+              <span style={{ fontSize: 11, color: "#9ca3af" }}>{mine.map(r => r.text).join(" · ")}</span>
+              <span style={{ marginLeft: "auto", fontSize: 11, color: fresh.length ? "#4338CA" : "#9ca3af", fontWeight: fresh.length ? 600 : 400 }}>메모 {fresh.length}</span>
+            </div>
+            {open && <div style={{ marginTop: 7 }}>
+              {mine.filter(r => (r.protocol || "").trim()).map(r => (
+                <div key={r.id} style={{ fontSize: 11, background: "#F9FAFB", border: "1px solid #e5e7eb", borderRadius: 6, padding: "6px 8px", marginBottom: 5, whiteSpace: "pre-wrap", color: "#374151" }}>
+                  <b style={{ color: "#4338CA" }}>{r.text}</b> — 실행방법
+                  <div style={{ marginTop: 3 }}>{r.protocol}</div>
+                </div>
+              ))}
+              {!res.items.length && <div style={{ fontSize: 11, color: "#9ca3af" }}>아직 메모가 없습니다. 스트립의 ＋ 로 적으면 여기 모입니다.</div>}
+              {fresh.map((m, i) => (
+                <div key={i} style={{ fontSize: 12, padding: "5px 0", borderBottom: "1px dotted #e5e7eb" }}>
+                  <span style={{ fontSize: 10, color: "#4338CA", fontWeight: 600 }}>{(m.date || "").slice(5)} · {m.from}에서</span>
+                  <div style={{ whiteSpace: "pre-wrap", marginTop: 2 }}>{m.text}</div>
+                </div>
+              ))}
+              {done.length > 0 && <SweptMemos items={done} />}
+            </div>}
           </div>
-          {doneOpen && doneView.recapped.map(e => <RecapCompletionCard key={e.key} e={e} onSaveRecaps={onUpdateHistRecaps} />)}
-        </>}
-        {doneView.hidden > 0 && <button style={{ ...S.gh, fontSize: 11, width: "100%", padding: "6px" }} onClick={() => setShowAllDone(true)}>이전 완료 {doneView.hidden}건 더 보기</button>}
-      </div>}
-
-      {/* 프로젝트-회고 입력 박스 제거(2026-07-06 소유자): 회고는 과제별 🪞회고(task.recaps)로 일원화.
-          옛 /selfdev/inbox write(addNote)·weekly-review §2 수거 폐지. 과거 /selfdev logs·notes read-only 표시는 아래 목록에 유지. */}
-      {!isWork && cur.kind === "routine" && <div style={{ ...S.card, fontSize: 11, color: "#6b7280", lineHeight: 1.6 }}>📝 <b>루틴 메모 = 회고</b> — 오늘탭 '주간 루틴' <b>＋</b>(세션 기록)에 메모를 남기면 여기·캘린더에 이월됩니다. 주1 <b>/sweep</b>이 영역 일지로 수거. 위 목록은 지난 메모 보기(완료 수는 상단 '주간 루틴').</div>}
-
-      {err && <div style={{ fontSize: 11, color: "#EF4444" }}>{err}</div>}
+        );
+      })}
     </div>
   );
 };
-
-/* RoutineSection 제거(2026-06-23 ④-b) — 루틴=daily 반복 할일(TodayView) 통합, 전용 섹션 폐지. */
-
-/* ═══════ 메인 앱 ═══════ */
 function App({ onSwitchWs }) {
   const isWork = WS.key === "work";
   const saved = useMemo(() => loadSaved(), []);
@@ -2449,9 +2279,6 @@ function App({ onSwitchWs }) {
     setHistory(prev => { const item = { type: "done", text: orig.text, projectName: proj ? proj.name : "", project: orig.project, orig, time: nowTime() };
       const ex = prev.find(h => h.date === TODAY); if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, item] } : h); return [...prev, { date: TODAY, items: [item] }]; });
     if (pend) setTasks(prev => prev.filter(t => t.id !== pend.id)); /* 완료로 흡수됐으므로 대기 목록에서 뺀다(일반 완료와 같은 처리) */
-    if (memoTrim) { /* 메모는 세션(orig.notes)에만 저장 → routineMemoText가 취소 안 된 세션서 도출. 즉시 반영 위해 새 메모 포함해 재-lay(fresh override). */
-      const rest = routineMemoText(rid, history, 9); const withNew = "[" + TODAY.slice(5) + "] " + memoTrim + (rest ? "\n\n" + rest : ""); /* ★오늘 메모를 맨 위로(역순 정합·2026-07-25) */
-    }
     showT("\"" + rec.text + "\" 기록 ✅ (" + ((isWeekly && already === 0) ? "이번 주 완료" : "이번 주 +1") + (memoTrim ? " · 메모 저장" : "") + ")", null);
   };
 
@@ -2489,7 +2316,6 @@ function App({ onSwitchWs }) {
     const orig = { id: gid(), text: rec.text, status: "done", project: rec.project || "proj_etc", recurringId: rid, recurringPeriod: period, notes: memoTrim, planDate: TODAY, planTime: rec.time || "", protocol: rec.protocol || "", createdAt: TODAY, subtasks: [], calEventId: "", calUpdated: 0 };
     setHistory(prev => { const item = { type: "done", memoOnly: true, text: orig.text, projectName: proj ? proj.name : "", project: orig.project, orig, time: nowTime() };
       const ex = prev.find(h => h.date === TODAY); if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, item] } : h); return [...prev, { date: TODAY, items: [item] }]; });
-    const rest = routineMemoText(rid, history, 9); const withNew = "[" + TODAY.slice(5) + "] " + memoTrim + (rest ? "\n\n" + rest : ""); /* ★오늘 메모 맨 위로(역순 정합) · closure history엔 새 항목 없음 → 명시 prepend */
     showT("\"" + rec.text + "\" 메모 저장 ✅ (카운트 변화 없음)", null);
   };
   /* 완료 메모 삭제(2026-07-25 통일 → 같은 날 **전 완료항목으로 확장**·소유자: 업무·개인 공통):
@@ -2732,9 +2558,9 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <><WeeklyRoutineStrip recurrings={recurrings} projects={projects} tasks={tasks} history={history} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemoOnly={addRoutineMemo} /><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onReorderSub={reorderSub} onPlanToday={planToday} onClearToday={clearToday} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
+        {tab === "today" && <TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onReorder={reorderTask} onReorderSub={reorderSub} onPlanToday={planToday} onClearToday={clearToday} />}
+        {tab === "routine" && <><WeeklyRoutineStrip recurrings={recurrings} projects={projects} tasks={tasks} history={history} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemoOnly={addRoutineMemo} /><AreaMemoPanel recurrings={recurrings} projects={projects} history={history} /><WeeklyRoutineHistory recurrings={recurrings} tasks={tasks} history={history} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
         {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} onReorder={reorderTask} onReorderSub={reorderSub} isWork={isWork} />}
-        {tab === "channels" && <RecapView isWork={isWork} tasks={tasks} history={history} projects={projects} onEdit={handleEdit} onUpdateHistRecaps={updateHistRecaps} onUpdateTaskRecaps={updateTaskRecaps} recurrings={recurrings} onToggleDay={toggleRoutineDay} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} />}
       </div>
       {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} isWork={isWork} />}
