@@ -531,13 +531,8 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
   return newTasks;
 };
 
-/* ─── 미래 반복 회차 계산(2026-07-06 롤링 4주): 캘린더에 미리 얹을 occurrence 목록.
-   반복 규칙(RRULE)을 안 쓰고 앱이 날짜를 직접 계산하므로 '매월 말일'·dom 클램프도 그대로 처리된다.
-   generateRecurringTasks의 period 규칙과 동일하게 맞춰, 그날이 오면 당일 인스턴스가 같은 회차키로 재연결된다. */
-const FUTURE_WINDOW_DAYS = 28;
-const dateStrOf = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+/* 주간 회차키 계산 — 임의 날짜가 어느 주에 속하는지. 주간 카운트가 이 값으로 회차를 묶는다. */
 const weekIdOf = (d) => { const jan1 = new Date(d.getFullYear(),0,1); return `${d.getFullYear()}-W${Math.ceil(((d-jan1)/86400000+jan1.getDay()+1)/7)}`; };
-const monthIdOf = (d) => `${d.getFullYear()}-M${d.getMonth()+1}`;
 
 /* ─── 워크스페이스 (업무 ⇄ 개인 — 데이터 완전 분리) ─── */
 const WORKSPACES = {
@@ -562,7 +557,7 @@ const ROUTINE_PROJ_IDS = ["rt_workout", "rt_english", "rt_vocal", "rt_writing"];
    회고탭·과제별·드롭다운·오늘탭 정렬이 한 규칙 공유. (기존 kind:routine·시드 id는 명시 override로 계속 존중.) */
 let ROUTINE_REC_PROJ_IDS = new Set();
 /* ★sweptThrough(2026-07-12·PDS §14.7): 루틴별 '마지막 주간 정제 종료일'(YYYY-MM-DD). App이 recurrings서 매 렌더 동기 →
-   routineMemoText가 그 이후 세션 note만 캘린더 glance로 도출(정제된 note는 일지·운영원칙에 이미 있으니 glance서 정리).
+
    "" = 미정제(전부 표시). /sweep이 주간 정제 후 완료 주 토요일로 write(+savedAt bump). */
 let ROUTINE_SWEPT = {};
 const isBucketProj = (p) => p && (p.kind === "bucket" || PERSONAL_BUCKET_IDS.includes(p.id));
@@ -570,7 +565,7 @@ const isRoutineProj = (p) => p && (p.kind === "routine" || ROUTINE_PROJ_IDS.incl
 /* 지난 미완료 daily 루틴 인스턴스 = '오늘'·'미수행' 목록서 제외(2026-06-28). 루틴은 매일 새 인스턴스가 생성돼
    오늘 것만 의미가 있고, 어제 미완료분은 계속 쌓이므로 nagging 대상서 뺀다(데이터는 보존, 과제별·회고에선 보임). */
 const isStaleRoutine = (t) => !!(t && t.recurringId && t.planDate && t.planDate < TODAY);
-/* B2: 루틴 4종 = 매일 daily 반복 할일, 각자 영역 프로젝트(project=id) 소속. recurringId로 /sweep이 영역 일지 매핑. 메모=task.notes(전날 상속·캘린더 동기). */
+/* B2: 루틴 4종 = 매일 daily 반복 할일, 각자 영역 프로젝트(project=id) 소속. recurringId로 /sweep이 영역 일지 매핑. 메모=task.notes(전날 상속). */
 const PERSONAL_ROUTINES = [
   { id: "rt_workout", type: "daily", text: "🏋️ 운동", project: "rt_workout" },
   { id: "rt_english", type: "daily", text: "🇬🇧 영어", project: "rt_english" },
@@ -581,7 +576,7 @@ const PERSONAL_ROUTINES = [
   /* ⛔ `rt_ringle_mon` 은 2026-08-24 에 이 목록에서 뺐다(소유자 지시 "보컬 레슨처럼 다뤄지게").
        시드 목록의 유일한 효과는 ① 없으면 다시 심기 ② SEED_ROUTINE_IDS = 삭제 시 완전 제거 대신 disabled 묘비.
        링글은 이미 존재해 ①은 역할이 끝났고, ② 때문에 **보컬 레슨(g3qk0rh·비시드)과 삭제 거동만 갈려 있었다.**
-       빼도 잃는 것이 없다 — 루틴 자체·history 15건·캘린더 이벤트는 recurrings 에 그대로 있고 id 도 안 바뀐다.
+       빼도 잃는 것이 없다 — 루틴 자체·history 15건은 recurrings 에 그대로 있고 id 도 안 바뀐다.
        ★`rt_vocal_lesson` 은 남긴다: 지금 **disabled 묘비 상태**라 목록에서 빼면 id 가 사라진 것으로 보여 재시드로 부활한다. */
   { id: "rt_vocal_lesson", type: "weekly", dows: [4], time: "17:00", text: "🎤 노래 레슨",       project: "rt_vocal" },
 ];
@@ -832,7 +827,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
   /* 카드에 남는 HTML5 드래그는 **섹션 이동 전용**이다(오늘로 보내기 / 오늘에서 내리기).
      ★순서변경은 손잡이의 포인터 드래그로 옮겼다(2026-09-07). 옛 코드는 카드 자체가 순서변경 드롭을
      받으면서 e.stopPropagation() 을 부르지 않아, 전체 현황에서 순서를 바꾸려 놓으면 부모의
-     '오늘에서 내리기' 가 함께 발동해 수행날짜와 캘린더까지 바뀌었다. 그 겹침이 여기서 사라진다. */
+     '오늘에서 내리기' 가 함께 발동해 수행날짜까지 바뀌었다. 드래그 자체를 걷어내 그 겹침이 사라졌다(2026-09-13). */
 
   return (
     <div>
@@ -1274,15 +1269,6 @@ const ProjectsView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onA
 /* 과제정보·이슈 편집 뷰(InfoView/InfoField/SubField/DocList/IssueCard) 제거 — S1 (렌더 경로 없던 죽은 코드).
    issues·projectInfo 2026-06-26 폐기(projectInfo=빈값 / issues→Desktop\과제 이슈.md). */
 
-/* ═══ 레코드 스트림 (개인 /selfdev · 업무 /worklog 공통 — 항목단위 기록·캡처, Claude가 비동기 수거) ═══ */
-const recFetch = (base) => async (path, opt) => {
-  const u = fbUser(); if (!u) throw new Error("로그인 필요");
-  const token = await u.getIdToken();
-  const r = await fetch("https://taskmgr-sync-default-rtdb.firebaseio.com/" + base + path + ".json?auth=" + token, opt);
-  if (!r.ok) throw new Error("HTTP " + r.status);
-  return r.json();
-};
-const sdFetch = recFetch("selfdev"); /* RecapView가 과거 /selfdev 기록(logs·notes)을 표시 */
 
 /* (cleanup 2026-06-23 ④-b) RoutineSection·sdToday·setRoutineHist·RecordStreamView·SD_CAP_TYPES·SD_FB_TARGETS·SELFDEV_CFG 제거 — 루틴=daily 반복 할일(TodayView). */
 /* SD_ROUTINES·SD_ROUTINE_RID 폐지(2026-07-12): 회고탭 루틴 분류·기록을 하드코딩 목록·단일 rid 매핑에서 라이브 recurrings(프로젝트별 그룹) 도출로 전환 — 스테일 rt_workout/rt_vocal/rt_writing(disabled) 매핑 제거, 다중 반복(운동=F45+헬스 등) 집계, 반복 붙은 프로젝트=루틴 자동 분류(휴식 승격). RecapView 참조. */
@@ -1354,7 +1340,7 @@ const HistRow = ({ item, date, idx, onRestore, onUncancel, onEditMemo, onDeleteM
      회고 탭을 없애는 전제 조건도 이것이다 — **완료 후에도 쓸 수 있어야 회고의 의의가 산다**(소유자 2026-08-02). */
   const canEditMemo = item.type === "done" && !item.isSub;
   const hasMemo = !!(orig.notes || "").trim();
-  const isRoutineMemo = canEditMemo && orig.recurringId; /* 루틴만 캘린더 글랜스 재-lay 대상 → 안내문구 분기 */
+  const isRoutineMemo = canEditMemo && orig.recurringId; /* 루틴만 영역 카드 반영 대상 → 안내문구 분기 */
   return (
     <div onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 4px", fontSize: 13, borderRadius: 4, background: h ? "#f8fafc" : "transparent" }}>
@@ -1453,7 +1439,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
     if (!nt.trim()) return;
     const base = { id: gid(), text: nt.trim(), project: np, time: rTime || "", protocol: rProto.trim() };
     if (rType === "count") {
-      setRecurrings(p => [...p, { ...base, type: "count", freqPerWeek: Math.max(1, parseInt(freqN) || 1), dows: [...ndows].sort((a, b) => a - b) }]); /* 주N회=요일자유 카운터 + 권장요일(dows·캘린더 glance) */
+      setRecurrings(p => [...p, { ...base, type: "count", freqPerWeek: Math.max(1, parseInt(freqN) || 1), dows: [...ndows].sort((a, b) => a - b) }]); /* 주N회=요일자유 카운터 + 권장요일(dows) */
     } else if (rType === "daily") {
       setRecurrings(p => [...p, { ...base, type: "daily" }]);
     } else if (rType === "weekly") {
@@ -1522,7 +1508,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
 /* 지난 루틴 소급 체크 — 루틴 × 지난 N일 그리드. 칸 클릭 = 그날 완료 체크/해제(2026-07-01) */
 /* ─── 주N회 루틴(2026-07-07): 지정 요일이 유동적인 루틴(예: 보컬 월·수·토)을 '이번 주 N회 목표'로 추적.
    목표=freqPerWeek 우선, 없으면 지정 요일 수(dows.length). 완료수=이번 주 done 회차(옮긴 날·➕추가 세션 포함).
-   현재 구조 유지: 요일별 예정 인스턴스·캘린더는 그대로, 위에 '주 N회' 카운트 층만 얹음. ─── */
+   현재 구조 유지: 요일별 예정 인스턴스는 그대로, 위에 '주 N회' 카운트 층만 얹음. ─── */
 /* ★2026-08-02: weekly(특정일) 도 스트립 대상으로 편입. 목표=1(불변식 I2가 weekly=요일 1개를 강제).
    왜: weekly 는 그 요일 당일 '오늘 할 일'에만 뜨고 다음날 isStaleRoutine 으로 사라진다 →
    그날 앱을 안 열면 그 주 회차를 영영 못 누른다. 실측 사고: 링글은 매주 수강했는데 앱 기록은 2주치가 비었고,
@@ -1559,7 +1545,7 @@ const areaMemos = (projectId, recurrings, history) => {
   return { items, swept };
 };
 /* 오늘 탭 상단 — 주N회 루틴 '이번 주 N/목표' + ＋(세션 기록+메모)/−(최근 1건 취소).
-   요일 무관 주간 카운트: 옮겨 간 날·예정 외·지난 날 = 전부 ＋로 +1. ＋ 누르면 메모 입력창(선택)이 열림 → 발견을 적으면 루틴 이월메모에 누적되고 다음 실행 때 캘린더 권장요일 이벤트 설명에 보임(glance). */
+   요일 무관 주간 카운트: 옮겨 간 날·예정 외·지난 날 = 전부 ＋로 +1. ＋ 누르면 메모 입력창(선택)이 열림 → 발견을 적으면 그 영역 메모에 누적되고 루틴 탭 영역 카드에서 보인다. */
 const WeeklyRoutineStrip = ({ recurrings, projects, tasks, history, onAddSession, onRemoveSession, onAddMemoOnly }) => {
   const wk = getWeekId();
   const [memoFor, setMemoFor] = useState(null);
@@ -1861,7 +1847,7 @@ function App({ onSwitchWs }) {
     }); return ch ? n : prev; });
   }, [cloudLoaded]); /* eslint-disable-line */
 
-  /* 지난 미처리 자동 이월(2026-07-01): 미완료 + 수행날짜 지난(비반복) 할일 → 수행날짜 오늘로 + 캘린더 갱신.
+  /* 지난 미처리 자동 이월(2026-07-01): 미완료 + 수행날짜 지난(비반복) 할일 → 수행날짜 오늘로.
      → '지난 계획 미처리'가 항상 비어 사실상 사라짐(다 오늘 할 일로). 미래 예약·반복/루틴은 안 건드림. */
   /* ★잠금 제거 + tasks 재검사(2026-09-07 · 실측 부분 이월의 원인).
      옛 코드는 `rollFwdDone` 으로 **마운트당 1회**만 돌았다. 그런데 이 앱은 ReactDOM.render(구형)라
@@ -1871,7 +1857,7 @@ function App({ onSwitchWs }) {
      하루만 옮겨진 09-05 였다(개인도 27건 중 1건이 같은 상태). 즉 매번 몇 건씩 흘리고 있었다.
      → 잠금을 없애고 `tasks` 를 의존성에 넣어 **남은 것이 없을 때까지** 확인한다.
      루프 위험 없음: 이월할 게 없으면 아래 `!stale.length` 에서 즉시 반환하고, 이월된 항목은
-     다음 회차에 stale 이 아니라 캘린더 update 도 다시 호출되지 않는다. */
+     다음 회차에 stale 이 아니라 */
   useEffect(() => {
     if (!cloudLoaded) return;
     const isStaleP = (t) => t.status !== "done" && !t.recurringId && t.planDate && t.planDate < TODAY; /* 수행날짜 지난 미완료(비반복)만 이월. 날짜 없는 백로그는 대상 아님 */
@@ -1904,7 +1890,7 @@ function App({ onSwitchWs }) {
   /* 개인 버킷·Track2 미러 완전 제거(2026-07-01, 소유자 지시): 개인 워크스페이스 = 루틴/프로젝트만.
      삭제 대상 = ① 모든 버킷(kind:bucket — 약속·집안일·기타) 프로젝트 + 그 소속 할일
                 ② Track2 백로그 미러 할일([t2-*] 노트, 루틴 밑에 흩어진 것 포함).
-     Track2 원본은 vault 문서가 정본이라 보존됨. 삭제 할일에 캘린더 이벤트 있으면 함께 제거. */
+     Track2 원본은 vault 문서가 정본이라 보존됨. */
   const bucketTrimDone = useRef(false);
   useEffect(() => {
     if (isWork || !cloudLoaded || bucketTrimDone.current) return;
@@ -1923,7 +1909,7 @@ function App({ onSwitchWs }) {
   /* 루틴 과제 교정(2026-06-30): B2 이전 데이터의 반복설정·루틴 인스턴스가 폐기된 'p_routine'에 묶여,
      루틴 할일 편집창의 '과제' 드롭다운이 실제값을 못 찾아 첫 항목(운동)으로 잘못 표시됐음 → 각 영역 과제(recurringId)로 remap. */
   /* ★주N회 전환(2026-07-07, 소유자 지시): 지정 루틴을 count 유형으로. 레슨(목)·링글(월)은 특정일 유지.
-     ★옵션B(2026-07-07): type 전환(데이터) + 오늘 할일 미완료 인스턴스만 제거. **캘린더 권장요일 이벤트는 유지**(glance 리마인더).
+     ★옵션B(2026-07-07): type 전환(데이터) + 오늘 할일 미완료 인스턴스만 제거.
      futureThrough='' 리셋 → 다음 로드에 futureEvtDone이 count도 권장요일로 재-lay(기존 이벤트 재연결=desc[실행방법+메모] 갱신). */
   const countMigDone = useRef(false);
   useEffect(() => {
@@ -1933,7 +1919,7 @@ function App({ onSwitchWs }) {
     if (!recurrings.some(r => T[r.id] && r.type !== "count")) return;
     const DEF_DOWS = { rt_english: [0, 1, 2, 3, 4, 5, 6] }; /* ★RC-1(적대검증 F4): 영어=daily→dows 없음이라 권장요일 이벤트 0개 되던 것 보완=매일 권장. 나머지 4개는 기존 dows(월수토·평일·토) 유지 */
     setRecurrings(prev => prev.map(r => (T[r.id] && r.type !== "count") ? { ...r, type: "count", freqPerWeek: T[r.id], dows: (r.dows && r.dows.length) ? r.dows : (r.dow != null ? [r.dow] : (DEF_DOWS[r.id] || [])) } : r));
-    /* 오늘 할일 미완료 인스턴스만 tasks서 제거(주N회는 오늘할일 안 씀). 연결 캘린더 이벤트는 안 지움=권장요일 리마인더로 남김. */
+    /* 오늘 할일 미완료 인스턴스만 tasks서 제거(주N회는 오늘할일 안 씀). */
     const doomed = tasks.filter(t => T[t.recurringId] && t.status !== "done");
     if (doomed.length) setTasks(prev => prev.filter(t => !doomed.some(d => d.id === t.id)));
   }, [cloudLoaded]); /* eslint-disable-line */
@@ -1976,7 +1962,7 @@ function App({ onSwitchWs }) {
   }, [cloudLoaded]); /* eslint-disable-line */
 
   /* 지난 미완료 루틴 인스턴스 정리(2026-07-01): 루틴마다 가장 최근 미완료 1개만 남기고, 그보다 오래된 지난 인스턴스는 제거
-     (carry-forward는 가장 최근 것이 note를 안고 있어 안전). 그 캘린더 이벤트도 삭제 → 유형별/과제별 클러터 제거. */
+     (carry-forward는 가장 최근 것이 note를 안고 있어 안전). 유형별·과제별 클러터 제거. */
   const staleRoutineCleanDone = useRef(false);
   useEffect(() => {
     if (!cloudLoaded || staleRoutineCleanDone.current) return;
@@ -2075,11 +2061,11 @@ function App({ onSwitchWs }) {
     });
   };
   /* (2026-06-23 ④-b) setRoutineHist 제거 — 루틴=daily 반복 할일, RoutineSection 폐지. */
-  /* 반복 정의 수정(실행방법·시간) + 진행중 인스턴스에 전파 + 연결된 캘린더 이벤트 갱신(2026-07-01) */
+  /* 반복 정의 수정(실행방법·시간) + 진행중 인스턴스에 전파(2026-07-01) */
   const updateRecurring = (id, patch) => {
     const newRec = { ...(recurrings.find(r => r.id === id) || {}), ...patch };
     setRecurrings(p => p.map(r => r.id === id ? { ...r, ...patch } : r));
-    /* 인스턴스+캘린더 전파 키(text/project/time/protocol). dows·type은 정의만 바꾸고 미래 생성에 반영 */
+    /* 인스턴스 전파 키(text/project/time/protocol). dows·type은 정의만 바꾸고 미래 생성에 반영 */
     if (!["protocol", "time", "text", "project"].some(k => k in patch)) return;
     const merge = (t) => ({ ...t,
       ...("protocol" in patch ? { protocol: patch.protocol } : {}),
@@ -2090,29 +2076,6 @@ function App({ onSwitchWs }) {
     setTasks(p => p.map(t => (t.recurringId === id && t.status !== "done") ? merge(t) : t));
   };
   /* 지난 루틴 소급 체크/해제(2026-07-01): 완료=history done 항목 + 미완료 인스턴스 정리 / 해제=반대 */
-  const toggleRoutineDay = (rid, date, makeDone) => {
-    const rec = recurrings.find(r => r.id === rid);
-    const proj = projects.find(p => p.id === (rec && rec.project));
-    if (makeDone) {
-      setTasks(prev => prev.filter(t => !(t.recurringId === rid && (t.recurringPeriod === date || t.planDate === date) && t.status !== "done")));
-      setHistory(prev => {
-        if (prev.some(h => h.date === date && (h.items || []).some(it => it.type === "done" && it.orig && it.orig.recurringId === rid))) return prev;
-        const orig = { id: gid(), text: rec ? rec.text : "루틴", status: "done", project: rec ? rec.project : "proj_etc", recurringId: rid, recurringPeriod: date, notes: "", planDate: date, createdAt: date, subtasks: [] };
-        const item = { type: "done", text: orig.text, projectName: proj ? proj.name : "", project: orig.project, orig, time: "" };
-        const ex = prev.find(h => h.date === date);
-        if (ex) return prev.map(h => h.date === date ? { ...h, items: [...h.items, item] } : h);
-        return [...prev, { date, items: [item] }];
-      });
-    } else {
-      setTasks(prev => prev.map(t => (t.recurringId === rid && (t.recurringPeriod === date || t.planDate === date) && t.status === "done") ? { ...t, status: "action" } : t));
-      setHistory(prev => prev.map(h => h.date === date ? { ...h, items: h.items.filter(it => !(it.type === "done" && it.orig && it.orig.recurringId === rid)) } : h).filter(h => (h.items || []).length));
-    }
-  };
-
-  /* 주N회 ➕(2026-07-07): 예정 외 추가 세션 1건을 done으로 기록(카운트 반영) + 캘린더 등록. toggleRoutineDay와 동일 history 표현.
-     회차키=weekId-x<n>(예정 회차 weekId/weekId-dow와 안 겹침) → 주간 카운트에 잡히고 캘린더 중복 안 남. */
-  /* 주N회 ＋(옵션B 2026-07-07): 세션 1건 done 기록(카운트+1) + 메모(선택). 캘린더 별도 done 이벤트는 안 만듦
-     (권장요일 이벤트가 캘린더 자리). 메모 있으면 루틴 이월메모(notes)에 날짜태그로 누적(최근 8줄 cap)+권장요일 이벤트 desc 재-lay→다음 glance에 반영. */
   const addRoutineSession = (rid, memo) => {
     const rec = recurrings.find(r => r.id === rid); if (!rec) return;
     const wk = getWeekId();
@@ -2140,7 +2103,7 @@ function App({ onSwitchWs }) {
   };
 
   /* 주N회 −(2026-07-07): 이번 주 '가장 최근' 완료 1건 취소(잘못 체크·오카운트 정정). history done 우선(➕·요일체크 공통), 없으면 tasks done.
-     ★최근성=(날짜,시간) 최대로 선택(적대검증 R1: history 배열이 삽입순이라 소급체크가 뒤에 붙어도 실제 최신을 고름). 식별=orig.id(안정키). 캘린더 이벤트도 삭제(orig.calEventId·요일체크 done은 이미 삭제됐어도 멱등 no-op). */
+     ★최근성=(날짜,시간) 최대로 선택(적대검증 R1: history 배열이 삽입순이라 소급체크가 뒤에 붙어도 실제 최신을 고름). 식별=orig.id(안정키). */
   const removeRoutineSession = (rid) => {
     const wk = getWeekId();
     const inWk = (per) => per === wk || (per || "").indexOf(wk + "-") === 0;
@@ -2149,18 +2112,18 @@ function App({ onSwitchWs }) {
     if (!target) { const td = (tasks || []).filter(t => t.recurringId === rid && t.status === "done" && !t.cancelled && inWk(t.recurringPeriod || t.planDate)); if (td.length) { target = { kind: "task", taskId: td[td.length - 1].id }; } }
     if (!target) { showT("이번 주 취소할 완료 기록이 없습니다", null); return; }
     /* ★B안(2026-07-07): −는 기록을 삭제하지 않고 cancelled 표시 → 카운트만 −1, 히스토리엔 취소선으로 남아 '↺ 복원'으로 언제든 되살림.
-       count 루틴 −는 캘린더 이벤트 안 건드림(권장요일=futureThrough 재-lay 소유). 토스트 '되돌리기'=즉시 복원(=cancelled 해제). */
+       토스트 '되돌리기'=즉시 복원(=cancelled 해제). */
     if (target.kind === "hist") {
       setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: true } : it) } : h));
       const rec0 = recurrings.find(r => r.id === rid);
-      showT("이번 주 완료 1건 취소 — 히스토리서 복원 가능", () => { setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: false } : it) } : h)); hideT(); }); /* R1(2026-07-08): 되돌리기=능동 재-lay(closure history엔 target 아직 non-cancelled→excludeId 없이 메모 포함)로 즉시 캘린더 복귀. futureThrough:"" 리셋 레이스·once-per-mount futureEvtDone 의존 제거 */
+      showT("이번 주 완료 1건 취소 — 히스토리서 복원 가능", () => { setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: false } : it) } : h)); hideT(); }); /* R1(2026-07-08): 되돌리기=능동 재-lay(closure history엔 target 아직 non-cancelled→excludeId 없이 메모 포함)로 즉시 복귀. futureThrough:"" 리셋 레이스·once-per-mount futureEvtDone 의존 제거 */
     } else {
       setTasks(prev => prev.map(t => t.id === target.taskId ? { ...t, cancelled: true } : t));
       showT("이번 주 완료 1건 취소 — 복원 가능", () => { setTasks(prev => prev.map(t => t.id === target.taskId ? { ...t, cancelled: false } : t)); hideT(); });
     }
   };
 
-  /* 주N회 '📝 메모만'(2026-07-08): 세션 카운트 없이 발견/메모만 기록 → 캘린더 권장요일 desc로 이월(다음 glance 적용).
+  /* 주N회 '📝 메모만'(2026-07-08): 세션 카운트 없이 발견/메모만 기록 → 루틴 탭 영역 카드에 모인다.
      '수행은 안 했지만 남길 게 있는' 경우(예: 레슨만 받은 날) 자리. memoOnly=true → routineDoneSet·− 스캔·완료수서 제외(카운트 무관),
      routineMemoText엔 포함(비취소 done+notes)돼 이월. 히스토리서 ✏️(editHistMemo)·🗑(deleteHistMemo)로 수정/삭제·↺복원 가능(2026-07-25). */
   const addRoutineMemo = (rid, memo) => {
@@ -2176,8 +2139,8 @@ function App({ onSwitchWs }) {
     showT("\"" + rec.text + "\" 메모 저장 ✅ (카운트 변화 없음)", null);
   };
   /* 완료 메모 삭제(2026-07-25 통일 → 같은 날 **전 완료항목으로 확장**·소유자: 업무·개인 공통):
-     memoOnly=항목 취소 / done-with-memo=메모만 클리어(루틴이면 ★수행 카운트 유지). 루틴일 때만 재-lay로 캘린더 글랜스 반영
-     (일반 완료 task 는 doneTask 가 이미 캘린더 이벤트를 지웠으므로 동기 대상 없음 = rec0 falsy 로 자연 스킵). 되돌리기 토스트로 복원.
+     memoOnly=항목 취소 / done-with-memo=메모만 클리어(루틴이면 ★수행 카운트 유지).
+      되돌리기 토스트로 복원.
      ★closure history 를 map(fn) 해 patched fresh 로 재-lay(setHistory 는 async 라 closure 는 아직 옛 상태). */
   const deleteHistMemo = (date, idx) => {
     const day = (history || []).find(h => h.date === date); const it0 = day && day.items[idx];
@@ -2195,7 +2158,7 @@ function App({ onSwitchWs }) {
     });
   };
   /* 완료 메모 수정(2026-07-25 소유자 · 같은 날 전 완료항목으로 확장): orig.notes 편집 = **원본 수정**
-     (최상위 완료 항목은 tasks[] 에서 빠지고 history.orig 이 유일 정본 — L2670·L2675). 루틴이면 재-lay 로 캘린더 글랜스 반영.
+     (최상위 완료 항목은 tasks[] 에서 빠지고 history.orig 이 유일 정본 — L2670·L2675).
      빈 텍스트면 삭제로 위임(사실상 삭제·완료 기록/카운트는 유지). */
   const editHistMemo = (date, idx, newText) => {
     const day = (history || []).find(h => h.date === date); const it0 = day && day.items[idx];
@@ -2226,7 +2189,7 @@ function App({ onSwitchWs }) {
     }
     setTasks(p => p.map(t => t.id === id ? { ...t, focus: !t.focus } : t));
   };
-  /* '오늘 할 일'로 드래그 → 수행날짜를 오늘로(2026-06-30). 캘린더도 동기(반복/루틴 제외). */
+  /* '오늘 할 일'로 드래그 → 수행날짜를 오늘로(2026-06-30). */
   const planToday = (id) => {
     const t = tasks.find(x => x.id === id);
     if (!t || t.planDate === TODAY) return;
@@ -2235,7 +2198,7 @@ function App({ onSwitchWs }) {
     const proj = projects.find(p => p.id === t.project);
     addHistItem({ type: "edited", text: t.text, projectName: proj?.name || "", detail: "📆 오늘로", time: nowTime() });
   };
-  /* '오늘 할 일'에서 내리기(전체 현황으로 드래그) → 수행날짜 비움. 캘린더는 마감일 있으면 그 날짜로, 없으면 삭제(2026-07-01). */
+  /* '오늘 할 일'에서 내리기(전체 현황으로 드래그) → 수행날짜 비움(2026-07-01). */
   /* 오늘에서 내리기: 무조건 날짜 삭제 대신 얼럿 열기(변경/없앰/취소) — 놓침 방지(2026-07-04, 소유자) */
   const clearToday = (id) => { const t = tasks.find(x => x.id === id); if (!t || !t.planDate) return; setClearTarget(t); };
   const applyClearToday = (id, newDate) => { /* newDate="" → 날짜 없앰(백로그) / 날짜 → 그 날짜로 변경 */
@@ -2289,7 +2252,7 @@ function App({ onSwitchWs }) {
   };
 
   /* 되돌리기용 사본 — 원본 객체를 직접 고치지 않게 한다(하위 할일까지 새 객체). */
-  const stripCal = (t) => ({ ...t, subtasks: (t.subtasks || []).map(s => ({ ...s })) });
+  const cloneTask = (t) => ({ ...t, subtasks: (t.subtasks || []).map(s => ({ ...s })) });
   const doneTask = (id) => {
     const task = tasks.find(t => t.id === id); if (!task) return;
     const proj = projects.find(p => p.id === task.project);
@@ -2298,7 +2261,7 @@ function App({ onSwitchWs }) {
     const subCount = (task.subtasks || []).length;
     addHistItem({ type: "done", text: task.text, projectName: proj?.name || "", project: task.project, orig: snap, subCount, time: nowTime() });
     showT(`"${task.text}" 완료`, () => {
-      setTasks(p => [...p, stripCal(snap)]);
+      setTasks(p => [...p, cloneTask(snap)]);
       removeHistItem(it => it.type === "done" && it.orig?.id === id);
       hideT();
     });
@@ -2317,7 +2280,7 @@ function App({ onSwitchWs }) {
     addHistItem({ type: "deleted", text: task.text, projectName: proj?.name || "", time: nowTime(),
       ...(task.recurringId ? { orig: { id: task.id, recurringId: task.recurringId, recurringPeriod: task.recurringPeriod, notes: task.notes } } : {}) });
     showT(`"${task.text}" 삭제됨`, () => {
-      setTasks(p => [...p, stripCal(task)]);
+      setTasks(p => [...p, cloneTask(task)]);
       if (orphanSubDone.length) setHistory(prev => { let next = [...prev]; orphanSubDone.forEach(({ date, item }) => { const ex = next.find(h => h.date === date); if (ex) next = next.map(h => h.date === date ? { ...h, items: [...h.items, item] } : h); else next = [...next, { date, items: [item] }]; }); return next; });
       removeHistItem(it => it.type === "deleted" && it.text === task.text);
       hideT();
@@ -2329,7 +2292,7 @@ function App({ onSwitchWs }) {
       const day = prev.find(h => h.date === date); if (!day?.items[idx]) return prev;
       const item = day.items[idx];
       const restored0 = item.orig || { id: gid(), text: item.text, status: "action", project: projects.find(p => p.name === item.projectName)?.id || projects[0]?.id, scheduledDate: "", scheduledLabel: "", planDate: "",  createdAt: TODAY, notes: "", focus: false, subtasks: [] };
-      const restored = stripCal(restored0); /* 되돌릴 땐 미동기로 → 자동복구가 재등록(유령 방지) */
+      const restored = cloneTask(restored0); /* 원본을 직접 고치지 않게 사본으로 되돌린다 */
       if (!restored.planDate) restored.planDate = TODAY;
       setTasks(p => [...p, restored]);
       const ni = day.items.filter((_, i) => i !== idx);
@@ -2473,7 +2436,7 @@ function AuthGate() {
   return <WorkspaceRoot />; /* signedin 또는 open */
 }
 
-/* ═══ 워크스페이스 루트 — 전환 시 App 리마운트(저장소·캘린더 prefix 교체) ═══ */
+/* ═══ 워크스페이스 루트 — 전환 시 App 리마운트(저장소 교체) ═══ */
 function WorkspaceRoot() {
   const [wsKey, setWsKey] = useState(WS.key);
   const switchWs = () => {
