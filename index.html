@@ -92,6 +92,7 @@ const SK = Object.keys(STATUSES).filter(k => k !== "done" && k !== "someday"); /
 const TABS_BY_WS = {
   work: [
     { id: "today", label: "오늘", icon: "⭐" },
+    { id: "routine", label: "루틴", icon: "🔁" },
     { id: "projects", label: "과제별", icon: "📁" },
     /* ⛔ 업무 회고 탭 제거(2026-08-02·소유자 결정). 이력: 6/26 제거 → 6/29 소유자 번복(복원) → 8/2 재제거.
        이번 제거의 전제가 그때와 다르다 — **완료된 task 의 메모를 히스토리에서 나중에 쓸 수 있게 만든 뒤** 지웠다(HistRow canEditMemo).
