@@ -42,7 +42,8 @@
     /* 모바일 터치 최적화 */
     button, select, input { touch-action: manipulation; }
     input[type="date"] { min-height: 36px; }
-    /* 드래그 삽입선 애니메이션 */
+    .drop-indicator-before { border-top: 3px solid #3B82F6 !important; }
+    .drop-indicator-after { border-bottom: 3px solid #3B82F6 !important; }
     /* 모바일 반응형 */
     @media (max-width: 640px) {
       body { font-size: 14px; }
@@ -766,7 +767,59 @@ const SubAddForm = ({ onAdd, onCancel }) => {
 };
 
 /* ─── TaskRow (서브태스크 확장 + 드래그 정렬) ─── */
-const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onUpdate }) => {
+/* ★순서 바꾸기(2026-09-14 소유자 요청으로 복원) — 오늘 탭 목록에서만.
+   2026-09-13 에 걷어냈다가 되살렸다. 복원 범위는 **순서 바꾸기 하나**이고,
+   목록 밖으로 끌어 「오늘에서 내리기」는 되살리지 않는다(순서 바꾸기와 겹쳌 오발동하던 자리). */
+const useDragReorder = (onReorder, attr = "data-task-card") => {
+  const SEL = "[" + attr + "]";
+  const st = useRef(null);
+  const clearAll = () => {
+    document.querySelectorAll(".drop-indicator-before, .drop-indicator-after")
+      .forEach(el => el.classList.remove("drop-indicator-before", "drop-indicator-after"));
+  };
+  const finish = (commit) => {
+    const s = st.current; if (!s) return;
+    st.current = null;
+    clearAll();
+    if (s.card) { s.card.style.opacity = ""; s.card.style.transform = ""; }
+    document.body.style.userSelect = "";
+    if (commit && s.moved && s.target && s.target.id !== s.id) onReorder(s.id, s.target.id, s.target.pos);
+  };
+  return {
+    onPointerDown: (id, e) => {
+      if (e.button != null && e.button > 0) return; /* 왼쪽 버튼·터치만 */
+      e.preventDefault(); e.stopPropagation();      /* HTML5 dragstart 와 텍스트 선택을 함께 막는다 */
+      const card = e.currentTarget.closest(SEL);
+      st.current = { id, card, moved: false, target: null };
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+      document.body.style.userSelect = "none";
+      if (card) { card.style.opacity = "0.45"; card.style.transform = "scale(0.99)"; }
+    },
+    onPointerMove: (e) => {
+      const s = st.current; if (!s) return;
+      e.preventDefault();
+      s.moved = true;
+      const under = document.elementFromPoint(e.clientX, e.clientY);
+      const card = under && under.closest ? under.closest(SEL) : null;
+      clearAll();
+      if (!card || card === s.card) { s.target = null; return; }
+      const tid = card.getAttribute(attr);
+      if (!tid || tid === s.id) { s.target = null; return; }
+      const r = card.getBoundingClientRect();
+      /* 삽입 위치는 **카드 본체(.task-row)** 의 중앙으로 잰다 — 하위 항목을 펼친 카드는
+         바깥 상자가 훨씬 길어서 바깥 기준으로 재면 겨냥한 자리와 결과가 어긋난다. */
+      const row = card.querySelector(".task-row");
+      const rr = row ? row.getBoundingClientRect() : r;
+      const pos = e.clientY < rr.top + rr.height / 2 ? "before" : "after";
+      card.classList.add(pos === "before" ? "drop-indicator-before" : "drop-indicator-after");
+      s.target = { id: tid, pos };
+    },
+    onPointerUp: () => finish(true),
+    onPointerCancel: () => finish(false),
+  };
+};
+const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onUpdate, dragHandlers }) => {
+  const dh = dragHandlers || {};
   const [h, setH] = useState(false);
   const [showSubs, setShowSubs] = useState(false);
   const [addSub, setAddSub] = useState(false);
@@ -785,11 +838,13 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
   /* 카드에 남는 HTML5 드래그는 **섹션 이동 전용**이다(오늘로 보내기 / 오늘에서 내리기).
      ★순서변경은 손잡이의 포인터 드래그로 옮겼다(2026-09-07). 옛 코드는 카드 자체가 순서변경 드롭을
      받으면서 e.stopPropagation() 을 부르지 않아, 전체 현황에서 순서를 바꾸려 놓으면 부모의
-     '오늘에서 내리기' 가 함께 발동해 수행날짜까지 바뀌었다. 드래그 자체를 걷어내 그 겹침이 사라졌다(2026-09-13). */
+     '오늘에서 내리기' 가 함께 발동해 수행날짜까지 바뀌었다. 2026-09-14 복원 시 **순서 바꾸기만** 되살려 그 겹침이 생기지 않는다(목록 밖 드롭 = 오늘에서 내리기는 복원 안 함). */
 
   return (
-    <div>
+    <div data-task-card={task.id}>
       <div className="task-row" style={{ ...S.row, background: h ? "#f8fafc" : task.focus ? "#FFFDF5" : "transparent", transition: "border 0.15s, transform 0.15s" }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)} onTouchStart={() => setH(true)}>
+        {dh.onPointerDown && <span className="grip" style={{ color: "#9ca3af", fontSize: 15, cursor: "grab", flexShrink: 0, marginTop: 1, padding: "2px 4px", userSelect: "none", touchAction: "none" }} title="여기를 잡고 끌어 순서 변경"
+          onPointerDown={(e) => dh.onPointerDown(task.id, e)} onPointerMove={dh.onPointerMove} onPointerUp={dh.onPointerUp} onPointerCancel={dh.onPointerCancel}>⠿</span>}
         <StarBtn on={task.focus} onClick={() => onFocus(task.id)} />
         <button onClick={() => onDone(task.id)} title="완료"
           style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${STATUSES[task.status]?.color || "#ccc"}`, background: "transparent", cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
@@ -1022,7 +1077,8 @@ const ScheduleAlerts = ({ tasks, projects, onEdit }) => {
 };
 
 /* ═══ 오늘 뷰 (서브태스크 집중 포함) ═══ */
-const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onPlanToday, onClearToday }) => {
+const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onPlanToday, onClearToday, onReorder }) => {
+  const dragHandlers = useDragReorder(onReorder);
 
 
   /* 오늘 할 일 = 수행날짜가 오늘이거나 지난(미완료) — 별(집중)과 무관(2026-06-30). 지난 미완료 루틴 제외.
@@ -1077,7 +1133,7 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
   };
 
   const renderItem = (item) => {
-    if (item.type === "task") return <TaskRow key={item.data.id} task={item.data} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} />;
+    if (item.type === "task") return <TaskRow key={item.data.id} task={item.data} projects={projects} showProj dragHandlers={dragHandlers} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} />;
     return (
       <div key={item.data.id} style={item.underParent
         /* ★상위 바로 아래에 붙은 하위는 카드를 펼쳤을 때와 **같은 모양**으로 보인다(2026-09-08):
@@ -2339,6 +2395,21 @@ function App({ onSwitchWs }) {
   const setFocusArea = (pid) => {
     setProjects(prev => prev.map(p => p.id === pid ? { ...p, focus: !p.focus } : { ...p, focus: false }));
   };
+  /* ★순서 바꾸기(2026-09-14 복원) — 오늘 탭 목록 안에서만. tasks 배열의 자리를 바꾼다.
+     수행날짜·상태는 건드리지 않는다(구 「오늘에서 내리기」는 복원하지 않았다). */
+  const reorderTask = (fromId, toId, pos) => {
+    setTasks(prev => {
+      const arr = [...prev];
+      const fromIdx = arr.findIndex(t => t.id === fromId);
+      if (fromIdx < 0) return prev;
+      const [item] = arr.splice(fromIdx, 1);
+      let toIdx = arr.findIndex(t => t.id === toId);
+      if (toIdx < 0) return prev;
+      if (pos === "after") toIdx++;
+      arr.splice(toIdx, 0, item);
+      return arr;
+    });
+  };
   const addProj = (name, kind = "project") => {
     const id = (kind === "bucket" ? "b_" : "p_") + gid();
     setProjects(p => [...p, { id, name, order: p.length, kind }]);
@@ -2407,7 +2478,7 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} />{isWork && <RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} />}</>}
+        {tab === "today" && <><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} onReorder={reorderTask} />{isWork && <RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} />}</>}
         {tab === "areas" && <AreaView tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} isWork={isWork} setRecurrings={setRecurrings} onUpdateRecurring={updateRecurring} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemo={addAreaMemo} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
       </div>
