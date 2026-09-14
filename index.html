@@ -90,25 +90,17 @@ const SK = Object.keys(STATUSES).filter(k => k !== "done" && k !== "someday"); /
 /* 업무 채널 마커(🧠🎯✍️) 폐지(2026-06-26) → develop 버킷(지식·교훈·글감, kind:bucket)으로 대체. MARKERS 상수 제거(2026-06-28, 회고탭 재구성으로 마지막 참조 소멸). 예측은 폐지. */
 
 const TABS_BY_WS = {
+  /* ★2026-09-14 소유자 결정 — 루틴 탭과 유형별 탭을 하나로 합쳤다.
+     같은 「영어」가 루틴 탭(스트립·메모·주간루틴·반복설정)과 유형별 탭에 쪼개져 있어 전체를 보는 자리가 없었다.
+     이제 카드 하나에 그 영역의 세션·할일·메모가 다 들어온다. 두 워크스페이스가 같은 구조를 쓰고 이름만 다르다. */
   work: [
     { id: "today", label: "오늘", icon: "⭐" },
-    /* ⛔ 업무 루틴 탭 제거(2026-09-13·소유자 결정). 업무 반복 6건은 전부 protocol 이 비어 있고 실메모 0건 —
-       PDS 기준 루틴이 아니라 그냥 주기적으로 생기는 잡무다. 영역 카드가 「기타 업무」 하나에 메모 0 인 빈 화면이었다.
-       업무 역량을 키우는 루틴(예: PM 엔진 업데이트)은 개인 WS 「업무역량 시스템」에 만든다 — 루프가 도는 자리가 거기다.
-       ★따라서 업무의 「반복 태스크 설정」은 오늘 탭에 있다(= 오늘 할 일을 반복 생성하는 용도). */
-    { id: "projects", label: "과제별", icon: "📁" },
-    /* ⛔ 업무 회고 탭 제거(2026-08-02·소유자 결정). 이력: 6/26 제거 → 6/29 소유자 번복(복원) → 8/2 재제거.
-       이번 제거의 전제가 그때와 다르다 — **완료된 task 의 메모를 히스토리에서 나중에 쓸 수 있게 만든 뒤** 지웠다(HistRow canEditMemo).
-       그 전엔 완료 시점에 메모가 비면 영영 못 적었기 때문에 회고 탭이 유일한 사후 입력구였고, 그래서 번복이 옳았다.
-       실사용 실측: 업무 완료 227건 중 회고 2건(0.9%). 그 2건은 제거 전 vault 수확 완료(PM 업무 프레임워크 260802 증류).
-       ⚠ 개인 회고 탭은 그대로 유지. RecapView 내부 isWork 분기는 도달 불가가 될 뿐 **제거하지 않는다**(5곳 동시 정리 실패 시 백지). */
+    { id: "areas", label: "과제", icon: "📁" },
     { id: "history", label: "히스토리", icon: "📜" },
   ],
-  /* 과제 맥락(memos) 탭은 계속 제거 유지(2026-06-26) → 로컬 `Desktop\과제 맥락.md`(계정경계·기밀). memos 데이터·배선은 2026-07-27~28 전량 제거(e779400) — RTDB /data 에 memos 키 부재 확인(2026-07-28). 회고(recap)와 별개. */
   personal: [
     { id: "today", label: "오늘", icon: "⭐" },
-    { id: "routine", label: "루틴", icon: "🔁" },
-    { id: "projects", label: "유형별", icon: "📁" },
+    { id: "areas", label: "영역", icon: "📂" },
     { id: "history", label: "히스토리", icon: "📜" },
   ],
 };
@@ -191,43 +183,10 @@ const DEV_ID = (() => {
   } catch { return "eph_" + Math.random().toString(36).slice(2, 8); } /* localStorage 막힌 환경(L1896 주석) → 세션 한정 id. 무기록보다 나음 */
 })();
 
-/* ★결함 B 완화 — 외부 소유 필드 보존(2026-07-25·PDS §14.7): 아래 저장은 blob **전체를 PUT** 한다.
-   그래서 앱이 로드한 뒤에 외부 도구가 RTDB 에 직접 쓴 값은, 그 탭이 다음에 저장하는 순간 통째로 되돌아간다
-   (2026-07-19 sweptThrough 유실. 주원인이던 결함 A[savedAt 을 숫자로 bump → LWW 영구 false]는 normSavedAt 으로 막혔지만,
-    이건 **탭이 오래 열려 있기만 해도** 재발하는 구조적 경로다 — 일요일 /sweep 이 도는 동안 폰·PC 탭이 떠 있으면 그대로 걸린다).
-   → PUT 직전에 클라우드 recurrings 를 읽어 `sweptThrough` 만 **id 매칭**으로 되살린다.
-   ★대상이 이 필드 하나인 이유: 앱이 **읽기만 하고 절대 쓰지 않는** 유일한 필드다.
-     - `futureThrough` 는 앱이 futureEvtDone 에서 계속 쓰므로 **보존하면 안 된다**(앱이 정본).
-     - `calEventId` 는 백스톱이 ETag 조건부로 쓰고 45분마다 재수렴 = **자가치유**라 굳이 필요 없다.
-     - `sweptThrough` 만이 주1회·비자가치유 → 잃으면 다음 정제까지 일주일 내내 글랜스가 안 줄어든다(= §14.8 ⑥ URL 사고의 상류).
-   ★앱이 쓰지 않는 필드만 만지므로 '삭제 되살림' 위험이 없다 — 통짜 병합을 거부한 M2(2026-07-04) 판단과 충돌하지 않는다.
-   ★실패하면 조용히 원본 그대로 PUT. 저장 자체는 어떤 경우에도 막지 않는다(가드는 개선이지 의존 대상이 아님). */
-let _sweptCache = null; /* id → sweptThrough (마지막으로 관측한 클라우드 값) — 언로드 flush 는 네트워크를 못 타므로 이 캐시로 적용 */
-const applySwept = (data) => {
-  try {
-    if (!_sweptCache || !Array.isArray(data.recurrings)) return data;
-    let hit = 0;
-    const merged = data.recurrings.map(x => {
-      const c = _sweptCache.get(x && x.id);
-      if (c && c !== (x && x.sweptThrough)) { hit++; return { ...x, sweptThrough: c }; }
-      return x;
-    });
-    return hit ? { ...data, recurrings: merged } : data;
-  } catch { return data; }
-};
-const preserveForeign = async (data, path, q) => {
-  try {
-    if (!Array.isArray(data.recurrings) || !data.recurrings.length) return applySwept(data);
-    const r = await fetch("https://taskmgr-sync-default-rtdb.firebaseio.com/" + path + "/recurrings.json" + q);
-    if (!r.ok) return applySwept(data);
-    const cloud = await r.json();
-    if (!Array.isArray(cloud)) return applySwept(data);
-    _sweptCache = new Map(cloud.filter(Boolean).map(c => [c.id, c.sweptThrough]));
-    const out = applySwept(data);
-    if (out !== data) console.warn("[sync] 외부 write 보존 — sweptThrough 를 클라우드 값으로 되살림(주간 정제 결과 유실 방지)");
-    return out;
-  } catch { return applySwept(data); }
-};
+/* ★2026-09-14 — 외부 소유 필드 보존(applySwept/preserveForeign) 철거.
+   그 장치가 지킨 필드는 `sweptThrough` 하나뿐이었는데 소유자 결정으로 그 기전 자체를 폐기했다
+   (한 번도 접힌 적이 없었다 · 실측 2026-09-14). 이제 앱이 읽기만 하는 필드가 없으므로 PUT 직전
+   클라우드 재조회도 필요 없다 — 저장 경로가 왕복 하나만큼 짧아진다. */
 
 /* ★★결함 B 근본 해결(2026-07-26·PDS §14.7): **통째 PUT → 바뀐 키만 PATCH**.
    지금까지 저장은 blob 전체를 PUT 했다 → 앱이 안 건드린 키까지 매번 덮어써서, 로드 후 외부 도구가 쓴 값이
@@ -237,8 +196,7 @@ const preserveForeign = async (data, path, q) => {
      `Access-Control-Expose-Headers` 가 없어 fetch 가 ETag 헤더를 읽지 못한다(서버측 백스톱은 가능 → 거기선 계속 사용).
      Firebase SDK 트랜잭션은 firebase-database-compat 추가가 필요해 CDN 의존 1개 증설(6/17 백지 사고 클래스) → 채택 안 함.
    ★실측 검증한 PATCH 의미론(scratch 경로·2026-07-26): 본문에 없는 키 불변 / `null`=삭제 / 빈 배열·빈 객체=키 삭제(PUT 과 동형) / 빈 본문 `{}`=200 no-op.
-   ★잔여: **같은 키를 동시에** 쓰면 그 키는 여전히 통째 교체된다(예: 사용자가 반복설정을 편집하는 순간 /sweep 이 sweptThrough 를 씀)
-     → 그 좁은 창은 preserveForeign(위)이 필드 단위로 방어한다. 두 겹.
+   ★잔여: **같은 키를 동시에** 쓰면 그 키는 여전히 통째 교체된다(앱과 /sweep 이 같은 반복을 동시에 고치는 경우)
    ★기준선(_syncBase)=**'우리가 아는 클라우드의 내용'**. 로드/저장 성공 시 갱신. 없으면 통째 PUT 으로 안전 폴백. */
 /* ★"files" 제외(2026-07-31·첨부 제거): 앱이 더는 이 키를 소유하지 않는다 → PATCH 대상에서 빠져
    **건드리지 않는다**(RTDB blob 에 옛 키가 남아 있어도 삭제하지 않음 — 비파괴). */
@@ -343,7 +301,7 @@ const dpOverlaps = (paths) => {
   for (let i = 1; i < s.length; i++) if (s[i] === s[i - 1] || s[i].startsWith(s[i - 1] + "/")) return true;
   return false;
 };
-const resetSyncState = () => { _syncBase = null; _sweptCache = null; }; /* ★워크스페이스 전환 = 다른 blob → 기준선 폐기(E2 클래스 방지) */
+const resetSyncState = () => { _syncBase = null; }; /* ★워크스페이스 전환 = 다른 blob → 기준선 폐기(E2 클래스 방지) */
 /* 보낼 변경분만 추린다. null=기준선에 없음(=기준 모름) → 호출측이 통째 PUT. */
 const diffForPatch = (data) => {
   if (!_syncBase || !data) return null;
@@ -416,7 +374,7 @@ const cloudSave = (data) => {
        안 보내면 그 키는 애초에 건드리지 않으므로 병합도 네트워크 왕복도 불필요(대부분의 저장이 여기 해당). */
     const patch = diffForPatch(data);
     const sendRec = !!(patch && Object.prototype.hasOwnProperty.call(patch, "recurrings"));
-    const sendAll = (!patch || sendRec) ? await preserveForeign(data, path, q) : data;
+    const sendAll = data;
     const payload = patch ? { ...patch, ...(sendRec ? { recurrings: sendAll.recurrings } : {}) } : sendAll;
     fetch(url + q, {
       method: patch ? "PATCH" : "PUT",
@@ -447,7 +405,7 @@ const flushCloudSave = async () => {
   try {
     const q = await authParam();
     const patch = diffForPatch(data);
-    const sendAll = applySwept(data);
+    const sendAll = data;
     const sendRec = !!(patch && Object.prototype.hasOwnProperty.call(patch, "recurrings"));
     const payload = patch ? { ...patch, ...(sendRec ? { recurrings: sendAll.recurrings } : {}) } : sendAll;
     await fetch(url + q, { method: patch ? "PATCH" : "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), keepalive: true });
@@ -560,10 +518,6 @@ const ROUTINE_PROJ_IDS = ["rt_workout", "rt_english", "rt_vocal", "rt_writing"];
    kind 수동관리·DB 직접쓰기 없이 새 영역에 반복만 걸면 자동으로 루틴이 됨. isRoutineProj·projSortKey가 참조 →
    회고탭·과제별·드롭다운·오늘탭 정렬이 한 규칙 공유. (기존 kind:routine·시드 id는 명시 override로 계속 존중.) */
 let ROUTINE_REC_PROJ_IDS = new Set();
-/* ★sweptThrough(2026-07-12·PDS §14.7): 루틴별 '마지막 주간 정제 종료일'(YYYY-MM-DD). App이 recurrings서 매 렌더 동기 →
-
-   "" = 미정제(전부 표시). /sweep이 주간 정제 후 완료 주 토요일로 write(+savedAt bump). */
-let ROUTINE_SWEPT = {};
 const isBucketProj = (p) => p && (p.kind === "bucket" || PERSONAL_BUCKET_IDS.includes(p.id));
 const isRoutineProj = (p) => p && (p.kind === "routine" || ROUTINE_PROJ_IDS.includes(p.id) || ROUTINE_REC_PROJ_IDS.has(p.id));
 /* 지난 미완료 daily 루틴 인스턴스 = '오늘'·'미수행' 목록서 제외(2026-06-28). 루틴은 매일 새 인스턴스가 생성돼
@@ -851,7 +805,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
             {/* (2026-06-26) 마커 표시 폐지 — 채널=프로젝트 버킷 */}
             {task.notes && <span onClick={(e) => { e.stopPropagation(); setShowNotes(!showNotes); }} style={{ cursor: "pointer", fontSize: 10, color: showNotes ? "#92400E" : "#B45309", background: showNotes ? "#FEF3C7" : "#FFFBEB", border: "1px solid #FDE68A", padding: "1px 5px", borderRadius: 4, userSelect: "none" }}>📝 메모</span>}
           </div>
-          <div style={S.txt}>{task.text}</div>
+          <div style={S.txt}><Clamp text={task.text} lines={2} /></div>
           {task.notes && showNotes && <div style={{ marginTop: 4, fontSize: 12, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "5px 9px", color: "#92400E", whiteSpace: "pre-wrap" }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.65, marginRight: 6 }}>📝 메모</span>{task.notes}</div>}
         </div>
         <div className="task-actions" style={{ display: h ? "flex" : "none", gap: 3, flexShrink: 0, alignItems: "center" }}>
@@ -1185,65 +1139,180 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
 };
 
 /* ═══ 과제별 뷰 ═══ */
-const ProjectsView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, isWork }) => {
+/* ★새 세션 폼 — 영역 카드 안에서만 연다. 과제 드롭다운이 없는 것이 핵심이다:
+   어디서 만들었는지가 곧 소속이라 「이게 어느 영역인가」를 따로 판단할 일이 없다.
+   영역 밖의 반복 할일(주간 정제·업무 잡무)은 오늘 탭에서 만든다. */
+const NewSessionForm = ({ projectId, setRecurrings, onClose }) => {
+  const [nt, setNt] = useState(""); const [rType, setRType] = useState("count");
+  const [ndows, setNdows] = useState([]); const [freqN, setFreqN] = useState(3);
+  const [rTime, setRTime] = useState(""); const [rProto, setRProto] = useState("");
+  const add = () => {
+    if (!nt.trim()) return;
+    if (rType === "weekly" && !ndows.length) return;
+    const base = { id: gid(), text: nt.trim(), project: projectId, time: rTime || "", protocol: rProto.trim() };
+    const rec = rType === "count"
+      ? { ...base, type: "count", freqPerWeek: Math.max(1, parseInt(freqN) || 1), dows: [...ndows].sort((a, b) => a - b) }
+      : rType === "weekly" ? { ...base, type: "weekly", dows: [...ndows].sort((a, b) => a - b) }
+      : { ...base, type: "daily" };
+    setRecurrings(p => [...p, rec]);
+    onClose();
+  };
+  return (
+    <div style={{ ...S.card, marginTop: 6, background: "#F8FAFF" }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <input autoFocus value={nt} onChange={e => setNt(e.target.value)} placeholder="세션 이름 (예: 보컬 연습)" style={{ ...S.inp, fontSize: 12, maxWidth: 200 }} />
+        <select value={rType} onChange={e => setRType(e.target.value)} style={{ ...S.sel, fontSize: 12 }}>
+          <option value="count">주 N회</option><option value="weekly">매주 (요일 고정)</option><option value="daily">매일</option>
+        </select>
+        {rType === "count" && <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+          <span style={{ fontSize: 11, color: "#6b7280" }}>주</span>
+          <input type="number" min="1" max="7" value={freqN} onChange={e => setFreqN(e.target.value)} style={{ ...S.inp, fontSize: 12, width: 46 }} />
+          <span style={{ fontSize: 11, color: "#6b7280" }}>회</span></div>}
+        {rType !== "daily" && <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+          {DAYS_KO.map((dn, i) => { const on = ndows.includes(i);
+            return <button key={i} type="button" onClick={() => setNdows(on ? ndows.filter(x => x !== i) : [...ndows, i])}
+              style={{ ...S.gh, fontSize: 11, padding: "2px 7px", background: on ? "#4338CA" : "#fff", color: on ? "#fff" : "#6b7280" }}>{dn}</button>; })}
+        </div>}
+        <input type="time" value={rTime} onChange={e => setRTime(e.target.value)} style={{ ...S.inp, fontSize: 12, width: 110 }} />
+        <button style={{ ...S.btn("#4338CA"), fontSize: 12 }} onClick={add}>추가</button>
+        <button style={{ ...S.gh, fontSize: 12 }} onClick={onClose}>취소</button>
+      </div>
+      <textarea value={rProto} onChange={e => setRProto(e.target.value)} rows={2} placeholder="실행 방법 (선택) — 이 세션에서 무엇을 하는지"
+        style={{ ...S.ta, minHeight: 0, fontSize: 12, marginTop: 6 }} />
+    </div>
+  );
+};
+/* ★긴 줄 접기(2026-09-14 소유자) — 메모 한 건이 화면을 다 먹거나 URL 한 줄이 세 줄로 감기는 것을 막는다.
+   접힌 상태에서도 첫 줄은 보이므로 무엇인지 알아볼 수 있다. 누르면 펼쳐진다. */
+const Clamp = ({ text, lines }) => {
+  const [open, setOpen] = useState(false);
+  const n = lines || 2;
+  const long = (text || "").length > 90 || (text || "").split(String.fromCharCode(10)).length > n;
+  const isUrl = /^https?:\/\//.test((text || "").trim());
+  if (isUrl) {
+    const u = text.trim();
+    const short = u.length > 60 ? u.slice(0, 58) + "…" : u;
+    return <a href={u} target="_blank" rel="noreferrer" style={{ color: "#4338CA", wordBreak: "break-all", fontSize: 12 }} title={u}>{short}</a>;
+  }
+  if (!long) return <span style={{ whiteSpace: "pre-wrap" }}>{text}</span>;
+  return (
+    <span>
+      <span style={{ whiteSpace: "pre-wrap", display: "-webkit-box", WebkitLineClamp: open ? "unset" : n, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{text}</span>
+      <span onClick={() => setOpen(!open)} style={{ fontSize: 11, color: "#6366F1", cursor: "pointer", userSelect: "none" }}>{open ? "▲ 접기" : "▼ 더보기"}</span>
+    </span>
+  );
+};
+/* ★메모 CRUD(2026-09-14 소유자) — 적은 것을 고치고 지울 수 있어야 한다.
+   저장 자리는 히스토리의 그 항목이라 수정·삭제가 곧 그 기록을 고치는 것이다(되돌리기 제공). */
+const MemoRow = ({ m, onEdit, onDelete }) => {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(m.text);
+  useEffect(() => { setDraft(m.text); }, [m.text]);
+  if (editing) return (
+    <div style={{ padding: "6px 0", borderBottom: "1px dotted #e5e7eb" }}>
+      <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={4} autoFocus style={{ ...S.ta, minHeight: 0, fontSize: 12 }} />
+      <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+        <button style={{ ...S.btn("#4338CA"), fontSize: 11 }} onClick={() => { onEdit(m.date, m.idx, draft); setEditing(false); }}>저장</button>
+        <button style={{ ...S.gh, fontSize: 11 }} onClick={() => { setDraft(m.text); setEditing(false); }}>취소</button>
+      </div>
+    </div>
+  );
+  return (
+    <div style={{ fontSize: 12, padding: "5px 0", borderBottom: "1px dotted #e5e7eb" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontSize: 10, color: "#9ca3af", flex: 1 }}>{(m.date || "").slice(5)}{m.from ? " · " + m.from + "에서" : ""}</span>
+        <button style={{ ...S.gh, fontSize: 10, padding: "0 5px" }} onClick={() => setEditing(true)} title="고치기">✏️</button>
+        <button style={{ ...S.gh, fontSize: 10, padding: "0 5px", color: "#EF4444" }} onClick={() => onDelete(m.date, m.idx)} title="지우기">✕</button>
+      </div>
+      <div style={{ marginTop: 2 }}><Clamp text={m.text} lines={3} /></div>
+    </div>
+  );
+};
+/* ═══ 영역 카드 (개인=영역 · 업무=과제) ═══
+   ★2026-09-14 소유자 결정 — 루틴 탭과 유형별 탭을 여기 하나로 합쳤다.
+   카드 하나에 그 영역의 **세션 · 할일 · 메모**가 다 들어온다. 접힘이 기본이다.
+   ★새 항목 종류를 만들지 않는다: 「생각·개선안」은 그냥 **날짜 없는 할일**이고 이미 그렇게 쓰이고 있었다
+     (실측 2026-09-14: 개인 날짜 없는 할일 23건 = 글감·링크·미뤄둔 작업). 오늘 탭에 안 뜨고 여기에만 있다.
+   ★카드 머리 숫자는 **실제 수행**만 — 세션 n/목표. 생각이 쌓인 양은 성과가 아니다(소유자). */
+const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, isWork, setRecurrings, onUpdateRecurring, onAddSession, onRemoveSession, onAddMemo, onEditMemo, onDeleteMemo }) => {
   const [open, setOpen] = useState(new Set(projects.filter(p => tasks.some(t => t.project === p.id && t.status !== "done")).map(p => p.id)));
   const [np, setNp] = useState("");
-  const [editId, setEditId] = useState(null);
-  const [editName, setEditName] = useState("");
+  const [memoMore, setMemoMore] = useState(new Set());  /* 메모 더보기 — 카드별 */
+  const [memoDraft, setMemoDraft] = useState({});        /* 영역별 메모 입력 중인 글 */
+  const [newFor, setNewFor] = useState("");             /* 새 세션 폼을 연 영역 */
+  const wkNow = getWeekId();
+  const doneSet = routineDoneSet(tasks, history);
+  const delRec = (id) => { if (!window.confirm("이 반복 세션을 지울까요?")) return;
+    setRecurrings(prev => SEED_ROUTINE_IDS.has(id) ? prev.map(r => r.id === id ? { ...r, disabled: true } : r) : prev.filter(r => r.id !== id)); };
   const tog = id => setOpen(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const isDefault = (id) => PERSONAL_PROJECTS.some(d => d.id === id);
-  const startEdit = (e, p) => { e.stopPropagation(); setEditId(p.id); setEditName(p.name); };
-  const saveEdit = () => { if (editName.trim()) onEditProj(editId, editName.trim()); setEditId(null); setEditName(""); };
   /* ★참조 무결성(2026-07-26·소유자): 과제 ↔ 반복 태스크. 헤더 숫자가 **미완료 할일만** 세던 탓에
      반복 3개짜리 살아있는 영역과 참조 0인 고아 과제가 화면에서 똑같이 "0" 으로 보였다 → 둘 다 문제였다:
      ⓐ 진짜 고아(참조 0)가 안 보여 몇 주째 방치 ⓑ **살아있는 걸 고아로 오인해 삭제**하기 쉬움.
      → 반복 개수를 헤더에 드러내고(🔁N), 반복이 붙은 과제는 **삭제를 막는다**. */
   const recOf = (pid) => (recurrings || []).filter(r => !r.disabled && r.project === pid);
-  const askDel = (e, p) => { e.stopPropagation();
-    const rec = recOf(p.id);
-    /* ★차단: 지우면 그 반복들이 '존재하지 않는 과제'를 가리키는 미아가 된다 — 반복 편집창의 과제 드롭다운이
-       값을 못 찾아 첫 항목으로 잘못 표시되고, 그대로 저장하면 엉뚱한 영역으로 재배정된다(2026-06-30 실제 발생). */
-    if (rec.length) {
-      window.alert('"' + p.name + '" 과제에는 반복 태스크 ' + rec.length + '개가 붙어 있어 삭제할 수 없습니다.\n\n'
-        + rec.map(r => "· " + r.text).join("\n")
-        + '\n\n반복설정(🔁)에서 먼저 다른 과제로 옮기거나 삭제한 뒤 지워주세요.');
-      return;
-    }
-    const cnt = tasks.filter(t => t.project === p.id && t.status !== "done").length;
-    if (window.confirm('"' + p.name + '" 과제를 삭제할까요?' + (cnt > 0 ? " (할일 " + cnt + "개도 함께 삭제)" : ""))) onDelProj(p.id);
-  };
   const renderProj = (p) => {
-    const pt = tasks.filter(t => t.project === p.id && t.status !== "done");
-    const rc = recOf(p.id).length; /* 반복 개수 — 이게 안 보여서 살아있는 영역과 고아가 구분이 안 됐다 */
+    const pt = tasks.filter(t => t.project === p.id && t.status !== "done" && !t.recurringId); /* 반복 인스턴스는 세션 줄이 맡는다 */
+    const recs = recOf(p.id);
+    const memo = areaMemos(p.id, recurrings, history);
+    const sess = recs.map(r => ({ tgt: routineWeekTarget(r), n: weekDoneCount(doneSet, r.id, wkNow) })).filter(x => x.tgt > 0);
+    const sTgt = sess.reduce((a, b) => a + b.tgt, 0), sDone = sess.reduce((a, b) => a + Math.min(b.n, b.tgt), 0);
+    const rc = recs.length; /* 반복 개수 — 이게 안 보여서 살아있는 영역과 고아가 구분이 안 됐다 */
     const fc = pt.filter(t => t.focus).length;
     const o = open.has(p.id);
-    const canDel = isWork || !isDefault(p.id);
     return (
       <div key={p.id} style={{ marginBottom: 6 }}>
-        <div style={S.ph(o)} onClick={() => { if (editId !== p.id) tog(p.id); }}>
+        <div style={S.ph(o)} onClick={() => tog(p.id)}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
             <span style={{ fontSize: 11, color: "#9ca3af" }}>{o ? "▼" : "▶"}</span>
-            {editId === p.id
-              ? <input autoFocus value={editName} onClick={e => e.stopPropagation()} onChange={e => setEditName(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") { setEditId(null); setEditName(""); } }}
-                  onBlur={saveEdit} style={{ ...S.inp, fontSize: 14, padding: "2px 6px", maxWidth: 200 }} />
-              : <span style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</span>}
+            <span style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</span>
             <span style={S.cnt(pt.length)}>{pt.length}</span>
-            {rc > 0 && <span style={{ fontSize: 10, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", padding: "0 5px", borderRadius: 6, fontWeight: 600, flexShrink: 0 }}
-              title={"반복 태스크 " + rc + "개 — " + recOf(p.id).map(r => r.text).join(", ")}>🔁{rc}</span>}
+            {sTgt > 0 && <span style={{ fontSize: 10, color: sDone >= sTgt ? "#059669" : "#4338CA", background: sDone >= sTgt ? "#ECFDF5" : "#EEF2FF", border: "1px solid " + (sDone >= sTgt ? "#A7F3D0" : "#C7D2FE"), padding: "0 5px", borderRadius: 6, fontWeight: 600, flexShrink: 0 }}
+              title={"이번 주 세션 " + sDone + "/" + sTgt + " — " + recs.map(r => r.text).join(", ")}>🔁 {sDone}/{sTgt}</span>}
+            {rc > 0 && sTgt === 0 && <span style={{ fontSize: 10, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", padding: "0 5px", borderRadius: 6, fontWeight: 600, flexShrink: 0 }}
+              title={recs.map(r => r.text).join(", ")}>🔁{rc}</span>}
             {fc > 0 && <span style={{ fontSize: 11, color: "#F59E0B" }}>⭐{fc}</span>}
           </div>
-          {editId !== p.id && <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
-            <button style={{ ...S.gh, fontSize: 10, padding: "1px 5px" }} onClick={e => startEdit(e, p)} title="이름 수정">✏️</button>
-            {canDel && <button style={{ ...S.gh, fontSize: 10, padding: "1px 5px", color: "#EF4444" }} onClick={e => askDel(e, p)} title="과제 삭제">🗑</button>}
-          </div>}
+
         </div>
         {o && <div style={{ paddingLeft: 8, marginBottom: 12 }}>
+          {recs.length > 0 && <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#6366F1", marginBottom: 2 }}>반복 세션</div>
+            <div style={S.card}>
+              {recs.map(r => <RecurringRow key={r.id} r={r} projects={projects} onDelete={() => delRec(r.id)} onUpdate={onUpdateRecurring}
+                weekDone={weekDoneCount(doneSet, r.id, wkNow)} weekTarget={routineWeekTarget(r)}
+                onAddSession={onAddSession} onRemoveSession={onRemoveSession} />)}
+            </div>
+            {newFor === p.id
+              ? <NewSessionForm projectId={p.id} setRecurrings={setRecurrings} onClose={() => setNewFor("")} />
+              : <button style={{ ...S.gh, fontSize: 11, marginTop: 4 }} onClick={() => setNewFor(p.id)}>＋ 세션 추가</button>}
+          </div>}
+          {recs.length === 0 && <div style={{ marginBottom: 10 }}>
+            {newFor === p.id
+              ? <NewSessionForm projectId={p.id} setRecurrings={setRecurrings} onClose={() => setNewFor("")} />
+              : <button style={{ ...S.gh, fontSize: 11 }} onClick={() => setNewFor(p.id)}>＋ 세션 추가</button>}
+          </div>}
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#6366F1", marginBottom: 2 }}>메모</div>
+            <div style={S.card}>
+              <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+                <textarea value={memoDraft[p.id] || ""} onChange={e => setMemoDraft({ ...memoDraft, [p.id]: e.target.value })} rows={2}
+                  placeholder="이 영역에서 나온 것 — 코치가 고쳐 준 것, 하다가 발견한 것"
+                  style={{ ...S.ta, minHeight: 0, fontSize: 12, flex: 1 }} />
+                <button style={{ ...S.btn("#4338CA"), fontSize: 12, flexShrink: 0 }}
+                  onClick={() => { onAddMemo(p.id, memoDraft[p.id] || ""); setMemoDraft({ ...memoDraft, [p.id]: "" }); }}>적기</button>
+              </div>
+              {memo.items.slice(0, memoMore.has(p.id) ? 999 : 3).map((m, i) => (
+                <MemoRow key={m.date + "|" + m.idx} m={m} onEdit={onEditMemo} onDelete={onDeleteMemo} />
+              ))}
+              {memo.items.length === 0 && <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 6 }}>아직 메모가 없습니다.</div>}
+              {memo.items.length > 3 && <div onClick={() => setMemoMore(prev => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })}
+                style={{ fontSize: 11, color: "#6366F1", cursor: "pointer", marginTop: 6, userSelect: "none" }}>
+                {memoMore.has(p.id) ? "▲ 접기" : "▼ " + (memo.items.length - 3) + "건 더"}</div>}
+            </div>
+          </div>
           {SK.map(s => { const items = pt.filter(t => t.status === s); if (!items.length) return null;
             return <div key={s} style={{ marginBottom: 4 }}>{items.map(t => <TaskRow key={t.id} task={t} projects={projects} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} />)}</div>; })}
-          {pt.length === 0 && <div style={{ ...S.emp, padding: 16 }}>
-            할 일 없음{rc > 0 && <><br/><span style={{ fontSize: 11 }}>반복 태스크 {rc}개는 오늘 탭·루틴 탭에서 돕니다 (여긴 일회성 할일만)</span></>}
-          </div>}
+          {pt.length === 0 && <div style={{ ...S.emp, padding: 12, fontSize: 12 }}>할 일 없음</div>}
           <div style={S.div} /><AddForm projects={projects} onAdd={onAdd} defProj={p.id} />
         </div>}
       </div>
@@ -1259,11 +1328,13 @@ const ProjectsView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onA
         <div style={{ fontSize: 11, fontWeight: 700, color: "#9ca3af", margin: "14px 0 6px" }}>{isWork ? "📂 develop 버킷 (지식·교훈·글감)" : "🗂 그 외 (약속·집안일·기타)"}</div>
         {bucketProjs.map(renderProj)}
       </>}
-      <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 16, padding: "8px 0", flexWrap: "wrap" }}>
-        <input style={{ ...S.inp, maxWidth: 200 }} placeholder={isWork ? "새 과제 추가..." : "새 프로젝트 추가..."} value={np} onChange={e => setNp(e.target.value)}
+      {/* ★2026-09-14 소유자 — 개인 영역 여섯은 vault 폴더와 1:1 이라 앱에서 만들거나 지우지 않는다.
+          업무 과제는 실제로 드나들므로 추가만 남긴다(이름 수정·삭제는 양쪽 다 없앴다). */}
+      {isWork && <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 16, padding: "8px 0", flexWrap: "wrap" }}>
+        <input style={{ ...S.inp, maxWidth: 200 }} placeholder="새 과제 추가..." value={np} onChange={e => setNp(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter" && np.trim()) { onAddProj(np.trim(), "project"); setNp(""); }}} />
         <button style={S.gh} onClick={() => { if (np.trim()) { onAddProj(np.trim(), "project"); setNp(""); }}}>+ 추가</button>
-      </div>
+      </div>}
     </div>
   );
 };
@@ -1384,7 +1455,7 @@ const HistRow = ({ item, date, idx, onRestore, onUncancel, onEditMemo, onDeleteM
    (cleanup 2026-06-16: COMPANY_GAS_*·companyFetchEvents·calImport 제거 완료.) */
 
 /* 반복 태스크 한 행 — ✏️ 일정(이름·시간·요일·과제) + 📋 실행방법 인라인 편집(2026-07-04 M7) */
-const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
+const RecurringRow = ({ r, projects, onDelete, onUpdate, weekDone, weekTarget, onAddSession, onRemoveSession }) => {
   const [open, setOpen] = useState(false);
   const [d, setD] = useState(r.protocol || "");
   const type = r.type || "weekly";
@@ -1406,7 +1477,9 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
       <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
         <span style={{ background: "#EEF2FF", color: "#4338CA", fontWeight: 700, fontSize: 12, padding: "2px 8px", borderRadius: 6, flexShrink: 0 }}>{label}{r.time ? ` ${r.time}` : ""}</span>
         <span style={{ flex: 1 }}>{r.text}</span>
-        <span style={{ fontSize: 10, color: "#9ca3af" }}>#{projects.find(p => p.id === r.project)?.name}</span>
+        {weekTarget > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: weekDone >= weekTarget ? "#059669" : "#9ca3af", flexShrink: 0 }}>{weekDone}/{weekTarget}</span>}
+        {onAddSession && <button style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "0 6px", color: "#059669" }} onClick={() => onAddSession(r.id, "")} title="이번 회차 완료로 기록">＋</button>}
+        {onRemoveSession && weekDone > 0 && <button style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "0 6px", color: "#EF4444" }} onClick={() => onRemoveSession(r.id)} title="이번 주 최근 1건 취소">−</button>}
         <button style={{ ...S.gh, fontSize: 10, background: open ? "#EEF2FF" : "#fff" }} onClick={() => setOpen(!open)} title="편집(이름·시간·요일·과제·실행방법)">✏️{r.protocol ? "📋" : ""}</button>
         <button style={{ ...S.gh, color: "#EF4444", fontSize: 10 }} onClick={onDelete}>✕</button>
       </div>
@@ -1424,7 +1497,7 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate }) => {
         <textarea value={d} onChange={e => setD(e.target.value)} rows={4} placeholder={"실행 방법 (고정 참고). 예:\n[실행] F45 클래스 참석\n[tier별] 최소=푸시업10+스쿼트10 / 보통=F45 / 최대=F45 그대로"}
           style={{ ...S.ta, minHeight: 0, fontSize: 12 }} />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
-          <span style={{ fontSize: 10, color: "#9ca3af" }}>→ 루틴 탭 영역 카드 맨 위에 표시(메모는 그 아래)</span>
+          <span style={{ fontSize: 10, color: "#9ca3af" }}>실행 방법은 이 편집창에서만 본다</span>
           {dirty && <button style={{ ...S.btn("#4338CA"), fontSize: 11 }} onClick={() => onUpdate(r.id, { protocol: d.trim() })}>실행방법 저장</button>}
         </div>
       </div>}
@@ -1528,25 +1601,23 @@ const weekDoneCount = (doneSet, rid, wk) => { let n = 0; doneSet.forEach(k => { 
    recurringId 끼리만 모여서 레슨 칸에 적은 것이 연습 회차에서 영영 안 보였다(보컬이 돌던 이유는
    소유자가 손으로 옮겨 적었기 때문이고 시스템이 합쳐 준 적은 없다).
    ★출처를 반드시 붙인다 — 코치가 한 말인지 내가 찾은 것인지 구분돼야 한다.
-   ★정제 기준도 영역 단위로 본다: 그 영역 루틴들의 sweptThrough 중 **가장 이른** 값을 쓴다.
-     하나라도 정제가 안 됐으면 그 영역은 덜 접힌다(정제 전 메모가 사라지지 않는 쪽이 안전하다). */
+   ★2026-09-14 소유자 결정 — 정제된 메모를 접는 sweptThrough 기전을 폐기했다. 한 번도 접힌 적이 없었고
+     (쓰기 5회 중 8루틴 가운데 2개만 값이 들어가 기준선이 늘 빈 문자열이었다) 앱·스크립트·검사기 세 곳에
+     걸친 유지비만 들었다. 이제 정리한 메모는 일요일에 일지로 옮긴 뒤 그 자리에서 ✕ 로 지운다. */
 const areaMemos = (projectId, recurrings, history) => {
-  const mine = (recurrings || []).filter(r => r.project === projectId);
-  if (!mine.length) return { items: [], swept: "" };
-  const nameOf = {}; mine.forEach(r => { nameOf[r.id] = r.text || ""; });
-  let swept = null;
-  mine.forEach(r => { const v = ROUTINE_SWEPT[r.id] || ""; if (swept === null || v < swept) swept = v; });
-  swept = swept || "";
+  const nameOf = {};
+  (recurrings || []).forEach(r => { if (r.project === projectId) nameOf[r.id] = r.text || ""; });
   const items = [];
-  (history || []).forEach(day => (day.items || []).forEach(it => {
+  (history || []).forEach(day => (day.items || []).forEach((it, idx) => {
     const o = it.orig;
-    if (it.type !== "done" || it.cancelled || !o || !nameOf[o.recurringId]) return;
+    if (it.type !== "done" || it.cancelled || !o) return;
+    if ((o.project || "proj_etc") !== projectId) return; /* ★영역 기준 — 세션 메모든 영역 메모든 같이 읽는다 */
     const text = (o.notes || "").trim(); if (!text) return;
     const date = day.date || "";
-    items.push({ date, from: nameOf[o.recurringId], text, swept: !!swept && date <= swept });
+    items.push({ date, idx, from: nameOf[o.recurringId] || "", text }); /* idx = 수정·삭제용 좌표 */
   }));
   items.sort((a, b) => b.date.localeCompare(a.date)); /* 최신 위로(2026-07-25 소유자) */
-  return { items, swept };
+  return { items };
 };
 /* 오늘 탭 상단 — 주N회 루틴 '이번 주 N/목표' + ＋(세션 기록+메모)/−(최근 1건 취소).
    요일 무관 주간 카운트: 옮겨 간 날·예정 외·지난 날 = 전부 ＋로 +1. ＋ 누르면 메모 입력창(선택)이 열림 → 발견을 적으면 그 영역 메모에 누적되고 루틴 탭 영역 카드에서 보인다. */
@@ -1668,66 +1739,6 @@ const WeeklyRoutineHistory = ({ recurrings, tasks, history }) => {
     </div>
   );
 };
-/* ★정제된 메모 접기(2026-09-12): 일요일 정제로 일지에 옮겨 적은 것은 기본으로 접는다.
-   앱에서 안 보여도 잃는 것이 없다 — 정제본이 영역 일지에 남아 있다. */
-const SweptMemos = ({ items }) => {
-  const [open, setOpen] = useState(false);
-  return (
-    <div style={{ marginTop: 6 }}>
-      <div onClick={() => setOpen(!open)} style={{ fontSize: 11, color: "#9ca3af", cursor: "pointer", userSelect: "none" }}>
-        {open ? "▼" : "▶"} 정제된 메모 {items.length}건 — 일지에 옮겨 적음
-      </div>
-      {open && items.map((m, i) => (
-        <div key={i} style={{ fontSize: 11.5, padding: "4px 0", color: "#6b7280", borderBottom: "1px dotted #f3f4f6" }}>
-          <span style={{ fontSize: 10, color: "#9ca3af" }}>{(m.date || "").slice(5)} · {m.from}에서</span>
-          <div style={{ whiteSpace: "pre-wrap" }}>{m.text}</div>
-        </div>
-      ))}
-    </div>
-  );
-};
-/* ★영역 카드(2026-09-12 소유자 결정): 영역마다 그 영역 루틴들의 메모를 한 흐름으로 보여 준다.
-   실행방법(protocol)은 반복 설정의 📋 에서 본다 — 카드에는 메모만 둔다(2026-09-13 소유자). */
-const AreaMemoPanel = ({ recurrings, projects, history }) => {
-  const [openArea, setOpenArea] = useState("");
-  const live = (recurrings || []).filter(r => !r.disabled);
-  const areas = []; const seen = new Set();
-  live.forEach(r => { const pid = r.project || "proj_etc"; if (seen.has(pid)) return; seen.add(pid);
-    areas.push({ id: pid, name: ((projects || []).find(p => p.id === pid) || {}).name || "기타" }); });
-  if (!areas.length) return null;
-  return (
-    <div style={{ marginTop: 12 }}>
-      <div style={S.secT}>📝 영역별 메모</div>
-      {areas.map(a => {
-        const res = areaMemos(a.id, recurrings, history);
-        const fresh = res.items.filter(m => !m.swept);
-        const done = res.items.filter(m => m.swept);
-        const open = openArea === a.id;
-        const mine = live.filter(r => r.project === a.id);
-        return (
-          <div key={a.id} style={{ ...S.card, marginTop: 4, padding: "8px 10px" }}>
-            <div onClick={() => setOpenArea(open ? "" : a.id)} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
-              <span style={{ fontSize: 11, color: "#6b7280" }}>{open ? "▼" : "▶"}</span>
-              <span style={{ fontWeight: 700, fontSize: 13 }}>{a.name}</span>
-              <span style={{ fontSize: 11, color: "#9ca3af" }}>{mine.map(r => r.text).join(" · ")}</span>
-              <span style={{ marginLeft: "auto", fontSize: 11, color: fresh.length ? "#4338CA" : "#9ca3af", fontWeight: fresh.length ? 600 : 400 }}>메모 {fresh.length}</span>
-            </div>
-            {open && <div style={{ marginTop: 7 }}>
-              {!res.items.length && <div style={{ fontSize: 11, color: "#9ca3af" }}>아직 메모가 없습니다. 스트립의 ＋ 로 적으면 여기 모입니다.</div>}
-              {fresh.map((m, i) => (
-                <div key={i} style={{ fontSize: 12, padding: "5px 0", borderBottom: "1px dotted #e5e7eb" }}>
-                  <span style={{ fontSize: 10, color: "#4338CA", fontWeight: 600 }}>{(m.date || "").slice(5)} · {m.from}에서</span>
-                  <div style={{ whiteSpace: "pre-wrap", marginTop: 2 }}>{m.text}</div>
-                </div>
-              ))}
-              {done.length > 0 && <SweptMemos items={done} />}
-            </div>}
-          </div>
-        );
-      })}
-    </div>
-  );
-};
 function App({ onSwitchWs }) {
   const isWork = WS.key === "work";
   const saved = useMemo(() => loadSaved(), []);
@@ -1745,7 +1756,6 @@ function App({ onSwitchWs }) {
   /* "반복 붙은 프로젝트=루틴" 자동 도출 동기(2026-07-12): 매 렌더 recurrings에서 재계산해 모듈 집합에 반영(자식 렌더 前·동기). 새 영역에 반복 걸면 자동 루틴 — kind 수동관리·DB 직접쓰기 불필요.
      ★개인 워크스페이스 한정: 업무는 recurring이 proj_etc(기타)에 붙어 루틴 개념이 아님(도출하면 기타가 맨앞 오분류) → 업무는 빈 집합=정렬 무변경. */
   ROUTINE_REC_PROJ_IDS = isWork ? new Set() : new Set((recurrings || []).filter(r => !r.disabled && r.project).map(r => r.project));
-  ROUTINE_SWEPT = Object.fromEntries((recurrings || []).map(r => [r.id, r.sweptThrough || ""])); /* ★§14.7: 루틴별 정제 종료일 동기(routineMemoText glance 필터) */
   const [editTarget, setEditTarget] = useState(null);
   const [clearTarget, setClearTarget] = useState(null); /* 오늘에서 내리기 얼럿 대상(2026-07-04) */
   const [toast, setToast] = useState(null);
@@ -2123,6 +2133,21 @@ function App({ onSwitchWs }) {
   /* 주N회 '📝 메모만'(2026-07-08): 세션 카운트 없이 발견/메모만 기록 → 루틴 탭 영역 카드에 모인다.
      '수행은 안 했지만 남길 게 있는' 경우(예: 레슨만 받은 날) 자리. memoOnly=true → routineDoneSet·− 스캔·완료수서 제외(카운트 무관),
      routineMemoText엔 포함(비취소 done+notes)돼 이월. 히스토리서 ✏️(editHistMemo)·🗑(deleteHistMemo)로 수정/삭제·↺복원 가능(2026-07-25). */
+  /* ★영역 메모(2026-09-14 소유자) — 세션에 묶지 않는다. 어느 세션에서 나왔든 같은 영역이면 한 흐름이라
+     「어디에 적을까」를 판단할 일이 없어야 한다. 세션 완료로 남긴 메모와 같은 자리에 쌓인다. */
+  const addAreaMemo = (projectId, memo) => {
+    const memoTrim = (memo || "").trim();
+    if (!memoTrim) return;
+    const proj = projects.find(p => p.id === projectId);
+    const orig = { id: gid(), text: "", status: "done", project: projectId || "proj_etc", notes: memoTrim, planDate: TODAY, createdAt: TODAY };
+    setHistory(prev => {
+      const item = { type: "done", memoOnly: true, areaMemo: true, text: "", projectName: proj ? proj.name : "", project: orig.project, orig, time: nowTime() };
+      const ex = prev.find(h => h.date === TODAY);
+      if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, item] } : h);
+      return [...prev, { date: TODAY, items: [item] }];
+    });
+    showT("메모 저장 ✅", null);
+  };
   const addRoutineMemo = (rid, memo) => {
     const rec = recurrings.find(r => r.id === rid); if (!rec) return;
     const memoTrim = (memo || "").trim();
@@ -2375,8 +2400,7 @@ function App({ onSwitchWs }) {
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
         {tab === "today" && <><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} />{isWork && <RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} />}</>}
-        {tab === "routine" && <><WeeklyRoutineStrip recurrings={recurrings} projects={projects} tasks={tasks} history={history} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemoOnly={addRoutineMemo} /><AreaMemoPanel recurrings={recurrings} projects={projects} history={history} /><WeeklyRoutineHistory recurrings={recurrings} tasks={tasks} history={history} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
-        {tab === "projects" && <ProjectsView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} isWork={isWork} />}
+        {tab === "areas" && <AreaView tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} isWork={isWork} setRecurrings={setRecurrings} onUpdateRecurring={updateRecurring} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemo={addAreaMemo} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} />}
       </div>
       {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} isWork={isWork} />}
@@ -2439,7 +2463,7 @@ function WorkspaceRoot() {
   const switchWs = () => {
     flushCloudSave(); /* ★E2(2026-07-05): 전환 전 대기 저장을 즉시 flush(예약 경로로) — 안 하면 2초 디바운스 중인 이 워크스페이스의 클라우드 저장이 새 워크스페이스 편집에 preempt돼 유실. flushCloudSave가 _pendingData/_pendingPath를 동기 캡처하므로 아래 WS 재할당 전 호출로 옛 경로 보존. */
     const nk = wsKey === "work" ? "personal" : "work";
-    resetSyncState(); /* ★전환 = 다른 blob → PATCH diff 기준선·sweptThrough 캐시 폐기(옛 워크스페이스 기준으로 새 blob 을 부분 write 하는 E2 클래스 사고 차단) */
+    resetSyncState(); /* ★전환 = 다른 blob → PATCH diff 기준선 폐기(옛 워크스페이스 기준으로 새 blob 을 부분 write 하는 E2 클래스 사고 차단) */
     try { localStorage.setItem("tm-workspace", nk); } catch {}
     WS = WORKSPACES[nk];
     setWsKey(nk);
