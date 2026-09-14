@@ -1234,7 +1234,7 @@ const MemoRow = ({ m, onEdit, onDelete }) => {
    ★새 항목 종류를 만들지 않는다: 「생각·개선안」은 그냥 **날짜 없는 할일**이고 이미 그렇게 쓰이고 있었다
      (실측 2026-09-14: 개인 날짜 없는 할일 23건 = 글감·링크·미뤄둔 작업). 오늘 탭에 안 뜨고 여기에만 있다.
    ★카드 머리 숫자는 **실제 수행**만 — 세션 n/목표. 생각이 쌓인 양은 성과가 아니다(소유자). */
-const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, isWork, setRecurrings, onUpdateRecurring, onAddSession, onRemoveSession, onAddMemo, onEditMemo, onDeleteMemo }) => {
+const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, isWork, setRecurrings, onUpdateRecurring, onAddSession, onRemoveSession, onAddMemo, onEditMemo, onDeleteMemo, onSetFocus }) => {
   const [open, setOpen] = useState(new Set(projects.filter(p => tasks.some(t => t.project === p.id && t.status !== "done")).map(p => p.id)));
   const [np, setNp] = useState("");
   const [memoMore, setMemoMore] = useState(new Set());  /* 메모 더보기 — 카드별 */
@@ -1264,6 +1264,8 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus
         <div style={S.ph(o)} onClick={() => tog(p.id)}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
             <span style={{ fontSize: 11, color: "#9ca3af" }}>{o ? "▼" : "▶"}</span>
+            <button style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "0 4px", border: "none", background: "none", color: p.focus ? "#F59E0B" : "#d1d5db" }}
+              onClick={e => { e.stopPropagation(); onSetFocus(p.id); }} title={p.focus ? "집중 해제" : "집중으로 — 루틴을 다 하고 남는 시간을 여기 쓴다"}>{p.focus ? "★" : "☆"}</button>
             <span style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</span>
             <span style={S.cnt(pt.length)}>{pt.length}</span>
             {sTgt > 0 && <span style={{ fontSize: 10, color: sDone >= sTgt ? "#059669" : "#4338CA", background: sDone >= sTgt ? "#ECFDF5" : "#EEF2FF", border: "1px solid " + (sDone >= sTgt ? "#A7F3D0" : "#C7D2FE"), padding: "0 5px", borderRadius: 6, fontWeight: 600, flexShrink: 0 }}
@@ -1318,7 +1320,7 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus
       </div>
     );
   };
-  const mainProjs = projects.filter(p => !isBucketProj(p)).sort((a, b) => projSortKey(a) - projSortKey(b)); /* 루틴(kind 또는 반복보유·isRoutineProj 자동도출) 먼저 그룹핑 = 드롭다운·회고탭과 한 규칙(2026-07-12). JS 안정정렬→같은 kind 내 기존순서 보존. 업무=무변경 */
+  const mainProjs = projects.filter(p => !isBucketProj(p)).sort((a, b) => (b.focus ? 1 : 0) - (a.focus ? 1 : 0) || projSortKey(a) - projSortKey(b)); /* ★집중이 맨 위 */ /* 루틴(kind 또는 반복보유·isRoutineProj 자동도출) 먼저 그룹핑 = 드롭다운·회고탭과 한 규칙(2026-07-12). JS 안정정렬→같은 kind 내 기존순서 보존. 업무=무변경 */
   const bucketProjs = projects.filter(p => isBucketProj(p));
   return (
     <div style={{ marginTop: 12 }}>
@@ -2331,6 +2333,12 @@ function App({ onSwitchWs }) {
     showT(it0 && it0.memoOnly ? "메모 복원됨 (카운트 변화 없음)" : "복원됨 — 카운트 +1", null);
   };
 
+  /* ★집중(2026-09-14 소유자 정의) — 「일반적인 루틴을 수행하고 남는 시간을 어디에 더 쓸지」다.
+     tier 를 올리는 것이 아니라 **추가 투입처**를 하나 고르는 것이라, 표시는 영역 카드의 별 하나면 된다.
+     루틴이든 프로젝트든 구분하지 않는다 — 시간은 하나의 통이다. 언제나 0개 또는 1개. */
+  const setFocusArea = (pid) => {
+    setProjects(prev => prev.map(p => p.id === pid ? { ...p, focus: !p.focus } : { ...p, focus: false }));
+  };
   const addProj = (name, kind = "project") => {
     const id = (kind === "bucket" ? "b_" : "p_") + gid();
     setProjects(p => [...p, { id, name, order: p.length, kind }]);
@@ -2400,8 +2408,8 @@ function App({ onSwitchWs }) {
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
         {tab === "today" && <><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} />{isWork && <RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} />}</>}
-        {tab === "areas" && <AreaView tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} isWork={isWork} setRecurrings={setRecurrings} onUpdateRecurring={updateRecurring} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemo={addAreaMemo} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} />}
-        {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} />}
+        {tab === "areas" && <AreaView tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} isWork={isWork} setRecurrings={setRecurrings} onUpdateRecurring={updateRecurring} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemo={addAreaMemo} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
+        {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
       </div>
       {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} isWork={isWork} />}
       {clearTarget && <ClearTodayModal task={clearTarget} onApply={(nd) => applyClearToday(clearTarget.id, nd)} onCancel={() => setClearTarget(null)} />}
