@@ -605,14 +605,14 @@ const normSavedAt = (v) => {
 
 /* ─── 초기 데이터 ─── */
 const INIT_PROJECTS = [
-  { id: "rag", name: "RAG", order: 0 },
-  { id: "accel", name: "가속라이브러리", order: 1 },
-  { id: "dokpamo", name: "독파모", order: 2 },
-  { id: "hakchuin", name: "학습추론인프라", order: 3 },
-  { id: "optcode", name: "최적화코드변환", order: 4 },
-  { id: "compiler", name: "컴파일러", order: 5 },
-  { id: "gpu", name: "GPU", order: 6 },
-  { id: "itrc", name: "ITRC", order: 7 },
+  { id: "rag", name: "RAG", order: 0, kind: "project" },
+  { id: "accel", name: "가속라이브러리", order: 1, kind: "project" },
+  { id: "dokpamo", name: "독파모", order: 2, kind: "project" },
+  { id: "hakchuin", name: "학습추론인프라", order: 3, kind: "project" },
+  { id: "optcode", name: "최적화코드변환", order: 4, kind: "project" },
+  { id: "compiler", name: "컴파일러", order: 5, kind: "project" },
+  { id: "gpu", name: "GPU", order: 6, kind: "project" },
+  { id: "itrc", name: "ITRC", order: 7, kind: "project" },
   { id: "proj_general", name: "과제 일반 업무", order: 8 },
   { id: "proj_etc", name: "기타 업무", order: 9 },
   /* develop 버킷(지식·교훈·글감) 폐지(2026-07-01, 소유자 결정 #3): 사람이 3칸 분류하지 않음 →
@@ -1810,9 +1810,9 @@ function App({ onSwitchWs }) {
   /* (2026-07-31) 첨부 파일 목록 state 제거 — 배선 폐지. 옛 백업/blob 의 해당 키는 읽지도 쓰지도 않는다(비파괴). */
   const [history, setHistory] = useState(saved?.history || []);
   const [recurrings, setRecurrings] = useState(saved?.recurrings || (isWork ? [
-    { id: gid(), dow: 5, text: "다운로드 폴더 정리", project: "proj_etc" },
-    { id: gid(), dow: 3, text: "위클리 작성", project: "proj_etc" },
-    { id: gid(), dow: 2, text: "영어공부 기사 확인", project: "proj_etc" },
+    { id: gid(), type: "weekly", dows: [5], text: "다운로드 폴더 정리", project: "proj_etc" },
+    { id: gid(), type: "weekly", dows: [3], text: "위클리 작성", project: "proj_etc" },
+    { id: gid(), type: "weekly", dows: [2], text: "영어공부 기사 확인", project: "proj_etc" },
   ] : []));
   /* "반복 붙은 프로젝트=루틴" 자동 도출 동기(2026-07-12): 매 렌더 recurrings에서 재계산해 모듈 집합에 반영(자식 렌더 前·동기). 새 영역에 반복 걸면 자동 루틴 — kind 수동관리·DB 직접쓰기 불필요.
      ★개인 워크스페이스 한정: 업무는 recurring이 proj_etc(기타)에 붙어 루틴 개념이 아님(도출하면 기타가 맨앞 오분류) → 업무는 빈 집합=정렬 무변경. */
@@ -2016,6 +2016,54 @@ function App({ onSwitchWs }) {
       setTasks(prev => prev.map(t => remap[t.project] ? { ...t, project: remap[t.project] } : t));
       setProjects(prev => prev.filter(p => !remap[p.id]));
     }
+  }, [cloudLoaded]); /* eslint-disable-line */
+
+  /* ★회고 백필(2026-09-15) — 메모(notes)와 회고(recap)를 가르면서, **영역 카드에 떠 있던 기존 글이
+     전부 사라지는 것**을 막는다. 옮기는 것은 「회고 자리에 적은 것」뿐이다:
+       · memoOnly = 영역 회고칸·「회고만」 버튼으로 적은 것
+       · recurringId = 세션 기록(＋)의 입력창으로 적은 것
+     둘 다 처음부터 회고 목적이었다. 일반 할일의 notes 는 **참조용일 수 있으므로 안 건드린다**
+     (그것이 이번 분리의 목적이다 — 그 글은 이제 그 태스크를 펼쳐야 보인다). */
+  const recapBackfillDone = useRef(false);
+  useEffect(() => {
+    if (!cloudLoaded || recapBackfillDone.current) return;
+    recapBackfillDone.current = true;
+    setHistory(prev => {
+      let ch = false;
+      const n = prev.map(h => ({ ...h, items: (h.items || []).map(it => {
+        const o = it.orig;
+        if (it.type !== "done" || !o) return it;
+        if (!(it.memoOnly || o.recurringId)) return it;
+        const note = (o.notes || "").trim();
+        if (!note || (o.recap || "").trim()) return it;
+        ch = true;
+        return { ...it, orig: { ...o, recap: note, notes: "" } };
+      }) }));
+      return ch ? n : prev;
+    });
+  }, [cloudLoaded]); /* eslint-disable-line */
+
+  /* ★업무 과제에 kind 를 채운다(2026-09-15) — 시드 10건에 kind 가 없어서 정렬키가 2 로 떨어졌고,
+     앱에서 나중에 추가한 과제(kind:"project" = 1)가 본 과제들보다 위로 올라와 있었다. */
+  const workKindDone = useRef(false);
+  useEffect(() => {
+    if (!isWork || !cloudLoaded || workKindDone.current) return;
+    workKindDone.current = true;
+    const KIND = {}; INIT_PROJECTS.forEach(p => { if (p.kind) KIND[p.id] = p.kind; });
+    setProjects(prev => { let ch = false; const n = prev.map(p => (!p.kind && KIND[p.id]) ? (ch = true, { ...p, kind: KIND[p.id] }) : p); return ch ? n : prev; });
+  }, [cloudLoaded]); /* eslint-disable-line */
+
+  /* ★업무 반복의 구형 포맷을 고친다(2026-09-15) — `dow` 만 있고 `type` 이 없는 항목이 남아 있다.
+     type 이 없으면 ① 주간 카운터(n/목표)가 안 뜨고 ② 세션 기록이 그 주 대기 인스턴스를 흡수하지 않아
+     오늘 할 일에 유령이 남는다(weekly 에 대해 2026-08-08 에 이미 고친 것과 같은 증상). */
+  const recTypeDone = useRef(false);
+  useEffect(() => {
+    if (!cloudLoaded || recTypeDone.current) return;
+    recTypeDone.current = true;
+    setRecurrings(prev => { let ch = false; const n = prev.map(r => {
+      if (r.type || r.dow == null) return r;
+      ch = true; const { dow, ...rest } = r; return { ...rest, type: "weekly", dows: [dow] };
+    }); return ch ? n : prev; });
   }, [cloudLoaded]); /* eslint-disable-line */
 
   /* 업무 develop 버킷 제거(2026-07-01, #3): 지식·교훈·글감 버킷 폐지 → 든 할일은 '기타 업무'(proj_etc)로 이전 후 버킷 삭제. */
@@ -2472,7 +2520,7 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} onReorder={reorderTask} />{isWork && <RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} />}</>}
+        {tab === "today" && <><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
         {tab === "areas" && <AreaView tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} isWork={isWork} setRecurrings={setRecurrings} onUpdateRecurring={updateRecurring} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemo={addAreaRecap} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
       </div>
