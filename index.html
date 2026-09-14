@@ -511,6 +511,12 @@ const PERSONAL_PROJECTS = [
   { id: "rt_writing", name: "글쓰기", order: 3, kind: "routine" },
   { id: "p_invest", name: "투자원칙 정립", order: 4, kind: "project" },
   { id: "p_workcap", name: "업무역량 시스템", order: 5, kind: "project" },
+  { id: "p_b464zvu", name: "PDS 시스템 개선", order: 6, kind: "project" },
+  /* ★kind:"system" — PDS 자체를 굴리는 것. **영역 탭에 카드를 세우지 않는다.**
+     주간 정제는 vault 폴더가 없는 유일한 반복이고(성과가 아니라 유지가 목적),
+     영역이 아닌데 영역 카드로 서 있었다. 만들고 고치는 자리는 **오늘 탭의 반복 설정**,
+     체크하는 자리는 오늘 탭 상단 스트립이다. */
+  { id: "p_sweep", name: "🗓️ 주간 정제", order: 7, kind: "system" },
   /* 버킷(약속·집안일·기타) 전면 폐지(2026-07-01, 소유자 지시): 개인=루틴/프로젝트만. bucketTrimDone가 버킷 프로젝트 + Track2 미러([t2-*]) 데이터를 제거. */
 ];
 const PERSONAL_BUCKET_IDS = [];
@@ -702,6 +708,7 @@ const StSel = ({ value, onChange, compact }) => (
   </select>
 );
 /* 드롭다운 정렬: 프로젝트 → 그 외(버킷) → 기타(petc) 맨끝. 업무(kind 없음)는 전부 동일군 → 원순서 유지(안정정렬) */
+const isSystemProj = (p) => !!p && p.kind === "system"; /* PDS 자체를 굴리는 것 — 영역 탭에 세우지 않는다 */
 const projSortKey = (p) => isRoutineProj(p) ? 0 : (p && p.kind === "project") ? 1 : (p && (p.id === "petc" || p.id === "proj_etc")) ? 3 : 2; /* 루틴(kind 또는 반복보유) 먼저 = isRoutineProj로 자동 도출 반영(2026-07-12) */
 const sortProjsForSelect = (projects) => [...(projects || [])].sort((a, b) => projSortKey(a) - projSortKey(b));
 const PrSel = ({ value, onChange, projects, highlight }) => (
@@ -1378,7 +1385,7 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus
       </div>
     );
   };
-  const mainProjs = projects.filter(p => !isBucketProj(p)).sort((a, b) => (b.focus ? 1 : 0) - (a.focus ? 1 : 0) || projSortKey(a) - projSortKey(b)); /* ★집중이 맨 위 */ /* 루틴(kind 또는 반복보유·isRoutineProj 자동도출) 먼저 그룹핑 = 드롭다운·회고탭과 한 규칙(2026-07-12). JS 안정정렬→같은 kind 내 기존순서 보존. 업무=무변경 */
+  const mainProjs = projects.filter(p => !isBucketProj(p) && !isSystemProj(p)).sort((a, b) => (b.focus ? 1 : 0) - (a.focus ? 1 : 0) || projSortKey(a) - projSortKey(b)); /* ★집중이 맨 위 */ /* 루틴(kind 또는 반복보유·isRoutineProj 자동도출) 먼저 그룹핑 = 드롭다운·회고탭과 한 규칙(2026-07-12). JS 안정정렬→같은 kind 내 기존순서 보존. 업무=무변경 */
   const bucketProjs = projects.filter(p => isBucketProj(p));
   return (
     <div style={{ marginTop: 12 }}>
@@ -1816,7 +1823,8 @@ function App({ onSwitchWs }) {
   ] : []));
   /* "반복 붙은 프로젝트=루틴" 자동 도출 동기(2026-07-12): 매 렌더 recurrings에서 재계산해 모듈 집합에 반영(자식 렌더 前·동기). 새 영역에 반복 걸면 자동 루틴 — kind 수동관리·DB 직접쓰기 불필요.
      ★개인 워크스페이스 한정: 업무는 recurring이 proj_etc(기타)에 붙어 루틴 개념이 아님(도출하면 기타가 맨앞 오분류) → 업무는 빈 집합=정렬 무변경. */
-  ROUTINE_REC_PROJ_IDS = isWork ? new Set() : new Set((recurrings || []).filter(r => !r.disabled && r.project).map(r => r.project));
+  const SYS_PROJ_IDS = new Set((projects || []).filter(isSystemProj).map(p => p.id));
+  ROUTINE_REC_PROJ_IDS = isWork ? new Set() : new Set((recurrings || []).filter(r => !r.disabled && r.project && !SYS_PROJ_IDS.has(r.project)).map(r => r.project));
   const [editTarget, setEditTarget] = useState(null);
   const [clearTarget, setClearTarget] = useState(null); /* 오늘에서 내리기 얼럿 대상(2026-07-04) */
   const [toast, setToast] = useState(null);
@@ -2041,6 +2049,17 @@ function App({ onSwitchWs }) {
       }) }));
       return ch ? n : prev;
     });
+  }, [cloudLoaded]); /* eslint-disable-line */
+
+  /* ★개인 영역의 kind 를 시드와 맞춘다(2026-09-15) — 앱에서 만든 영역에는 kind 가 안 붙어 있다.
+     특히 「🗓️ 주간 정제」(p_sweep)는 kind:"system" 이어야 영역 탭에서 내려간다.
+     그 반복은 영역에 속한 것이 아니라 PDS 자체를 굴리는 것이고, 오늘 탭에서 만들고 고친다. */
+  const personalKindDone = useRef(false);
+  useEffect(() => {
+    if (isWork || !cloudLoaded || personalKindDone.current) return;
+    personalKindDone.current = true;
+    const KIND = {}; PERSONAL_PROJECTS.forEach(p => { if (p.kind) KIND[p.id] = p.kind; });
+    setProjects(prev => { let ch = false; const n = prev.map(p => (KIND[p.id] && p.kind !== KIND[p.id]) ? (ch = true, { ...p, kind: KIND[p.id] }) : p); return ch ? n : prev; });
   }, [cloudLoaded]); /* eslint-disable-line */
 
   /* ★업무 과제에 kind 를 채운다(2026-09-15) — 시드 10건에 kind 가 없어서 정렬키가 2 로 떨어졌고,
