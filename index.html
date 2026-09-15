@@ -454,11 +454,22 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
   const newTasks = [];
   recurrings.forEach(r => {
     if (r.disabled) return; /* ★M5: 삭제 표식된 시드 루틴은 인스턴스 생성 안 함 */
-    /* ★weekly 복원(2026-09-12 소유자 결정): 캘린더를 걷으면서 당일 글랜스가 사라져, 그 요일 당일에만 인스턴스를 만들던 2026-08-02b 동작으로 되돌린다. 주간 그림은 루틴 탭 스트립이 따로 갖는다 — 다른 탭이라 "한 화면에 두 자리" 문제가 아니다. */
-    if (r.type === "count" || COUNT_MIG_IDS.has(r.id)) return; /* 주N회(count)만 제외 — 오늘 할 일에 인스턴스를 안 만들고 스트립 카운터(＋/−)에서만 센다. id-스킵=전환 tick 레이스 방지 */
+    /* ★weekly: 그 요일 당일에만 인스턴스를 만든다(2026-09-12 소유자 결정 — 캘린더를 걷으면서 당일 글랜스가 사라졌다). */
+    /* ★주N회(count)도 오늘 할 일에 띄운다(2026-09-15 소유자 「오늘 탭에 안 떠 있으니 체크 안 하게 될 것 같다」).
+       구 동작은 인스턴스를 아예 안 만들고 주간 스트립에만 맡겼는데, 그 스트립은 루틴 탭을 영역 카드로 합칠 때
+       호출부가 사라져 **체크할 자리가 앱 전체에서 영역 카드 하나로 줄었다**(카드는 기본 접힘).
+       새 규칙: **이번 주 목표를 채우기 전까지 한 줄이 떠 있고, 하나 끝내면 다음 한 줄이 뜬다.**
+       요일 무관으로 만든 루틴에 요일을 발명하지 않는다 — 권장 요일(dows)은 표시용으로만 남는다.
+       ★회차키 = `주-n<이번 주 완료수>`. 날짜가 아니라 회차라서 **하루에 하나만 쌓이지 않고**,
+         그 주 안에는 날이 바뀌어도 같은 줄이 그대로 떠 있다(아래 isStaleRoutine 이 그 주를 살려 둔다).
+         안 그러면 주 5루틴 × 7일 = 주 35개가 쌓인다. */
     const type = r.type || "weekly";
+    const isCount = type === "count" || COUNT_MIG_IDS.has(r.id);
+    if (isCount && weekDoneCount(routineDoneSet(tasks, history), r.id, weekId) >= (r.freqPerWeek || 1)) return;
     let period; let effTime = r.time || ""; /* ★effTime: 회차 override 시각 반영(2026-07-13) */
-    if (type === "daily") {
+    if (isCount) {
+      period = weekId + "-n" + weekDoneCount(routineDoneSet(tasks, history), r.id, weekId); /* 그 주 몇 번째 회차인가 */
+    } else if (type === "daily") {
       period = TODAY;
     } else if (type === "weekly") {
       const days = r.dows || (r.dow != null ? [r.dow] : []); /* 복수 요일(dows) 지원 · 기존 dow 폴백(2026-07-04) */
@@ -515,7 +526,7 @@ const PERSONAL_PROJECTS = [
   /* ★kind:"system" — PDS 자체를 굴리는 것. **영역 탭에 카드를 세우지 않는다.**
      주간 정제는 vault 폴더가 없는 유일한 반복이고(성과가 아니라 유지가 목적),
      영역이 아닌데 영역 카드로 서 있었다. 만들고 고치는 자리는 **오늘 탭의 반복 설정**,
-     체크하는 자리는 오늘 탭 상단 스트립이다. */
+     체크하는 자리는 **오늘 할 일 목록**이다(weekly 라 그 요일에 뜬다). */
   { id: "p_sweep", name: "🗓️ 주간 정제", order: 7, kind: "system" },
   /* 버킷(약속·집안일·기타) 전면 폐지(2026-07-01, 소유자 지시): 개인=루틴/프로젝트만. bucketTrimDone가 버킷 프로젝트 + Track2 미러([t2-*]) 데이터를 제거. */
 ];
@@ -529,7 +540,13 @@ const isBucketProj = (p) => p && (p.kind === "bucket" || PERSONAL_BUCKET_IDS.inc
 const isRoutineProj = (p) => p && (p.kind === "routine" || ROUTINE_PROJ_IDS.includes(p.id) || ROUTINE_REC_PROJ_IDS.has(p.id));
 /* 지난 미완료 daily 루틴 인스턴스 = '오늘'·'미수행' 목록서 제외(2026-06-28). 루틴은 매일 새 인스턴스가 생성돼
    오늘 것만 의미가 있고, 어제 미완료분은 계속 쌓이므로 nagging 대상서 뺀다(데이터는 보존, 과제별·회고에선 보임). */
-const isStaleRoutine = (t) => !!(t && t.recurringId && t.planDate && t.planDate < TODAY);
+/* 지난 회차의 루틴 인스턴스는 오늘 목록에서 내린다 — 어제 못 한 것이 오늘 쌓이면 목록이 못 쓰게 된다.
+   ★단 주N회(count)는 **그 주가 지나야** 내린다(2026-09-15): 주 단위 목표라 화요일에 못 했다고
+   이번 주 회차가 사라지면 안 된다. 회차키가 `그 주-n…` 이면 아직 이번 주 것이다. */
+const isStaleRoutine = (t) => {
+  if (!(t && t.recurringId && t.planDate && t.planDate < TODAY)) return false;
+  return (t.recurringPeriod || "").indexOf(getWeekId() + "-n") !== 0;
+};
 /* B2: 루틴 4종 = 매일 daily 반복 할일, 각자 영역 프로젝트(project=id) 소속. recurringId로 /sweep이 영역 일지 매핑. 메모=task.notes(전날 상속). */
 const PERSONAL_ROUTINES = [
   { id: "rt_workout", type: "daily", text: "🏋️ 운동", project: "rt_workout" },
@@ -1605,7 +1622,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
       </div>
       {show && <div style={{ ...S.card, marginTop: 4 }}>
         {recurrings.length === 0 && <div style={{ ...S.emp, padding: 12 }}>설정된 반복 태스크가 없습니다</div>}
-        {/* ★설정 목록도 영역끼리 묶는다(2026-08-11) — 스트립과 같은 순서로 보이게. 배열(=만든 순서)에서는
+        {/* ★설정 목록도 영역끼리 묶는다(2026-08-11) — 영역 카드와 같은 순서로 보이게. 배열(=만든 순서)에서는
             링글이 맨 앞, 영어 스피킹이 뒤쪽이라 같은 영역이 갈려 있었다. **렌더 순서만** 바꾸며 데이터는 안 건드린다. */}
         {recurrings.filter(r => !r.disabled)
           .map((r, i) => ({ r, i, a: (() => { const k = (projects || []).findIndex(p => p && p.id === r.project); return k < 0 ? 999 : k; })() }))
@@ -1654,11 +1671,11 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
 /* ─── 주N회 루틴(2026-07-07): 지정 요일이 유동적인 루틴(예: 보컬 월·수·토)을 '이번 주 N회 목표'로 추적.
    목표=freqPerWeek 우선, 없으면 지정 요일 수(dows.length). 완료수=이번 주 done 회차(옮긴 날·➕추가 세션 포함).
    현재 구조 유지: 요일별 예정 인스턴스는 그대로, 위에 '주 N회' 카운트 층만 얹음. ─── */
-/* ★2026-08-02: weekly(특정일) 도 스트립 대상으로 편입. 목표=1(불변식 I2가 weekly=요일 1개를 강제).
-   왜: weekly 는 그 요일 당일 '오늘 할 일'에만 뜨고 다음날 isStaleRoutine 으로 사라진다 →
-   그날 앱을 안 열면 그 주 회차를 영영 못 누른다. 실측 사고: 링글은 매주 수강했는데 앱 기록은 2주치가 비었고,
-   주간 정제는 vault 일지 3회 vs 앱 1회였다. 스트립이 곧 소급 체크 자리다. */
-const routineWeekTarget = (r) => r.type === "count" ? (r.freqPerWeek || 1) : r.type === "weekly" ? 1 : 0; /* 매일·매월은 0=스트립 제외 */
+/* 주간 목표 = 그 주에 몇 회를 채워야 하나. weekly 는 1, 주N회는 freqPerWeek, 매일·매월은 0(주 단위가 아니다).
+   영역 카드의 `n/목표` 와 ＋/− 가 이 값을 쓴다.
+   ⚠ weekly 는 여전히 **그 요일 당일에만** 오늘 목록에 뜨고 다음날 사라진다 — 그날 앱을 안 열면 그 주 회차를
+     못 누른다(실측 사고: 링글은 매주 수강했는데 앱 기록이 2주치 비었다). 소급 체크 자리는 영역 카드의 ＋ 다. */
+const routineWeekTarget = (r) => r.type === "count" ? (r.freqPerWeek || 1) : r.type === "weekly" ? 1 : 0;
 const routineDoneSet = (tasks, history) => { const s = new Set();
   (tasks || []).forEach(t => { if (t.recurringId && t.status === "done" && !t.cancelled) s.add(t.recurringId + "|" + (t.recurringPeriod || t.planDate)); });
   (history || []).forEach(day => (day.items || []).forEach(it => { if (it.type === "done" && !it.cancelled && !it.memoOnly && it.orig && it.orig.recurringId) s.add(it.orig.recurringId + "|" + (it.orig.recurringPeriod || day.date)); })); /* ★취소(cancelled)=카운트 제외(2026-07-07·B안). ★memoOnly=📝메모만(카운트 무관·2026-07-08)도 제외 */
@@ -1686,126 +1703,6 @@ const areaRecaps = (projectId, recurrings, history) => {
   }));
   items.sort((a, b) => b.date.localeCompare(a.date)); /* 최신 위로(2026-07-25 소유자) */
   return { items };
-};
-/* 오늘 탭 상단 — 주N회 루틴 '이번 주 N/목표' + ＋(세션 기록+메모)/−(최근 1건 취소).
-   요일 무관 주간 카운트: 옮겨 간 날·예정 외·지난 날 = 전부 ＋로 +1. ＋ 누르면 메모 입력창(선택)이 열림 → 발견을 적으면 그 영역 메모에 누적되고 루틴 탭 영역 카드에서 보인다. */
-const WeeklyRoutineStrip = ({ recurrings, projects, tasks, history, onAddSession, onRemoveSession, onAddMemoOnly }) => {
-  const wk = getWeekId();
-  const [memoFor, setMemoFor] = useState(null);
-  const [memoText, setMemoText] = useState("");
-  const orderRef = useRef({ wk: "", ids: null }); /* 표시 순서 고정(아래 rankCmp 주석) — 조기 return 위에 둬야 훅 순서가 안 깨진다 */
-  /* ★한 번에 한 군데만(2026-08-02b · 소유자 지적 "매일 할일로 뜨는 것도 있고 상단에 체크하는 것도 있고 헷갈린다"):
-     count 루틴은 L610 에서 '오늘 할 일' 인스턴스를 아예 안 만들어 **스트립 한 군데**에만 뜬다.
-     weekly 는 인스턴스를 만들므로 스트립에 넣으면 **양쪽에 뜬다** → 그 요일 당일 미완료인 동안만 스트립에서 숨긴다.
-       · 그 요일 당일 · 미완료 → '오늘 할 일'에만(예약 시각이 보여야 하는 자리)
-       · 그 날이 지나 미완료  → 스트립에만(= 소급 체크 자리. 옛 동작에선 여기서 영영 사라졌다)
-       · 완료                → 스트립에 ✓ (인스턴스는 완료로 흡수돼 사라진다)
-     ※ 어느 쪽에서 체크해도 같은 회차키(wk)를 쓰므로 두 자리는 항상 같은 값을 본다. */
-  /* ⛔ onTodayList 숨김 폐지(2026-08-29): weekly 가 '오늘 할 일' 인스턴스를 더 이상 만들지 않으므로(L610)
-     양쪽에 뜰 일이 없다 → 숨길 이유도 사라졌다. **항상 스트립에 뜬다** = 그 주 그림이 요일과 무관하게 온전하다. */
-  const pool = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) > 0); /* count + weekly */
-  if (!pool.length) return null;
-  const doneSet = routineDoneSet(tasks, history);
-  /* ★정렬(2026-08-02b): **할 게 남은 것이 앞으로.** 배열 순서(=만든 순서)는 아무 뜻이 없어서
-     자주 놓치는 짧은 루틴이 줄 끝에 묻혔다. ① 미달 먼저 ② 부족분 큰 순 ③ 이른 시각 순 ④ 채운 것은 뒤로. */
-  /* ★순서 고정(2026-08-09 소유자 "하나 체크하면 정렬이 뒤로 밀려 불편"): 위 정렬의 값은 **화면을 열었을 때**
-     할 게 남은 것이 위에 보이는 것인데, 매 렌더 재정렬하면 ＋를 누르는 순간 그 항목이 **손가락 밑에서 이동**한다
-     (연속 체크 시 오조작 + 방금 누른 게 어디 갔는지 눈으로 다시 찾아야 함).
-     → 순서는 **열릴 때 한 번** 정하고 그 뒤 체크로는 바꾸지 않는다. 주가 바뀌거나 탭을 다시 열면 새로 정렬된다.
-     정렬 기준 자체(미달 먼저 · 부족분 큰 순 · 이른 시각)는 2026-08-06 그대로 — 언제 적용하느냐만 바꿨다. */
-  const rankCmp = (a, b) => {
-    const la = routineWeekTarget(a) - weekDoneCount(doneSet, a.id, wk);
-    const lb = routineWeekTarget(b) - weekDoneCount(doneSet, b.id, wk);
-    if ((la > 0) !== (lb > 0)) return la > 0 ? -1 : 1;   /* 미달을 앞으로 */
-    if (la !== lb) return lb - la;                        /* 많이 남은 것을 앞으로 */
-    return (a.time || "99:99").localeCompare(b.time || "99:99");
-  };
-  /* ★같은 영역끼리 붙여 놓기(2026-08-11 소유자 "보컬 연습과 보컬 레슨은 붙어있어야 보기 편하다").
-     묶음 키 = 루틴의 `project`(=영역) — 영어(링글·스피킹) · 보컬(연습·레슨) · 운동(F45·헬스) 가 각각 한 덩어리가 된다.
-     영역 순서 = **그 영역에 남은 부족분 합계가 큰 쪽 먼저**. 2026-08-06 의 '할 게 남은 것을 앞으로' 를
-     항목 단위에서 **영역 단위로 올린 것**이고, 항목 사이 순서는 그 안에서 rankCmp 가 그대로 맡는다.
-     동률이면 앱 과제 목록(projects 배열) 순서를 따라 주마다 자리가 흔들리지 않게 한다. */
-  const areaIdx = (r) => { const i = (projects || []).findIndex(p => p && p.id === r.project); return i < 0 ? 999 : i; };
-  const buildOrder = () => {
-    const groups = new Map();
-    pool.forEach(r => { const k = r.project || "_none"; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
-    return Array.from(groups.values())
-      .map(g => ({
-        list: g.slice().sort(rankCmp),
-        left: g.reduce((n, r) => n + Math.max(0, routineWeekTarget(r) - weekDoneCount(doneSet, r.id, wk)), 0),
-        idx:  areaIdx(g[0]),
-      }))
-      .sort((x, y) => (y.left - x.left) || (x.idx - y.idx))
-      .reduce((acc, x) => acc.concat(x.list.map(r => r.id)), []);
-  };
-  if (orderRef.current.wk !== wk) orderRef.current = { wk, ids: null };            /* 주가 바뀌면 재정렬 */
-  if (!orderRef.current.ids) orderRef.current.ids = buildOrder();
-  const frozen = orderRef.current.ids;
-  const items = pool.slice().sort((a, b) => {
-    const ia = frozen.indexOf(a.id), ib = frozen.indexOf(b.id);
-    if (ia < 0 && ib < 0) return rankCmp(a, b);  /* 둘 다 고정 목록에 없음(그 사이 새로 나타남) */
-    if (ia < 0) return 1;                         /* 새로 나타난 것은 끝에 붙인다 — 기존 순서를 밀지 않는다 */
-    if (ib < 0) return -1;
-    return ia - ib;
-  });
-  const submit = (rid) => { onAddSession(rid, memoText); setMemoFor(null); setMemoText(""); };
-  const submitMemo = (rid) => { onAddMemoOnly(rid, memoText); setMemoFor(null); setMemoText(""); }; /* 📝 카운트 없이 메모만(2026-07-08) */
-  const cancel = () => { setMemoFor(null); setMemoText(""); };
-  const active = items.find(r => r.id === memoFor);
-  return (
-    <div style={{ ...S.card, marginTop: 8, display: "flex", flexDirection: "column", alignItems: "stretch", gap: 6, padding: "8px 10px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", flexShrink: 0 }}>🔁 이번 주</span>
-        {items.map(r => { const tgt = routineWeekTarget(r); const n = weekDoneCount(doneSet, r.id, wk); const hit = n >= tgt; const on = memoFor === r.id;
-          return (
-            <span key={r.id} style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 12, background: hit ? "#ECFDF5" : "#FFFBEB", border: "1px solid " + (on ? "#6366F1" : hit ? "#A7F3D0" : "#FDE68A"), borderRadius: 14, padding: "2px 4px 2px 9px" }}>
-              <span style={{ maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.text}</span>
-              {n > 0 && <button onClick={() => onRemoveSession(r.id)} title="이번 주 최근 완료 1건 취소(잘못 체크 정정)" style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "1px 6px", borderRadius: 10, color: "#DC2626" }}>−</button>}
-              <b style={{ color: hit ? "#059669" : "#D97706" }}>{n}/{tgt}</b>
-              <button onClick={() => (on ? cancel() : (setMemoText(""), setMemoFor(r.id)))} title="했음 기록: 누르면 회고(선택) 입력창이 열립니다" style={{ ...S.gh, fontSize: 12, lineHeight: 1, padding: "1px 6px", borderRadius: 10, color: on ? "#4338CA" : "#059669", fontWeight: on ? 700 : 400 }}>＋</button>
-            </span>
-          );
-        })}
-      </div>
-      {active && <div style={{ display: "flex", alignItems: "flex-start", gap: 6, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 11, color: "#4338CA", flexShrink: 0, marginTop: 5 }}>{active.text} 기록</span>
-        <textarea autoFocus value={memoText} onChange={e => setMemoText(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(active.id); } if (e.key === "Escape") cancel(); }}
-          rows={Math.min(8, (memoText.match(/\n/g) || []).length + 1)}
-          placeholder="이번 회차 회고(선택·여러 줄). 같은 영역의 다음 회차에서 보입니다. Ctrl+Enter=기록 / [기록+1]=세션 카운트 / [🪞 회고만]=카운트 없이 회고만" style={{ ...S.ta, fontSize: 12, flex: 1, minWidth: 180, minHeight: 0, resize: "vertical" }} />
-        <button style={{ ...S.btn("#4338CA"), fontSize: 11, marginTop: 2 }} onClick={() => submit(active.id)} title="세션 1건 기록(카운트 +1) + 회고">기록 +1</button>
-        <button style={{ ...S.gh, fontSize: 11, marginTop: 2, color: "#4338CA", borderColor: "#C7D2FE" }} onClick={() => submitMemo(active.id)} title="카운트 없이 회고만 저장합니다(레슨만 받은 날 등). 영역 카드에 모입니다">🪞 회고만</button>
-        <button style={{ ...S.gh, fontSize: 11, marginTop: 2 }} onClick={cancel}>취소</button>
-      </div>}
-    </div>
-  );
-};
-/* 회고 탭 — 주N회 루틴의 주별 완료수 히스토리(뒤돌아보기, 지난 4주) */
-const WeeklyRoutineHistory = ({ recurrings, tasks, history }) => {
-  const [open, setOpen] = useState(false);
-  const items = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) > 0); /* count + weekly (2026-08-02) */
-  if (!items.length) return null;
-  const doneSet = routineDoneSet(tasks, history);
-  const base = new Date(TODAY + "T00:00:00").getTime();
-  const weeks = [];
-  for (let i = 0; i < 4; i++) { const d = new Date(base - i * 7 * 86400000); weeks.push({ wk: weekIdOf(d), label: i === 0 ? "이번주" : i === 1 ? "지난주" : i + "주전" }); }
-  return (
-    <div style={{ marginTop: 12 }}>
-      <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setOpen(!open)}>{open ? "▼" : "▶"} 🔁 주간 루틴 (주N회)</div>
-      {open && <div style={{ ...S.card, marginTop: 4, overflowX: "auto" }}>
-        {items.map(r => (
-          <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 12 }}>
-            <span style={{ width: 100, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.text}</span>
-            {weeks.map(w => { const tgt = routineWeekTarget(r); const n = weekDoneCount(doneSet, r.id, w.wk); const hit = n >= tgt;
-              return <span key={w.wk} style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", minWidth: 46, flexShrink: 0 }}>
-                <b style={{ color: hit ? "#059669" : "#9ca3af" }}>{n}/{tgt}</b><span style={{ fontSize: 9, color: "#9ca3af" }}>{w.label}</span></span>;
-            })}
-          </div>
-        ))}
-        <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 6 }}>목표=지정 요일 수(옮긴 날·➕추가 세션 포함). 이번 주 진행·➕는 이 탭 맨 위 스트립에서.</div>
-      </div>}
-    </div>
-  );
 };
 function App({ onSwitchWs }) {
   const isWork = WS.key === "work";
@@ -2026,6 +1923,19 @@ function App({ onSwitchWs }) {
     }
   }, [cloudLoaded]); /* eslint-disable-line */
 
+  /* ★지난 회차 루틴 인스턴스 청소(2026-09-15) — 화면에서 내려간 뒤에도 tasks[] 에 계속 쌓인다.
+     주N회를 오늘 목록에 띄우면서 적체 속도가 올라가므로 여기서 걷는다.
+     ⛔ **메모가 있으면 남긴다** — 그 회차에 적어 둔 것을 지우는 셈이 된다. 빈 것만 지운다. */
+  const stalePruneDone = useRef(false);
+  useEffect(() => {
+    if (!cloudLoaded || stalePruneDone.current) return;
+    stalePruneDone.current = true;
+    setTasks(prev => {
+      const n = prev.filter(t => !(isStaleRoutine(t) && t.status !== "done" && !(t.notes || "").trim() && !(t.recap || "").trim() && !(t.subtasks || []).length));
+      return n.length === prev.length ? prev : n;
+    });
+  }, [cloudLoaded]); /* eslint-disable-line */
+
   /* ★회고 백필(2026-09-15) — 메모(notes)와 회고(recap)를 가르면서, **영역 카드에 떠 있던 기존 글이
      전부 사라지는 것**을 막는다. 옮기는 것은 「회고 자리에 적은 것」뿐이다:
        · memoOnly = 영역 회고칸·「회고만」 버튼으로 적은 것
@@ -2216,7 +2126,7 @@ function App({ onSwitchWs }) {
     const isWeekly = rec.type === "weekly";
     /* ★weekly 초과 기록 허용(2026-08-08 소유자 지시 — "레슨·링글도 다른 것들과 똑같이 초과 등록되게").
        규칙: **그 주 첫 회차만 정규키(wk), 2회차부터는 고유키(wk-x…)**.
-       · 첫 회차가 정규키인 이유 = 그 주 예정 인스턴스와 같은 키여야 두 표시자리(오늘 할 일 / 주간 스트립)가
+       · 첫 회차가 정규키인 이유 = 그 주 예정 인스턴스와 같은 키여야 두 표시자리(오늘 할 일 / 영역 카드 ＋)가
          같은 회차를 가리켜 **한 세션이 2회로 잡히지 않는다**. 이것이 2026-08-02 가드의 실제 목적이었고 그대로 보존한다.
        · 2회차부터 고유키인 이유 = routineDoneSet 이 Set 이라 같은 키는 합쳐져 **아무리 눌러도 1** 이었다(이번 지시의 증상).
        · 이중계상 경로가 안 생기는 근거 = 2회차를 누르는 시점엔 그 주 정규 인스턴스가 이미 완료로 흡수돼(아래 pend) tasks[]에 없다.
@@ -2224,7 +2134,10 @@ function App({ onSwitchWs }) {
     const already = weekDoneCount(routineDoneSet(tasks, history), rid, wk);
     const period = (isWeekly && already === 0) ? wk : wk + "-x" + gid(); /* count: 고유 회차키 → 연타 언더카운트 레이스 없음(적대검증 C1b) */
     /* 그 주 대기 인스턴스가 있으면 그것을 완료로 흡수한다 — 안 그러면 tasks[] 에 유령으로 남는다(실측: 링글 rdbvi29 가 그렇게 열린 채였다). */
-    const pend = isWeekly ? (tasks || []).find(t => t.recurringId === rid && (t.recurringPeriod || "") === wk && t.status !== "done" && !t.cancelled) : null;
+    /* 그 주 대기 인스턴스를 완료로 흡수한다. weekly 는 정규키(wk), count 는 오늘치(`wk-d오늘`)를 찾는다.
+       흡수하지 않으면 ＋ 로 센 회차와 오늘 할 일에 남은 줄이 각각 세어져 **한 세션이 2회**가 된다. */
+    const pend = (tasks || []).find(t => t.recurringId === rid && t.status !== "done" && !t.cancelled &&
+      (isWeekly ? (t.recurringPeriod || "") === wk : (t.recurringPeriod || "").indexOf(wk + "-n") === 0)) || null;
     const proj = projects.find(p => p.id === rec.project);
     const memoTrim = (memo || "").trim();
     const orig = pend
@@ -2274,18 +2187,6 @@ function App({ onSwitchWs }) {
       return [...prev, { date: TODAY, items: [item] }];
     });
     showT("회고 저장 ✅", null);
-  };
-  const addRoutineMemo = (rid, memo) => {
-    const rec = recurrings.find(r => r.id === rid); if (!rec) return;
-    const memoTrim = (memo || "").trim();
-    if (!memoTrim) { showT("회고를 입력하세요(빈 칸은 저장하지 않습니다)", null); return; }
-    const wk = getWeekId();
-    const period = wk + "-m" + gid(); /* 메모전용 회차키(카운트 로직과 안 겹침) */
-    const proj = projects.find(p => p.id === rec.project);
-    const orig = { id: gid(), text: rec.text, status: "done", project: rec.project || "proj_etc", recurringId: rid, recurringPeriod: period, recap: memoTrim, planDate: TODAY, planTime: rec.time || "", protocol: rec.protocol || "", createdAt: TODAY, subtasks: [] };
-    setHistory(prev => { const item = { type: "done", memoOnly: true, text: orig.text, projectName: proj ? proj.name : "", project: orig.project, orig, time: nowTime() };
-      const ex = prev.find(h => h.date === TODAY); if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, item] } : h); return [...prev, { date: TODAY, items: [item] }]; });
-    showT("\"" + rec.text + "\" 회고 저장 ✅ (카운트 변화 없음)", null);
   };
   /* 완료 메모 삭제(2026-07-25 통일 → 같은 날 **전 완료항목으로 확장**·소유자: 업무·개인 공통):
      memoOnly=항목 취소 / done-with-memo=메모만 클리어(루틴이면 ★수행 카운트 유지).
