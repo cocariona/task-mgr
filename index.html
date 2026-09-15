@@ -636,6 +636,10 @@ const INIT_PROJECTS = [
   { id: "compiler", name: "컴파일러", order: 5, kind: "project" },
   { id: "gpu", name: "GPU", order: 6, kind: "project" },
   { id: "itrc", name: "ITRC", order: 7, kind: "project" },
+  /* ★판단 발신(2026-09-15) — 업무 루틴의 본체다. 「기타 업무」에 두면 그 회고가 기타 카드에 쌓여
+     다음 회차 전에 지난 3분법을 볼 자리가 없다. vault `1. Routine/2026.06 ~ 업무 판단 발신 (정부과제 PM)` 과 1:1.
+     kind:"routine" 이라 과제 목록 맨 위에 선다(업무는 반복→루틴 자동도출을 안 쓴다). */
+  { id: "p_judge", name: "판단 발신", order: -1, kind: "routine" },
   { id: "proj_general", name: "과제 일반 업무", order: 8 },
   { id: "proj_etc", name: "기타 업무", order: 9 },
   /* develop 버킷(지식·교훈·글감) 폐지(2026-07-01, 소유자 결정 #3): 사람이 3칸 분류하지 않음 →
@@ -1562,7 +1566,7 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate, weekDone, weekTarget, o
       <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
         <span style={{ background: "#EEF2FF", color: "#4338CA", fontWeight: 700, fontSize: 12, padding: "2px 8px", borderRadius: 6, flexShrink: 0 }}>{label}{r.time ? ` ${r.time}` : ""}</span>
         <span style={{ flex: 1 }}>{r.text}</span>
-        {weekTarget > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: weekDone >= weekTarget ? "#059669" : "#9ca3af", flexShrink: 0 }}>{weekDone}/{weekTarget}</span>}
+        {weekTarget > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: weekDone > weekTarget ? "#4338CA" : weekDone >= weekTarget ? "#059669" : "#9ca3af", flexShrink: 0 }} title={weekDone > weekTarget ? "목표보다 " + (weekDone - weekTarget) + "회 더 했다" : ""}>{weekDone}/{weekTarget}</span>}
         {onAddSession && <button style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "0 6px", color: "#059669" }} onClick={() => onAddSession(r.id, "")} title="이번 회차 완료로 기록">＋</button>}
         {onRemoveSession && weekDone > 0 && <button style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "0 6px", color: "#EF4444" }} onClick={() => onRemoveSession(r.id)} title="이번 주 최근 1건 취소">−</button>}
         <button style={{ ...S.gh, fontSize: 10, background: open ? "#EEF2FF" : "#fff" }} onClick={() => setOpen(!open)} title="편집(이름·시간·요일·과제·실행방법)">✏️{r.protocol ? "📋" : ""}</button>
@@ -1590,7 +1594,11 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate, weekDone, weekTarget, o
   );
 };
 /* ═══ 반복 태스크 설정 ═══ */
-const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurring }) => {
+/* 오늘 탭 하단 — 반복을 만들고 고치는 자리이자 **이번 주 진행을 보고 초과를 기록하는 자리**다.
+   오늘 할 일에는 「아직 안 채운 회차」만 뜬다(목표를 채우면 사라진다). 그런데 목표보다 더 할 수도 있고,
+   지난 날 것을 소급해 체크할 수도 있다. 그 자리가 영역 카드 하나뿐이면 접힌 카드를 열어야 한다.
+   ★여기 ＋/− 와 오늘 할 일의 체크는 **같은 회차키**를 쓰므로 한 세션이 2회로 잡히지 않는다. */
+const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurring, tasks, history, onAddSession, onRemoveSession }) => {
   const [show, setShow] = useState(false);
   const [nt, setNt] = useState(""); const [ndows, setNdows] = useState([]); const [np, setNp] = useState("proj_etc");
   const [rType, setRType] = useState("count"); const [dom, setDom] = useState(1); const [lastDay, setLastDay] = useState(false);
@@ -1614,11 +1622,18 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
   };
   /* ★M5: 시드 루틴은 제거 대신 disabled 표식(재시드 부활 방지). 사용자 생성 반복은 완전 제거. */
   const delR = (id) => { setRecurrings(p => SEED_ROUTINE_IDS.has(id) ? p.map(r => r.id === id ? { ...r, disabled: true } : r) : p.filter(r => r.id !== id)); }; /* 삭제/비활성 시 미래 placeholder 고아 제거(2026-07-06) */
+  const wkNow = getWeekId();
+  const doneSet = routineDoneSet(tasks, history);
+  /* 접힌 채로도 이번 주 그림이 보이게 한다 — 안 그러면 「다 했나」를 알려고 매번 펼쳐야 한다 */
+  const wk = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) > 0)
+    .reduce((a, r) => ({ done: a.done + weekDoneCount(doneSet, r.id, wkNow), tgt: a.tgt + routineWeekTarget(r) }), { done: 0, tgt: 0 });
   return (
     <div style={{ marginTop: 16 }}>
       <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setShow(!show)}>
-        {show ? "▼" : "▶"} 🔁 반복 태스크 설정
-        <span style={S.cnt(recurrings.length)}>{recurrings.length}</span>
+        {show ? "▼" : "▶"} 🔁 반복 — 이번 주 진행·설정
+        {wk.tgt > 0 && <span style={{ fontSize: 11, fontWeight: 700, marginLeft: 6, padding: "1px 6px", borderRadius: 6,
+          color: wk.done >= wk.tgt ? "#059669" : "#4338CA", background: wk.done >= wk.tgt ? "#ECFDF5" : "#EEF2FF",
+          border: "1px solid " + (wk.done >= wk.tgt ? "#A7F3D0" : "#C7D2FE") }}>{wk.done}/{wk.tgt}</span>}
       </div>
       {show && <div style={{ ...S.card, marginTop: 4 }}>
         {recurrings.length === 0 && <div style={{ ...S.emp, padding: 12 }}>설정된 반복 태스크가 없습니다</div>}
@@ -1627,7 +1642,9 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
         {recurrings.filter(r => !r.disabled)
           .map((r, i) => ({ r, i, a: (() => { const k = (projects || []).findIndex(p => p && p.id === r.project); return k < 0 ? 999 : k; })() }))
           .sort((x, y) => (x.a - y.a) || (x.i - y.i))
-          .map(({ r }) => <RecurringRow key={r.id} r={r} projects={projects} onDelete={() => delR(r.id)} onUpdate={onUpdateRecurring} />)}
+          .map(({ r }) => <RecurringRow key={r.id} r={r} projects={projects} onDelete={() => delR(r.id)} onUpdate={onUpdateRecurring}
+            weekDone={weekDoneCount(doneSet, r.id, wkNow)} weekTarget={routineWeekTarget(r)}
+            onAddSession={onAddSession} onRemoveSession={onRemoveSession} />)}
         <div style={S.div} />
         <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
           <select style={{ ...S.sel, fontSize: 12 }} value={rType} onChange={e => setRType(e.target.value)}>
@@ -1988,6 +2005,20 @@ function App({ onSwitchWs }) {
     workKindDone.current = true;
     const KIND = {}; INIT_PROJECTS.forEach(p => { if (p.kind) KIND[p.id] = p.kind; });
     setProjects(prev => { let ch = false; const n = prev.map(p => (!p.kind && KIND[p.id]) ? (ch = true, { ...p, kind: KIND[p.id] }) : p); return ch ? n : prev; });
+  }, [cloudLoaded]); /* eslint-disable-line */
+
+  /* ★판단 발신 과제 신설·이관(2026-09-15) — 회고가 갈 자리를 만든다.
+     반복 하나를 옮기는 것이라 기존 회고는 옮기지 않는다(생성 직후라 0건). */
+  const judgeProjDone = useRef(false);
+  useEffect(() => {
+    if (!isWork || !cloudLoaded || judgeProjDone.current) return;
+    judgeProjDone.current = true;
+    const seed = INIT_PROJECTS.find(p => p.id === "p_judge");
+    setProjects(prev => prev.some(p => p.id === "p_judge") ? prev : [seed, ...prev]);
+    setRecurrings(prev => { let ch = false; const n = prev.map(r => {
+      const isJudge = r.id === "ynt1fbp" || (r.type === "count" && (r.text || "").indexOf("판단 발신") === 0);
+      return (isJudge && r.project !== "p_judge") ? (ch = true, { ...r, project: "p_judge" }) : r;
+    }); return ch ? n : prev; });
   }, [cloudLoaded]); /* eslint-disable-line */
 
   /* ★업무 반복의 구형 포맷을 고친다(2026-09-15) — `dow` 만 있고 `type` 이 없는 항목이 남아 있다.
@@ -2448,7 +2479,7 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} /></>}
+        {tab === "today" && <><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} tasks={tasks} history={history} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} /></>}
         {tab === "areas" && <AreaView tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} isWork={isWork} setRecurrings={setRecurrings} onUpdateRecurring={updateRecurring} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemo={addAreaRecap} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
       </div>
