@@ -1107,7 +1107,7 @@ const ScheduleAlerts = ({ tasks, projects, onEdit }) => {
 };
 
 /* ═══ 오늘 뷰 (서브태스크 집중 포함) ═══ */
-const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onPlanToday, onClearToday, onReorder }) => {
+const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onPlanToday, onClearToday, onReorder, onAddSession, onRemoveSession }) => {
   const dragHandlers = useDragReorder(onReorder);
 
 
@@ -1162,6 +1162,20 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
     if (field === "done") onUpdate({ ...parent, subtasks: (parent.subtasks || []).map(s => s.id === subId ? { ...s, status: s.status === "done" ? "action" : "done" } : s) });
   };
 
+  /* ★이번 주 반복 스트립(2026-09-15 소유자) — **오늘 목록에 없는 반복만** 여기 선다.
+     목표를 채우면 오늘 할 일에서 내려가는데, 그러면 **그 이상 한 것을 누를 자리가 없어진다.**
+     주 3회로 잡아도 네 번 할 수 있고, weekly 는 그 요일이 지나면 목록에서 사라진다.
+     ⚠ 오늘 목록에 인스턴스가 떠 있는 것은 여기서 뺀다 — 같은 회차를 두 자리에서 누르지 않게 한다.
+        두 자리가 같은 회차키를 쓰므로 계상은 어차피 한 번이지만, 화면에 두 번 보이면 사람이 헷갈린다. */
+  const weekStrip = useMemo(() => {
+    const wk = getWeekId();
+    const doneSet = routineDoneSet(tasks, history);
+    const onToday = new Set(focusedTasks.filter(t => t.recurringId).map(t => t.recurringId));
+    return (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) > 0 && !onToday.has(r.id))
+      .map(r => { const tgt = routineWeekTarget(r); const n = weekDoneCount(doneSet, r.id, wk); return { r, n, tgt, hit: n >= tgt }; })
+      .sort((a, b) => (a.hit ? 1 : 0) - (b.hit ? 1 : 0) || (b.tgt - b.n) - (a.tgt - a.n));
+  }, [recurrings, tasks, history, focusedTasks]);
+
   const renderItem = (item) => {
     if (item.type === "task") return <TaskRow key={item.data.id} task={item.data} projects={projects} showProj dragHandlers={dragHandlers} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} />;
     return (
@@ -1207,6 +1221,23 @@ const TodayView = ({ tasks, projects, recurrings, onDone, onDel, onFocus, onAdd,
         </div>
       ) : (
         <div style={{ ...S.emp, marginTop: 16 }}>할일의 수행날짜(📆)를 오늘로 설정하세요</div>
+      )}
+      {weekStrip.length > 0 && onAddSession && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, marginBottom: 5 }}>🔁 이번 주 반복 <span style={{ fontWeight: 400, color: "#9ca3af" }}>— 오늘 목록에 없는 것. 더 했거나 지난 날 것을 여기서 누른다</span></div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {weekStrip.map(({ r, n, tgt, hit }) => (
+              <span key={r.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, padding: "3px 6px 3px 9px", borderRadius: 14,
+                background: hit ? "#F3F4F6" : "#EEF2FF", border: "1px solid " + (hit ? "#E5E7EB" : "#C7D2FE"), color: hit ? "#6b7280" : "#3730A3" }}>
+                {hit && <span style={{ color: "#059669", fontWeight: 700 }}>✓</span>}
+                <span>{r.text}</span>
+                <b style={{ fontVariantNumeric: "tabular-nums", color: n > tgt ? "#4338CA" : hit ? "#059669" : "#6366F1" }}>{n}/{tgt}</b>
+                <button style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "0 5px", color: "#059669" }} onClick={() => onAddSession(r.id, "")} title={hit ? "한 번 더 했다 — 초과로 기록" : "했음 기록"}>＋</button>
+                {n > 0 && onRemoveSession && <button style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "0 5px", color: "#EF4444" }} onClick={() => onRemoveSession(r.id)} title="이번 주 최근 1건 취소">−</button>}
+              </span>
+            ))}
+          </div>
+        </div>
       )}
       <div style={{ marginTop: 20 }}>
         <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setShowRest(!showRest)}>
@@ -1594,11 +1625,11 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate, weekDone, weekTarget, o
   );
 };
 /* ═══ 반복 태스크 설정 ═══ */
-/* 오늘 탭 하단 — 반복을 만들고 고치는 자리이자 **이번 주 진행을 보고 초과를 기록하는 자리**다.
-   오늘 할 일에는 「아직 안 채운 회차」만 뜬다(목표를 채우면 사라진다). 그런데 목표보다 더 할 수도 있고,
-   지난 날 것을 소급해 체크할 수도 있다. 그 자리가 영역 카드 하나뿐이면 접힌 카드를 열어야 한다.
-   ★여기 ＋/− 와 오늘 할 일의 체크는 **같은 회차키**를 쓰므로 한 세션이 2회로 잡히지 않는다. */
-const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurring, tasks, history, onAddSession, onRemoveSession }) => {
+/* 오늘 탭 하단 — **반복을 만들고 고치는 자리.** 누르는 자리가 아니다.
+   체크·초과 기록은 오늘 할 일 목록과 그 아래 「이번 주 반복」 스트립이 맡는다.
+   ⚠ 여기에도 ＋ 를 두면 한 화면에 누르는 자리가 둘이 된다(2026-08-02 소유자 지적 「헷갈린다」).
+   진행 숫자(n/목표)만 참고로 보인다. */
+const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurring, tasks, history }) => {
   const [show, setShow] = useState(false);
   const [nt, setNt] = useState(""); const [ndows, setNdows] = useState([]); const [np, setNp] = useState("proj_etc");
   const [rType, setRType] = useState("count"); const [dom, setDom] = useState(1); const [lastDay, setLastDay] = useState(false);
@@ -1624,16 +1655,11 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
   const delR = (id) => { setRecurrings(p => SEED_ROUTINE_IDS.has(id) ? p.map(r => r.id === id ? { ...r, disabled: true } : r) : p.filter(r => r.id !== id)); }; /* 삭제/비활성 시 미래 placeholder 고아 제거(2026-07-06) */
   const wkNow = getWeekId();
   const doneSet = routineDoneSet(tasks, history);
-  /* 접힌 채로도 이번 주 그림이 보이게 한다 — 안 그러면 「다 했나」를 알려고 매번 펼쳐야 한다 */
-  const wk = (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) > 0)
-    .reduce((a, r) => ({ done: a.done + weekDoneCount(doneSet, r.id, wkNow), tgt: a.tgt + routineWeekTarget(r) }), { done: 0, tgt: 0 });
   return (
     <div style={{ marginTop: 16 }}>
       <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setShow(!show)}>
-        {show ? "▼" : "▶"} 🔁 반복 — 이번 주 진행·설정
-        {wk.tgt > 0 && <span style={{ fontSize: 11, fontWeight: 700, marginLeft: 6, padding: "1px 6px", borderRadius: 6,
-          color: wk.done >= wk.tgt ? "#059669" : "#4338CA", background: wk.done >= wk.tgt ? "#ECFDF5" : "#EEF2FF",
-          border: "1px solid " + (wk.done >= wk.tgt ? "#A7F3D0" : "#C7D2FE") }}>{wk.done}/{wk.tgt}</span>}
+        {show ? "▼" : "▶"} 🔁 반복 설정
+        <span style={S.cnt(recurrings.length)}>{recurrings.length}</span>
       </div>
       {show && <div style={{ ...S.card, marginTop: 4 }}>
         {recurrings.length === 0 && <div style={{ ...S.emp, padding: 12 }}>설정된 반복 태스크가 없습니다</div>}
@@ -1643,8 +1669,7 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
           .map((r, i) => ({ r, i, a: (() => { const k = (projects || []).findIndex(p => p && p.id === r.project); return k < 0 ? 999 : k; })() }))
           .sort((x, y) => (x.a - y.a) || (x.i - y.i))
           .map(({ r }) => <RecurringRow key={r.id} r={r} projects={projects} onDelete={() => delR(r.id)} onUpdate={onUpdateRecurring}
-            weekDone={weekDoneCount(doneSet, r.id, wkNow)} weekTarget={routineWeekTarget(r)}
-            onAddSession={onAddSession} onRemoveSession={onRemoveSession} />)}
+            weekDone={weekDoneCount(doneSet, r.id, wkNow)} weekTarget={routineWeekTarget(r)} />)}
         <div style={S.div} />
         <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
           <select style={{ ...S.sel, fontSize: 12 }} value={rType} onChange={e => setRType(e.target.value)}>
@@ -2479,7 +2504,7 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <><TodayView tasks={tasks} projects={projects} recurrings={recurrings} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} onReorder={reorderTask} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} tasks={tasks} history={history} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} /></>}
+        {tab === "today" && <><TodayView tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} onReorder={reorderTask} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} tasks={tasks} history={history} /></>}
         {tab === "areas" && <AreaView tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} isWork={isWork} setRecurrings={setRecurrings} onUpdateRecurring={updateRecurring} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemo={addAreaRecap} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
       </div>
