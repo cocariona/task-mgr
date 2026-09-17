@@ -463,6 +463,7 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
        ★회차키 = `주-n<이번 주 완료수>`. 날짜가 아니라 회차라서 **하루에 하나만 쌓이지 않고**,
          그 주 안에는 날이 바뀌어도 같은 줄이 그대로 떠 있다(아래 isStaleRoutine 이 그 주를 살려 둔다).
          안 그러면 주 5루틴 × 7일 = 주 35개가 쌓인다. */
+    if (isStripRec(r, projects)) return; /* ★루틴 세션은 인스턴스를 만들지 않는다 — 「이번 주」 스트립이 맡는다(2026-09-17). 위 주석은 루틴 아닌 주N회에만 남는다 */
     const type = r.type || "weekly";
     const isCount = type === "count" || COUNT_MIG_IDS.has(r.id);
     if (isCount && weekDoneCount(routineDoneSet(tasks, history), r.id, weekId) >= (r.freqPerWeek || 1)) return;
@@ -538,6 +539,13 @@ const ROUTINE_PROJ_IDS = ["rt_workout", "rt_english", "rt_vocal", "rt_writing"];
 let ROUTINE_REC_PROJ_IDS = new Set();
 const isBucketProj = (p) => p && (p.kind === "bucket" || PERSONAL_BUCKET_IDS.includes(p.id));
 const isRoutineProj = (p) => p && (p.kind === "routine" || ROUTINE_PROJ_IDS.includes(p.id) || ROUTINE_REC_PROJ_IDS.has(p.id));
+/* ★루틴 세션 = 루틴 영역에 붙은 주 단위 반복(2026-09-17 소유자).
+   이것들은 오늘 할 일에 날짜로 뜨지 않고 **오늘 탭 맨 위 「🔁 이번 주」 스트립에서만** 체크한다.
+   특정 날짜에 박으면 그날 안 할 루틴도 목록에 떠 있어서 오늘 할 일을 끝내지 못하는 느낌이 들었다.
+   잡무 반복(업무 기타·주간 정제)은 루틴이 아니므로 종전대로 그 요일에 오늘 할 일로 뜬다.
+   ⚠ 매일·매월은 주 단위로 셀 수 없어 스트립에 못 서므로 종전 동작(오늘 할 일)을 유지한다. */
+const isRoutineRec = (r, projects) => !!r && !!isRoutineProj((projects || []).find(p => p && p.id === r.project));
+const isStripRec = (r, projects) => isRoutineRec(r, projects) && routineWeekTarget(r) > 0;
 /* 지난 미완료 daily 루틴 인스턴스 = '오늘'·'미수행' 목록서 제외(2026-06-28). 루틴은 매일 새 인스턴스가 생성돼
    오늘 것만 의미가 있고, 어제 미완료분은 계속 쌓이므로 nagging 대상서 뺀다(데이터는 보존, 과제별·회고에선 보임). */
 /* 지난 회차의 루틴 인스턴스는 오늘 목록에서 내린다 — 어제 못 한 것이 오늘 쌓이면 목록이 못 쓰게 된다.
@@ -732,6 +740,14 @@ const StSel = ({ value, onChange, compact }) => (
 const isSystemProj = (p) => !!p && p.kind === "system"; /* PDS 자체를 굴리는 것 — 영역 탭에 세우지 않는다 */
 const projSortKey = (p) => isRoutineProj(p) ? 0 : (p && p.kind === "project") ? 1 : (p && (p.id === "petc" || p.id === "proj_etc")) ? 3 : 2; /* 루틴(kind 또는 반복보유) 먼저 = isRoutineProj로 자동 도출 반영(2026-07-12) */
 const sortProjsForSelect = (projects) => [...(projects || [])].sort((a, b) => projSortKey(a) - projSortKey(b));
+/* ★날짜 칸 규칙(2026-09-17 소유자) — ① 연도는 4자리: max 를 주면 크롬이 연도 네 자리를 받고 곧장 월로 넘어간다.
+     없으면 연도를 6자리까지 받아 `20260917` 을 치면 `202609-1-7` 처럼 먹힌다(실측).
+   ② 「오늘」 버튼: 수행날짜 기본값은 여전히 빈칸이다. 누르면 오늘, 한 번 더 누르면 비운다. */
+const DATE_MAX = "9999-12-31";
+const TodayBtn = ({ value, onChange }) => (
+  <button type="button" onClick={() => onChange(value === TODAY ? "" : TODAY)} title={value === TODAY ? "수행날짜 비우기" : "수행날짜를 오늘로"}
+    style={{ ...S.gh, fontSize: 11, padding: "2px 7px", flexShrink: 0, background: value === TODAY ? "#EEF2FF" : "#fff", color: value === TODAY ? "#4338CA" : "#6b7280", fontWeight: value === TODAY ? 700 : 400 }}>오늘</button>
+);
 const PrSel = ({ value, onChange, projects, highlight }) => (
   <select style={{ ...S.sel, ...(highlight ? { borderColor: "#F59E0B", background: "#FFFBEB" } : {}) }} value={value || ""} onChange={e => onChange(e.target.value)}>
     <option value="">{WS.key === "personal" ? "주제 선택…" : "과제 선택…"}</option>{/* 개인=주제(영역), 업무=과제(정부과제) 2026-07-08 */}
@@ -786,8 +802,8 @@ const SubAddForm = ({ onAdd, onCancel }) => {
       <StarBtn on={f} onClick={() => setF(!f)} />
       <input ref={r} style={{ ...S.inp, fontSize: 12 }} placeholder="하위 할일..." value={t} onChange={e => setT(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} />
       <StSel value={s} onChange={setS} compact />
-      <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>📆</span><input type="date" style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} title="📆 언제할지 (선택)" /></div>
-      <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span><input type="date" style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={sd} onChange={e => setSd(e.target.value)} title="마감일 (선택)" /></div>
+      <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>📆</span><input type="date" max={DATE_MAX} style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} title="📆 언제할지 (선택)" /><TodayBtn value={pd} onChange={setPd} /></div>
+      <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span><input type="date" max={DATE_MAX} style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={sd} onChange={e => setSd(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} title="마감일 (선택)" /></div>
       <button style={S.btn()} onClick={go}>추가</button>
       <button style={S.gh} onClick={onCancel}>취소</button>
     </div>
@@ -937,11 +953,12 @@ const AddForm = ({ projects, onAdd, defProj }) => {
       {!defProj && <PrSel value={p} onChange={setP} projects={projects} highlight={!!t.trim() && !p} />}
       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
         <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600 }}>📆</span>
-        <input type="date" style={{ ...S.fld, width: 130, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} title="📆 언제할지 (선택)" />
+        <input type="date" max={DATE_MAX} style={{ ...S.fld, width: 130, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} title="📆 언제할지 (선택)" />
+        <TodayBtn value={pd} onChange={setPd} />
       </div>
       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
         <span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span>
-        <input type="date" style={{ ...S.fld, width: 130, flex: "none", fontSize: 11 }} value={sd} onChange={e => setSd(e.target.value)} title="마감일 (선택)" />
+        <input type="date" max={DATE_MAX} style={{ ...S.fld, width: 130, flex: "none", fontSize: 11 }} value={sd} onChange={e => setSd(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} title="마감일 (선택)" />
       </div>
       <button className="star-btn" style={{ ...S.star(f), border: "1px solid #e5e7eb", borderRadius: 5, width: 28, height: 28 }} onClick={() => setF(!f)} title="오늘 집중">
         {f ? "★" : "☆"}
@@ -963,7 +980,7 @@ const ClearTodayModal = ({ task, onApply, onCancel }) => {
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 12, wordBreak: "break-all" }}>{task.text}</div>
         <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 14 }}>
           <span style={{ fontSize: 11, color: "#6366F1", flexShrink: 0 }}>📆 다른 날짜로</span>
-          <input type="date" value={nd} onChange={e => setNd(e.target.value)} style={{ ...S.fld, fontSize: 12, flex: 1 }} />
+          <input type="date" max={DATE_MAX} value={nd} onChange={e => setNd(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && nd) onApply(nd); }} style={{ ...S.fld, fontSize: 12, flex: 1 }} />
         </div>
         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
           <button style={{ ...S.gh, fontSize: 12 }} onClick={onCancel}>취소</button>
@@ -997,14 +1014,15 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
           <div>
             <div style={{ ...S.lbl, color: "#6366F1", fontWeight: 600 }}>📆 언제할지 (선택)</div>
             <div className="plan-fields" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <input type="date" style={{ ...S.fld, width: 160, flex: "none" }} value={f.planDate || ""} onChange={e => u("planDate", e.target.value)} />
+              <input type="date" max={DATE_MAX} style={{ ...S.fld, width: 160, flex: "none" }} value={f.planDate || ""} onChange={e => u("planDate", e.target.value)} />
+              <TodayBtn value={f.planDate || ""} onChange={v => u("planDate", v)} />
               <span style={{ fontSize: 11, color: "#6366F1" }}>🕒</span><input type="time" style={{ ...S.fld, width: 120, flex: "none" }} value={f.planTime || ""} onChange={e => u("planTime", e.target.value)} title="시간(선택)" />
             </div>
           </div>
           <div>
             <div style={S.lbl}>마감일 (선택)</div>
             <div className="plan-fields" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <input type="date" style={{ ...S.fld, width: 160, flex: "none" }} value={f.scheduledDate || ""} onChange={e => u("scheduledDate", e.target.value)} />
+              <input type="date" max={DATE_MAX} style={{ ...S.fld, width: 160, flex: "none" }} value={f.scheduledDate || ""} onChange={e => u("scheduledDate", e.target.value)} />
               <input style={{ ...S.fld, flex: 1 }} placeholder="시기 (예: 하반기, 9월 이후)" value={f.scheduledLabel || ""} onChange={e => u("scheduledLabel", e.target.value)} />
               {f.scheduledDate && (() => { const dl = deadlineInfo(f.scheduledDate); return dl ? <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span> : null; })()}
               {f.scheduledDate && <button style={{ ...S.gh, fontSize: 10, color: "#EF4444" }} onClick={() => { u("scheduledDate", ""); u("scheduledLabel", ""); }}>✕</button>}
@@ -1037,7 +1055,9 @@ const PlanDateSummary = ({ tasks, projects, onEdit }) => {
     return items;
   }, [tasks]);
   const weekPlan = planned.filter(t => { const d = diffDays(t.planDate); return d !== null && d > 0 && d <= 7; }).sort((a, b) => a.planDate.localeCompare(b.planDate));
-  const overduePlan = planned.filter(t => { const d = diffDays(t.planDate); return d !== null && d < 0 && !isStaleRoutine(t); }).sort((a, b) => a.planDate.localeCompare(b.planDate));
+  /* ★반복 인스턴스는 여기 넣지 않는다(2026-09-17). 지난 날짜로 남아 있는 반복은 이미 「오늘 할 일」에 떠 있거나(그 주 회차)
+     내려간 것(지난 회차)이라, 여기 또 세우면 같은 줄이 두 번 보였다 — 주N회를 오늘 할 일로 올린 09-15 배포부터 생긴 증상. */
+  const overduePlan = planned.filter(t => { const d = diffDays(t.planDate); return d !== null && d < 0 && !t.recurringId; }).sort((a, b) => a.planDate.localeCompare(b.planDate));
   const [weekOpen, setWeekOpen] = useState(false);
   if (!weekPlan.length && !overduePlan.length) return null;
   const PlanItem = ({ t }) => {
@@ -1106,6 +1126,63 @@ const ScheduleAlerts = ({ tasks, projects, onEdit }) => {
   );
 };
 
+/* ═══ 이번 주 루틴 스트립 — 오늘 탭 맨 위 (2026-09-17 부활) ═══
+   루틴 세션을 체크하는 **유일한 자리**다. 루틴 세션은 오늘 할 일에 날짜로 뜨지 않는다(isStripRec).
+   09-13 루틴 탭을 영역 카드로 합칠 때 이 스트립이 사라졌고, 09-15 에 주N회를 오늘 할 일로 올렸는데
+   소유자 실측: 날짜에 박힌 루틴이 「오늘 할 일」을 매번 못 끝낸 것처럼 보이게 했고, 목표를 채워 내려간 뒤에는
+   초과분을 누를 자리가 숨어 있었다. → 옛 스트립 모양 그대로 되살리되 **메모 입력은 뺀다**(회고는 영역 카드에서).
+   · 항상 전부 보인다 — 채운 것도 ✓ 로 남아 초과 기록을 누를 수 있다.
+   · 같은 영역끼리 붙인다(2026-08-11) · 순서는 화면을 열 때 한 번만 정한다(2026-08-09 「누르면 밀려 불편」). */
+const WeeklyRoutineStrip = ({ recurrings, projects, tasks, history, onAddSession, onRemoveSession }) => {
+  const wk = getWeekId();
+  const orderRef = useRef({ wk: "", ids: null }); /* 조기 return 위에 둬야 훅 순서가 안 깨진다 */
+  const pool = (recurrings || []).filter(r => !r.disabled && isStripRec(r, projects));
+  if (!pool.length) return null;
+  const doneSet = routineDoneSet(tasks, history);
+  const left = (r) => routineWeekTarget(r) - weekDoneCount(doneSet, r.id, wk);
+  const rankCmp = (a, b) => {
+    const la = left(a), lb = left(b);
+    if ((la > 0) !== (lb > 0)) return la > 0 ? -1 : 1;   /* 미달을 앞으로 */
+    if (la !== lb) return lb - la;                        /* 많이 남은 것을 앞으로 */
+    return (a.time || "99:99").localeCompare(b.time || "99:99");
+  };
+  const areaIdx = (r) => { const i = (projects || []).findIndex(p => p && p.id === r.project); return i < 0 ? 999 : i; };
+  const buildOrder = () => {
+    const groups = new Map();
+    pool.forEach(r => { const k = r.project || "_none"; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
+    return Array.from(groups.values())
+      .map(g => ({ list: g.slice().sort(rankCmp), left: g.reduce((n, r) => n + Math.max(0, left(r)), 0), idx: areaIdx(g[0]) }))
+      .sort((x, y) => (y.left - x.left) || (x.idx - y.idx))
+      .reduce((acc, x) => acc.concat(x.list.map(r => r.id)), []);
+  };
+  if (orderRef.current.wk !== wk) orderRef.current = { wk, ids: null }; /* 주가 바뀌면 재정렬 */
+  if (!orderRef.current.ids) orderRef.current.ids = buildOrder();
+  const frozen = orderRef.current.ids;
+  const items = pool.slice().sort((a, b) => {
+    const ia = frozen.indexOf(a.id), ib = frozen.indexOf(b.id);
+    if (ia < 0 && ib < 0) return rankCmp(a, b);
+    if (ia < 0) return 1; /* 새로 생긴 것은 끝에 붙인다 — 기존 순서를 밀지 않는다 */
+    if (ib < 0) return -1;
+    return ia - ib;
+  });
+  return (
+    <div style={{ ...S.card, marginBottom: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "8px 10px" }}>
+      <span style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", flexShrink: 0 }}>🔁 이번 주</span>
+      {items.map(r => { const tgt = routineWeekTarget(r); const n = weekDoneCount(doneSet, r.id, wk); const hit = n >= tgt;
+        return (
+          <span key={r.id} style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 12, background: hit ? "#ECFDF5" : "#FFFBEB", border: "1px solid " + (hit ? "#A7F3D0" : "#FDE68A"), borderRadius: 14, padding: "2px 4px 2px 9px" }}>
+            <span style={{ maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.text}</span>
+            {/* − 자리는 늘 잡아 둔다: 0→1 에서 − 가 새로 생기면 ＋ 가 손가락 밑에서 밀려 연타가 엉뚱한 데를 누른다(미리보기 실측) */}
+            <button onClick={() => n > 0 && onRemoveSession(r.id)} disabled={n === 0} title="이번 주 최근 완료 1건 취소(잘못 체크 정정)" style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "1px 6px", borderRadius: 10, color: "#DC2626", visibility: n > 0 ? "visible" : "hidden" }}>−</button>
+            <b style={{ fontVariantNumeric: "tabular-nums", color: n > tgt ? "#4338CA" : hit ? "#059669" : "#D97706" }} title={n > tgt ? "목표보다 " + (n - tgt) + "회 더 했다" : ""}>{n}/{tgt}</b>
+            <button onClick={() => onAddSession(r.id, "")} title={hit ? "한 번 더 했다 — 초과로 기록" : "했음 기록"} style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "1px 6px", borderRadius: 10, color: "#059669" }}>＋</button>
+          </span>
+        );
+      })}
+    </div>
+  );
+};
+
 /* ═══ 오늘 뷰 (서브태스크 집중 포함) ═══ */
 const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onPlanToday, onClearToday, onReorder, onAddSession, onRemoveSession }) => {
   const dragHandlers = useDragReorder(onReorder);
@@ -1162,20 +1239,6 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
     if (field === "done") onUpdate({ ...parent, subtasks: (parent.subtasks || []).map(s => s.id === subId ? { ...s, status: s.status === "done" ? "action" : "done" } : s) });
   };
 
-  /* ★이번 주 반복 스트립(2026-09-15 소유자) — **오늘 목록에 없는 반복만** 여기 선다.
-     목표를 채우면 오늘 할 일에서 내려가는데, 그러면 **그 이상 한 것을 누를 자리가 없어진다.**
-     주 3회로 잡아도 네 번 할 수 있고, weekly 는 그 요일이 지나면 목록에서 사라진다.
-     ⚠ 오늘 목록에 인스턴스가 떠 있는 것은 여기서 뺀다 — 같은 회차를 두 자리에서 누르지 않게 한다.
-        두 자리가 같은 회차키를 쓰므로 계상은 어차피 한 번이지만, 화면에 두 번 보이면 사람이 헷갈린다. */
-  const weekStrip = useMemo(() => {
-    const wk = getWeekId();
-    const doneSet = routineDoneSet(tasks, history);
-    const onToday = new Set(focusedTasks.filter(t => t.recurringId).map(t => t.recurringId));
-    return (recurrings || []).filter(r => !r.disabled && routineWeekTarget(r) > 0 && !onToday.has(r.id))
-      .map(r => { const tgt = routineWeekTarget(r); const n = weekDoneCount(doneSet, r.id, wk); return { r, n, tgt, hit: n >= tgt }; })
-      .sort((a, b) => (a.hit ? 1 : 0) - (b.hit ? 1 : 0) || (b.tgt - b.n) - (a.tgt - a.n));
-  }, [recurrings, tasks, history, focusedTasks]);
-
   const renderItem = (item) => {
     if (item.type === "task") return <TaskRow key={item.data.id} task={item.data} projects={projects} showProj dragHandlers={dragHandlers} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} />;
     return (
@@ -1203,6 +1266,7 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
           {waitingAll.length > 0 && <span> · 대기중 {waitingAll.length}</span>}
         </div>
       </div>
+      {onAddSession && <WeeklyRoutineStrip recurrings={recurrings} projects={projects} tasks={tasks} history={history} onAddSession={onAddSession} onRemoveSession={onRemoveSession} />}
       <PlanDateSummary tasks={tasks} projects={projects} onEdit={onEdit} />
       <ScheduleAlerts tasks={tasks} projects={projects} onEdit={onEdit} />
       <AddForm projects={projects} onAdd={onAdd} />
@@ -1221,23 +1285,6 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
         </div>
       ) : (
         <div style={{ ...S.emp, marginTop: 16 }}>할일의 수행날짜(📆)를 오늘로 설정하세요</div>
-      )}
-      {weekStrip.length > 0 && onAddSession && (
-        <div style={{ marginTop: 14 }}>
-          <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, marginBottom: 5 }}>🔁 이번 주 반복 <span style={{ fontWeight: 400, color: "#9ca3af" }}>— 오늘 목록에 없는 것. 더 했거나 지난 날 것을 여기서 누른다</span></div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {weekStrip.map(({ r, n, tgt, hit }) => (
-              <span key={r.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, padding: "3px 6px 3px 9px", borderRadius: 14,
-                background: hit ? "#F3F4F6" : "#EEF2FF", border: "1px solid " + (hit ? "#E5E7EB" : "#C7D2FE"), color: hit ? "#6b7280" : "#3730A3" }}>
-                {hit && <span style={{ color: "#059669", fontWeight: 700 }}>✓</span>}
-                <span>{r.text}</span>
-                <b style={{ fontVariantNumeric: "tabular-nums", color: n > tgt ? "#4338CA" : hit ? "#059669" : "#6366F1" }}>{n}/{tgt}</b>
-                <button style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "0 5px", color: "#059669" }} onClick={() => onAddSession(r.id, "")} title={hit ? "한 번 더 했다 — 초과로 기록" : "했음 기록"}>＋</button>
-                {n > 0 && onRemoveSession && <button style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "0 5px", color: "#EF4444" }} onClick={() => onRemoveSession(r.id)} title="이번 주 최근 1건 취소">−</button>}
-              </span>
-            ))}
-          </div>
-        </div>
       )}
       <div style={{ marginTop: 20 }}>
         <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setShowRest(!showRest)}>
@@ -1614,7 +1661,7 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate, weekDone, weekTarget, o
           </div>}
           {dirtySched && <button style={{ ...S.btn("#4338CA"), fontSize: 11 }} onClick={saveSched}>일정 저장</button>}
         </div>
-        <textarea value={d} onChange={e => setD(e.target.value)} rows={4} placeholder={"실행 방법 (고정 참고). 예:\n[실행] F45 클래스 참석\n[tier별] 최소=푸시업10+스쿼트10 / 보통=F45 / 최대=F45 그대로"}
+        <textarea value={d} onChange={e => setD(e.target.value)} rows={4} placeholder={"실행 방법 (고정 참고). 예:\n[신호] 코치의 그날 자세 교정 1개\n[강제] 엔진 — 예약·선결제\n[실행] F45 클래스 참석"}
           style={{ ...S.ta, minHeight: 0, fontSize: 12 }} />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
           <span style={{ fontSize: 10, color: "#9ca3af" }}>실행 방법은 이 편집창에서만 본다</span>
@@ -1626,18 +1673,24 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate, weekDone, weekTarget, o
 };
 /* ═══ 반복 태스크 설정 ═══ */
 /* 오늘 탭 하단 — **반복을 만들고 고치는 자리.** 누르는 자리가 아니다.
-   체크·초과 기록은 오늘 할 일 목록과 그 아래 「이번 주 반복」 스트립이 맡는다.
+   체크·초과 기록은 루틴이면 오늘 탭 맨 위 「🔁 이번 주」 스트립이, 잡무 반복이면 오늘 할 일 목록이 맡는다.
    ⚠ 여기에도 ＋ 를 두면 한 화면에 누르는 자리가 둘이 된다(2026-08-02 소유자 지적 「헷갈린다」).
    진행 숫자(n/목표)만 참고로 보인다. */
-const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurring, tasks, history }) => {
+/* ★루틴 아닌 반복만 다룬다(2026-09-17 소유자 「개인 앱의 반복 설정은 루틴 액션을 만들기 위함이 아니지 않은지」).
+   루틴 세션은 영역 탭 그 영역 카드에서 만들고 고친다(NewSessionForm · RecurringRow). 여기 남는 것은 업무 잡무와
+   주간 정제처럼 **영역의 성과가 아니라 유지가 목적인 반복**이다. 과제 드롭다운에서도 루틴 영역을 뺀다 —
+   여기서 루틴 영역에 붙이면 만든 줄이 이 목록에서 사라져 「어디 갔지」가 된다. */
+const RecurringSettings = ({ recurrings: allRecurrings, setRecurrings, projects: allProjects, onUpdateRecurring, tasks, history }) => {
+  const recurrings = (allRecurrings || []).filter(r => !isRoutineRec(r, allProjects));
+  const projects = (allProjects || []).filter(p => p && !isRoutineProj(p));
   const [show, setShow] = useState(false);
-  const [nt, setNt] = useState(""); const [ndows, setNdows] = useState([]); const [np, setNp] = useState("proj_etc");
+  const [nt, setNt] = useState(""); const [ndows, setNdows] = useState([]); const [np, setNp] = useState(() => projects.some(p => p.id === "proj_etc") ? "proj_etc" : ""); /* 없으면 고르게 한다 — 첫 항목 자동 선택은 오분류를 부른다(AddForm 과 같은 규칙) */
   const [rType, setRType] = useState("count"); const [dom, setDom] = useState(1); const [lastDay, setLastDay] = useState(false);
   const [rTime, setRTime] = useState(""); /* 선택 시간 HH:MM (2026-07-01) */
   const [freqN, setFreqN] = useState(3); /* 주 N회 목표(2026-07-07) */
   const [rProto, setRProto] = useState(""); /* 실행 방법(선택, 2026-07-01) */
   const addR = () => {
-    if (!nt.trim()) return;
+    if (!nt.trim() || !np) return;
     const base = { id: gid(), text: nt.trim(), project: np, time: rTime || "", protocol: rProto.trim() };
     if (rType === "count") {
       setRecurrings(p => [...p, { ...base, type: "count", freqPerWeek: Math.max(1, parseInt(freqN) || 1), dows: [...ndows].sort((a, b) => a - b) }]); /* 주N회=요일자유 카운터 + 권장요일(dows) */
@@ -1659,10 +1712,11 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
     <div style={{ marginTop: 16 }}>
       <div style={{ ...S.secT, cursor: "pointer", userSelect: "none" }} onClick={() => setShow(!show)}>
         {show ? "▼" : "▶"} 🔁 반복 설정
-        <span style={S.cnt(recurrings.length)}>{recurrings.length}</span>
+        <span style={S.cnt(recurrings.filter(r => !r.disabled).length)}>{recurrings.filter(r => !r.disabled).length}</span>
       </div>
       {show && <div style={{ ...S.card, marginTop: 4 }}>
-        {recurrings.length === 0 && <div style={{ ...S.emp, padding: 12 }}>설정된 반복 태스크가 없습니다</div>}
+        <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 6 }}>루틴이 아닌 반복만 여기 있습니다. 루틴 세션은 영역 탭 그 영역 카드에서 만들고 고칩니다.</div>
+        {recurrings.filter(r => !r.disabled).length === 0 && <div style={{ ...S.emp, padding: 12 }}>설정된 반복 태스크가 없습니다</div>}
         {/* ★설정 목록도 영역끼리 묶는다(2026-08-11) — 영역 카드와 같은 순서로 보이게. 배열(=만든 순서)에서는
             링글이 맨 앞, 영어 스피킹이 뒤쪽이라 같은 영역이 갈려 있었다. **렌더 순서만** 바꾸며 데이터는 안 건드린다. */}
         {recurrings.filter(r => !r.disabled)
@@ -1699,10 +1753,10 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
           )}
           <input style={{ ...S.inp, fontSize: 12 }} placeholder="반복할 할일..." value={nt} onChange={e => setNt(e.target.value)} onKeyDown={e => e.key === "Enter" && addR()} />
           <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>🕒</span><input type="time" style={{ ...S.fld, width: 110, flex: "none", fontSize: 11 }} value={rTime} onChange={e => setRTime(e.target.value)} title="시간(선택)" /></div>
-          <PrSel value={np} onChange={setNp} projects={projects} />
+          <PrSel value={np} onChange={setNp} projects={projects} highlight={!!nt.trim() && !np} />
           <button style={S.btn()} onClick={addR}>추가</button>
         </div>
-        <textarea value={rProto} onChange={e => setRProto(e.target.value)} rows={2} placeholder="실행 방법(선택) — [신호]/[강제]/[실행]/[tier별] 등. 이 목록의 ✏️📋 에서만 보고 고친다. (기존 반복도 같은 버튼)"
+        <textarea value={rProto} onChange={e => setRProto(e.target.value)} rows={2} placeholder="실행 방법(선택) — [신호]/[강제]/[실행] 등. 이 목록의 ✏️📋 에서만 보고 고친다. (기존 반복도 같은 버튼)"
           style={{ ...S.ta, minHeight: 0, fontSize: 12, marginTop: 6 }} />
       </div>}
     </div>
@@ -1714,9 +1768,9 @@ const RecurringSettings = ({ recurrings, setRecurrings, projects, onUpdateRecurr
    목표=freqPerWeek 우선, 없으면 지정 요일 수(dows.length). 완료수=이번 주 done 회차(옮긴 날·➕추가 세션 포함).
    현재 구조 유지: 요일별 예정 인스턴스는 그대로, 위에 '주 N회' 카운트 층만 얹음. ─── */
 /* 주간 목표 = 그 주에 몇 회를 채워야 하나. weekly 는 1, 주N회는 freqPerWeek, 매일·매월은 0(주 단위가 아니다).
-   영역 카드의 `n/목표` 와 ＋/− 가 이 값을 쓴다.
-   ⚠ weekly 는 여전히 **그 요일 당일에만** 오늘 목록에 뜨고 다음날 사라진다 — 그날 앱을 안 열면 그 주 회차를
-     못 누른다(실측 사고: 링글은 매주 수강했는데 앱 기록이 2주치 비었다). 소급 체크 자리는 영역 카드의 ＋ 다. */
+   영역 카드의 `n/목표` 와 ＋/−, 오늘 탭 「🔁 이번 주」 스트립이 이 값을 쓴다.
+   루틴 세션은 2026-09-17 부터 요일과 무관하게 스트립에 항상 서므로 지난 요일 것도 거기서 누른다.
+   잡무 weekly 는 여전히 그 요일 당일에만 오늘 목록에 뜬다. */
 const routineWeekTarget = (r) => r.type === "count" ? (r.freqPerWeek || 1) : r.type === "weekly" ? 1 : 0;
 const routineDoneSet = (tasks, history) => { const s = new Set();
   (tasks || []).forEach(t => { if (t.recurringId && t.status === "done" && !t.cancelled) s.add(t.recurringId + "|" + (t.recurringPeriod || t.planDate)); });
@@ -1977,6 +2031,21 @@ function App({ onSwitchWs }) {
       return n.length === prev.length ? prev : n;
     });
   }, [cloudLoaded]); /* eslint-disable-line */
+
+  /* ★루틴 세션 대기 인스턴스 청소(2026-09-17) — 루틴 세션을 스트립으로 옮기면서, 09-15~16 에 만들어진
+     주N회 인스턴스가 오늘 할 일과 「지난 계획 미처리」에 남아 있다. 이제 새로 안 생기므로 남은 것만 걷는다.
+     ⛔ 메모·회고·하위 할일이 있으면 남긴다(주가 지나면 isStaleRoutine 이 화면에서 내린다). */
+  const routineInstPruneDone = useRef(false);
+  useEffect(() => {
+    if (!cloudLoaded || routineInstPruneDone.current || !recurrings.length) return;
+    routineInstPruneDone.current = true;
+    const strip = new Set(recurrings.filter(r => !r.disabled && isStripRec(r, projects)).map(r => r.id));
+    if (!strip.size) return;
+    setTasks(prev => {
+      const n = prev.filter(t => !(t.recurringId && strip.has(t.recurringId) && t.status !== "done" && !(t.notes || "").trim() && !(t.recap || "").trim() && !(t.subtasks || []).length));
+      return n.length === prev.length ? prev : n;
+    });
+  }, [cloudLoaded, recurrings, projects]); /* eslint-disable-line */
 
   /* ★회고 백필(2026-09-15) — 메모(notes)와 회고(recap)를 가르면서, **영역 카드에 떠 있던 기존 글이
      전부 사라지는 것**을 막는다. 옮기는 것은 「회고 자리에 적은 것」뿐이다:
