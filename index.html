@@ -38,7 +38,15 @@
   <script crossorigin="anonymous" integrity="sha384-EkqK+ezBWJuvO3hfrSx2iVqr3YQbhmnzn8kPhOpBZ+0GMVU5oGSgptwIu8D84HjE" src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #f9fafb; -webkit-text-size-adjust: 100%; }
+    /* ★긴 문자열 줄바꿈(2026-10-02 · 소유자 「메모에 url 넣으면 옆으로 튕겨보이고 모바일에서는 갑자기 웹 화면으로 전환되어 보임」).
+       공백 없는 추적 URL 은 끊을 자리가 없어 상자 밖으로 삐져나갔고, 문서가 화면보다 넓어지면 PC 는 가로 스크롤,
+       휴대폰 크롬은 그 폭에 맞춰 화면을 축소해 PC 화면처럼 보였다(실측: 메모를 펼치는 순간 문서 폭 375 → 2588px).
+       body 에 한 번 걸어 메모·회고·하위 할일·히스토리·계획/마감 요약까지 전부 상속시킨다 — 자리마다 달면 하나만 빠져도 재발한다.
+       break-word 가 아니라 anywhere 인 이유: 플렉스 줄(계획·마감·히스토리)은 최소폭을 토큰 길이로 잡는데 그걸 줄이는 건 anywhere 뿐이다.
+       넘칠 때만 끊으므로 한글(원래 음절마다 끊김)과 들어갈 자리가 있는 단어는 그대로다.
+       ⚠ 대신 꽉 찬 플렉스 줄에서는 짧은 꼬리표(날짜 등)나 제목이 한 글자 폭까지 눌릴 수 있다 → 그런 자리는
+         flexShrink: 0(계획 요약 날짜)이나 넘치면 다음 줄로 내리기(히스토리 줄 flexWrap)로 지킨다. */
+    body { background: #f9fafb; -webkit-text-size-adjust: 100%; overflow-wrap: anywhere; }
     /* 모바일 터치 최적화 */
     button, select, input { touch-action: manipulation; }
     input[type="date"] { min-height: 36px; }
@@ -709,8 +717,11 @@ const S = {
   ta: { width: "100%", padding: 10, borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13, outline: "none", resize: "vertical", minHeight: 60, fontFamily: "inherit", boxSizing: "border-box" },
   emp: { padding: 32, textAlign: "center", color: "#9ca3af", fontSize: 13 },
   div: { borderTop: "1px solid #f3f4f6", margin: "6px 0" },
-  tst: { position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: "#1f2937", color: "#fff", padding: "10px 20px", borderRadius: 8, fontSize: 13, display: "flex", alignItems: "center", gap: 12, boxShadow: "0 8px 30px rgba(0,0,0,0.2)", zIndex: 200 },
-  tstB: { padding: "3px 10px", borderRadius: 4, border: "1px solid rgba(255,255,255,0.3)", cursor: "pointer", fontSize: 12, fontWeight: 600, background: "transparent", color: "#60A5FA" },
+  /* ★알림 폭(2026-10-02): left 50% 로 가운데 놓으면 상자 폭이 **남은 오른쪽 절반**까지만 자라서, 휴대폰에서는 알림이 화면 절반
+     폭에 갇혀 제목이 긴 할 일을 완료하면 「되돌리기」 글자가 세로로 쌓였다. 폭을 내용 기준으로 잡고 화면 폭(양옆 16px)에서만 막는다.
+     버튼은 줄지도 줄바꿈하지도 않는다 — 줄어드는 것은 문구 쪽이다. */
+  tst: { position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", width: "max-content", maxWidth: "calc(100vw - 32px)", background: "#1f2937", color: "#fff", padding: "10px 20px", borderRadius: 8, fontSize: 13, display: "flex", alignItems: "center", gap: 12, boxShadow: "0 8px 30px rgba(0,0,0,0.2)", zIndex: 200 },
+  tstB: { padding: "3px 10px", borderRadius: 4, border: "1px solid rgba(255,255,255,0.3)", cursor: "pointer", fontSize: 12, fontWeight: 600, background: "transparent", color: "#60A5FA", flexShrink: 0, whiteSpace: "nowrap" },
   lbl: { fontSize: 11, color: "#6b7280", marginBottom: 3 },
   fld: { padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13, outline: "none", width: "100%", boxSizing: "border-box" },
   star: (on) => ({ width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 14, flexShrink: 0, marginTop: 1, borderRadius: 4, border: "none", background: "transparent", color: on ? "#F59E0B" : "#d1d5db", transition: "color 0.15s" }),
@@ -781,8 +792,8 @@ const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
           {sub.scheduledLabel && <span style={{ fontSize: 9, color: "#9ca3af" }}>({sub.scheduledLabel})</span>}
           {sub.notes && <span onClick={(e) => { e.stopPropagation(); setShowNotes(!showNotes); }} style={{ cursor: "pointer", fontSize: 9, color: showNotes ? "#8B5CF6" : "#c4b5fd", background: showNotes ? "#F3E8FF" : "transparent", padding: "1px 3px", borderRadius: 4, userSelect: "none" }}>📝</span>}
         </div>
-        <div style={{ ...S.txt, fontSize: 12.5, textDecoration: isDone ? "line-through" : "none", color: isDone ? "#9ca3af" : "#1a1a1a" }}>{sub.text}</div>
-        {sub.notes && showNotes && <div style={{ marginTop: 3, fontSize: 11, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 5, padding: "3px 7px", color: "#92400E", whiteSpace: "pre-wrap" }}><span style={{ fontSize: 8, fontWeight: 700, opacity: 0.65, marginRight: 5 }}>📝</span>{sub.notes}</div>}
+        <div style={{ ...S.txt, fontSize: 12.5, textDecoration: isDone ? "line-through" : "none", color: isDone ? "#9ca3af" : "#1a1a1a" }}><Clamp text={sub.text} lines={2} /></div>{/* 하위 제목도 상위 카드 제목과 같은 Clamp(2026-10-02) — URL 제목이 전역 줄바꿈 뒤로 열 줄 넘게 감겼다 */}
+        {sub.notes && showNotes && <div style={{ marginTop: 3, fontSize: 11, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 5, padding: "3px 7px", color: "#92400E", whiteSpace: "pre-wrap" }}><span style={{ fontSize: 8, fontWeight: 700, opacity: 0.65, marginRight: 5 }}>📝</span><LinkText text={sub.notes} /></div>}
       </div>
       {h && <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
         <button style={{ ...S.gh, fontSize: 10 }} onClick={onEdit}>✏️</button>
@@ -862,7 +873,7 @@ const useDragReorder = (onReorder, attr = "data-task-card") => {
     onPointerCancel: () => finish(false),
   };
 };
-const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onUpdate, dragHandlers }) => {
+const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onUpdate, dragHandlers, hideSubIds }) => {
   const dh = dragHandlers || {};
   const [h, setH] = useState(false);
   const [showSubs, setShowSubs] = useState(false);
@@ -870,6 +881,14 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
   const [showNotes, setShowNotes] = useState(false);
   const subs = task.subtasks || [];
   const doneSubCnt = subs.filter(s => s.status === "done").length;
+  /* ★오늘 탭 하위 두 줄 표시 제거(2026-10-02 · 소유자 「서브페이지 생성하면 한번에 두개 페이지 나옴」).
+     오늘 목록은 수행날짜가 오늘(지난 것 포함)인 하위를 따로 한 줄로 세운다 — 상위와 상태가 같으면 상위 바로 아래(2026-09-08),
+     다르면 그 상태 무리 끝에 「↳ 상위」 표시와 함께. 그런데 +sub·▼ 로 카드를 펼치면 같은 하위가 펼친 목록에도 그려져
+     한 항목이 두 줄로 보였다(+sub 로 추가하면 카드가 저절로 펼쳐져 곧바로 보였다). 데이터는 하나다 — 진행 배지 n/m 가 증거.
+     → 오늘 목록에 이미 선 하위는 펼친 목록에서만 뺀다. 영역 탭은 오늘 목록이 없어 hideSubIds 를 안 넘기므로 그대로 전부 보인다.
+     하위가 전부 오늘 목록에 서 있으면 펼칠 것이 없으므로 ▼ 도 숨긴다.
+     ⛔ 별·완료·삭제는 계속 전체(subs)로 계산한다 — listSubs 로 바꾸면 숨긴 하위가 저장에서 빠진다. */
+  const listSubs = hideSubIds ? subs.filter(s => !hideSubIds.has(s.id)) : subs;
   const p = projects?.find(x => x.id === task.project);
 
   const handleAddSub = ({ text, status, focus, scheduledDate, scheduledLabel, planDate }) => {
@@ -905,18 +924,18 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
             {task.notes && <span onClick={(e) => { e.stopPropagation(); setShowNotes(!showNotes); }} style={{ cursor: "pointer", fontSize: 10, color: showNotes ? "#92400E" : "#B45309", background: showNotes ? "#FEF3C7" : "#FFFBEB", border: "1px solid #FDE68A", padding: "1px 5px", borderRadius: 4, userSelect: "none" }}>📝 메모</span>}
           </div>
           <div style={S.txt}><Clamp text={task.text} lines={2} /></div>
-          {task.notes && showNotes && <div style={{ marginTop: 4, fontSize: 12, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "5px 9px", color: "#92400E", whiteSpace: "pre-wrap" }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.65, marginRight: 6 }}>📝 메모</span>{task.notes}</div>}
+          {task.notes && showNotes && <div style={{ marginTop: 4, fontSize: 12, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "5px 9px", color: "#92400E", whiteSpace: "pre-wrap" }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.65, marginRight: 6 }}>📝 메모</span><LinkText text={task.notes} /></div>}
         </div>
         <div className="task-actions" style={{ display: h ? "flex" : "none", gap: 3, flexShrink: 0, alignItems: "center" }}>
-          {subs.length > 0 && <button style={S.gh} onClick={() => setShowSubs(!showSubs)} title="하위 할일">{showSubs ? "▲" : "▼"}</button>}
+          {listSubs.length > 0 && <button style={S.gh} onClick={() => setShowSubs(!showSubs)} title="하위 할일">{showSubs ? "▲" : "▼"}</button>}
           <button style={{ ...S.gh, fontSize: 10 }} onClick={() => { setAddSub(!addSub); if (!addSub) setShowSubs(true); }} title="하위 할일 추가">+sub</button>
           <button style={S.gh} onClick={() => onEdit(task)}>✏️</button>
           <button style={{ ...S.gh, color: "#EF4444" }} onClick={() => onDel(task.id)}>✕</button>
         </div>
       </div>
-      {showSubs && subs.length > 0 && (
+      {showSubs && listSubs.length > 0 && (
         <div style={{ marginLeft: 20, borderLeft: "2px solid #e5e7eb", paddingLeft: 4, marginBottom: 4 }}>
-          {subs.map(s => (
+          {listSubs.map(s => (
             <SubRow key={s.id} sub={s}
               onToggleFocus={() => onUpdate && onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, focus: !x.focus } : x) })}
               onToggleDone={() => onUpdate && onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, status: x.status === "done" ? "action" : "done" } : x) })}
@@ -1057,15 +1076,25 @@ const PlanDateSummary = ({ tasks, projects, onEdit }) => {
   const weekPlan = planned.filter(t => { const d = diffDays(t.planDate); return d !== null && d > 0 && d <= 7; }).sort((a, b) => a.planDate.localeCompare(b.planDate));
   /* ★반복 인스턴스는 여기 넣지 않는다(2026-09-17). 지난 날짜로 남아 있는 반복은 이미 「오늘 할 일」에 떠 있거나(그 주 회차)
      내려간 것(지난 회차)이라, 여기 또 세우면 같은 줄이 두 번 보였다 — 주N회를 오늘 할 일로 올린 09-15 배포부터 생긴 증상. */
-  const overduePlan = planned.filter(t => { const d = diffDays(t.planDate); return d !== null && d < 0 && !t.recurringId; }).sort((a, b) => a.planDate.localeCompare(b.planDate));
+  /* ★반복 인스턴스의 **하위**도 넣지 않는다(2026-10-02). 하위는 위 복사본에 recurringId 가 없어 이 규칙을 빠져나갔다.
+     반복 부모의 하위는 이월되지 않아(이월 effect 의 `if (t.recurringId) return`) 지난 날짜로 남는데, 오늘 목록은 하위를
+     날짜만 보고 세우므로(focusedSubs) 이미 「오늘 할 일」에 떠 있다 → 여기 또 세우면 같은 줄이 두 번 보였다.
+     복사본에 표시를 달지 않고 부모 id 로 거른다 — ✏️ 로 고치면 복사본이 그대로 하위에 저장되기 때문이다. */
+  const recParentIds = new Set(tasks.filter(t => t.recurringId).map(t => t.id));
+  const overduePlan = planned.filter(t => { const d = diffDays(t.planDate); return d !== null && d < 0 && !t.recurringId && !(t._parentId && recParentIds.has(t._parentId)); }).sort((a, b) => a.planDate.localeCompare(b.planDate));
   const [weekOpen, setWeekOpen] = useState(false);
   if (!weekPlan.length && !overduePlan.length) return null;
-  const PlanItem = ({ t }) => {
+  /* ★요약 줄 제목은 오늘 목록 카드와 같은 Clamp 로 그린다(2026-10-02). 전역 줄바꿈(<style> body ★) 뒤로는 600자 URL 제목이
+     옆으로 넘치는 대신 스무 줄로 감겼다 — 2026-09-14 「URL 한 줄이 세 줄로 감기는 것을 막는다」(Clamp ★)와 어긋난다.
+     바깥 줄(날짜 + 이 줄)에서 이 줄이 남은 폭만 쓰도록 flex:1·minWidth:0 — 없으면 제목 길이만큼 자리를 잡아 날짜가 한 글자 폭으로 눌렸다.
+     컴포넌트(<PlanItem/>)가 아니라 함수로 부른다: 이 안에서 만든 컴포넌트는 그릴 때마다 새 종류라 통째로 다시 붙고,
+     그러면 Clamp 의 ▼ 더보기 펼침이 별·완료·알림 닫힘 같은 아무 갱신에도 접혔다. */
+  const planItem = (t) => {
     const p = projects.find(x => x.id === t.project);
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0", fontSize: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0", fontSize: 12, flex: 1, minWidth: 0 }}>
         <Badge st={t.status} />
-        <span style={{ color: "#374151", flex: 1 }}>{t.text}</span>
+        <span style={{ color: "#374151", flex: 1 }}><Clamp text={t.text} lines={2} /></span>
         {p && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{p.name}</span>}
         {t._parentId && <span style={{ fontSize: 9, color: "#9ca3af" }}>↳</span>}
         <button style={{ ...S.gh, fontSize: 10, padding: "1px 5px" }} onClick={() => onEdit(t, t._parentId)}>✏️</button>
@@ -1077,13 +1106,13 @@ const PlanDateSummary = ({ tasks, projects, onEdit }) => {
       {overduePlan.length > 0 && <div style={{ background: "linear-gradient(135deg, #FEF2F2 0%, #FECACA 100%)", border: "1px solid #FCA5A5", borderRadius: 8, padding: "10px 14px", marginBottom: 8 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: "#991B1B", marginBottom: 4 }}>📆 지난 계획 미처리 ({overduePlan.length}건)</div>
         {overduePlan.map(t => <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0", fontSize: 12 }}>
-          <span style={{ fontSize: 10, color: "#DC2626", fontWeight: 600 }}>{fd(t.planDate)}</span><PlanItem t={t} />
+          <span style={{ fontSize: 10, color: "#DC2626", fontWeight: 600, flexShrink: 0 }}>{fd(t.planDate)}</span>{planItem(t)}
         </div>)}
       </div>}
       {weekPlan.length > 0 && <div style={{ background: "linear-gradient(135deg, #F5F3FF 0%, #EDE9FE 100%)", border: "1px solid #C4B5FD", borderRadius: 8, padding: "10px 14px", marginBottom: 8 }}>
         <div onClick={() => setWeekOpen(!weekOpen)} style={{ fontSize: 13, fontWeight: 600, color: "#6D28D9", marginBottom: weekOpen ? 4 : 0, cursor: "pointer", userSelect: "none", display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 11 }}>{weekOpen ? "▼" : "▶"}</span> 📆 이번주 계획 ({weekPlan.length}건)</div>
         {weekOpen && weekPlan.map(t => <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0", fontSize: 12 }}>
-          <span style={{ fontSize: 10, color: "#6D28D9", fontWeight: 600 }}>{fd(t.planDate)}</span><PlanItem t={t} />
+          <span style={{ fontSize: 10, color: "#6D28D9", fontWeight: 600, flexShrink: 0 }}>{fd(t.planDate)}</span>{planItem(t)}
         </div>)}
       </div>}
     </div>
@@ -1105,14 +1134,14 @@ const ScheduleAlerts = ({ tasks, projects, onEdit }) => {
   const overdue = allScheduled.filter(i => diffDays(i.data.scheduledDate) < 0).sort((a, b) => a.data.scheduledDate.localeCompare(b.data.scheduledDate));
   const soon = allScheduled.filter(i => { const d = diffDays(i.data.scheduledDate); return d >= 0 && d <= 7; }).sort((a, b) => a.data.scheduledDate.localeCompare(b.data.scheduledDate));
   if (!overdue.length && !soon.length) return null;
-  const AlertItem = ({ item }) => {
+  const alertItem = (item) => { /* 컴포넌트가 아니라 함수로 부른다 — 이유는 PlanDateSummary 의 planItem ★주석. 키는 순번이 아니라 id(앞 줄이 빠져도 펼침이 옆 줄로 옮겨 가지 않게) */
     const p = projects.find(x => x.id === (item.type === "task" ? item.data.project : item.parent.project));
     const dl = deadlineInfo(item.data.scheduledDate);
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0", fontSize: 12 }}>
+      <div key={item.data.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0", fontSize: 12 }}>
         <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>
         {item.type === "sub" && <span style={{ fontSize: 10, color: "#9ca3af" }}>↳</span>}
-        <span style={{ color: "#374151", flex: 1 }}>{item.data.text}</span>
+        <span style={{ color: "#374151", flex: 1 }}><Clamp text={item.data.text} lines={2} /></span>{/* 요약 줄 제목 = Clamp(2026-10-02 · planItem ★주석) */}
         {p && <span style={{ fontSize: 10, color: "#9ca3af" }}>#{p.name}</span>}
         <button style={{ ...S.gh, fontSize: 10, padding: "1px 5px" }} onClick={() => item.type === "task" ? onEdit(item.data) : onEdit(item.data, item.parent.id)}>✏️</button>
       </div>
@@ -1120,8 +1149,8 @@ const ScheduleAlerts = ({ tasks, projects, onEdit }) => {
   };
   return (
     <div style={{ marginBottom: 12 }}>
-      {overdue.length > 0 && <div style={S.alertOverdue}><div style={{ fontSize: 13, fontWeight: 600, color: "#991B1B", marginBottom: 6 }}>🔴 마감 초과 ({overdue.length}건)</div>{overdue.map((item, i) => <AlertItem key={i} item={item} />)}</div>}
-      {soon.length > 0 && <div style={S.alertSoon}><div style={{ fontSize: 13, fontWeight: 600, color: "#9A3412", marginBottom: 6 }}>🟡 7일 이내 마감 ({soon.length}건)</div>{soon.map((item, i) => <AlertItem key={i} item={item} />)}</div>}
+      {overdue.length > 0 && <div style={S.alertOverdue}><div style={{ fontSize: 13, fontWeight: 600, color: "#991B1B", marginBottom: 6 }}>🔴 마감 초과 ({overdue.length}건)</div>{overdue.map(item => alertItem(item))}</div>}
+      {soon.length > 0 && <div style={S.alertSoon}><div style={{ fontSize: 13, fontWeight: 600, color: "#9A3412", marginBottom: 6 }}>🟡 7일 이내 마감 ({soon.length}건)</div>{soon.map(item => alertItem(item))}</div>}
     </div>
   );
 };
@@ -1231,6 +1260,13 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
     });
     return SK.map(k => ({ k, label: STATUSES[k].label, items: groups[k] })).filter(g => g.items.length > 0);
   }, [focusedTasks, focusedSubs]);
+  /* 오늘 목록에 따로 한 줄로 선 하위 id — 이 탭의 상위 카드(오늘 목록·전체 현황)는 펼쳐도 이 하위를 다시 그리지 않는다(2026-10-02 · TaskRow ★주석).
+     focusedSubs 가 아니라 **실제로 그린 것**에서 모은다: 상태 무리가 없어 건너뛴 하위(groups[sub.status] 없음)는 숨기면 어디에도 안 보인다. */
+  const todaySubIds = useMemo(() => {
+    const ids = new Set();
+    focusGroups.forEach(g => g.items.forEach(x => { if (x.type === "sub") ids.add(x.data.id); }));
+    return ids;
+  }, [focusGroups]);
 
   const toggleSubInParent = (parentId, subId, field) => {
     const parent = tasks.find(t => t.id === parentId);
@@ -1240,14 +1276,14 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
   };
 
   const renderItem = (item) => {
-    if (item.type === "task") return <TaskRow key={item.data.id} task={item.data} projects={projects} showProj dragHandlers={dragHandlers} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} />;
+    if (item.type === "task") return <TaskRow key={item.data.id} task={item.data} projects={projects} showProj dragHandlers={dragHandlers} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} hideSubIds={todaySubIds} />;
     return (
       <div key={item.data.id} style={item.underParent
         /* ★상위 바로 아래에 붙은 하위는 카드를 펼쳤을 때와 **같은 모양**으로 보인다(2026-09-08):
            들여쓰기 + 왼쪽 세로선. 상위 이름을 다시 적는 대신 위치와 선으로 소속을 보인다. */
         ? { marginLeft: 20, borderLeft: "2px solid #d1d5db", paddingLeft: 4 }
         : { paddingLeft: 8 }}>
-        {!item.underParent && <div style={{ fontSize: 10, color: "#9ca3af", paddingLeft: 30 }}>↳ {item.parent.text}</div>}
+        {!item.underParent && <div style={{ fontSize: 10, color: "#9ca3af", paddingLeft: 30, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={item.parent.text}>↳ {item.parent.text}</div>}{/* 소속 표시라 한 줄로 자른다 — 상위 제목이 URL 이면 통째로 감겨 몇 줄을 먹었다(2026-10-02) */}
         <SubRow sub={item.data}
           onToggleFocus={() => toggleSubInParent(item.parent.id, item.data.id, "focus")}
           onToggleDone={() => toggleSubInParent(item.parent.id, item.data.id, "done")}
@@ -1293,8 +1329,8 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
         </div>
         {showRest && (
           <div>
-            {unfocusedActions.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#3B82F6", marginBottom: 6 }}>🔵 다음행동 ({unfocusedActions.length})</div>{unfocusedActions.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} />)}</div>}
-            {waitingAll.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#F59E0B", marginBottom: 6 }}>⏳ 대기중 ({waitingAll.length})</div>{waitingAll.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} />)}</div>}
+            {unfocusedActions.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#3B82F6", marginBottom: 6 }}>🔵 다음행동 ({unfocusedActions.length})</div>{unfocusedActions.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} hideSubIds={todaySubIds} />)}</div>}
+            {waitingAll.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#F59E0B", marginBottom: 6 }}>⏳ 대기중 ({waitingAll.length})</div>{waitingAll.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} hideSubIds={todaySubIds} />)}</div>}
           </div>
         )}
       </div>
@@ -1346,22 +1382,41 @@ const NewSessionForm = ({ projectId, setRecurrings, onClose }) => {
     </div>
   );
 };
+const shortUrl = (u) => u.length > 60 ? u.slice(0, 58) + "…" : u;
+/* ★메모 속 URL 은 짧은 링크로(2026-10-02 · 소유자 「메모에 url 넣으면 옆으로 튕겨보이고 모바일에서는 갑자기 웹 화면으로 전환되어 보임」).
+   전역 줄바꿈(<style> body ★)으로 옆으로 넘치지는 않게 됐지만, 휴대폰 메모 칸(약 150px)에서는 450자 추적 URL 하나가 스무 줄 넘게 감겼다
+   (실측: URL 3개 메모 = 높이 914px) — 아래 ★긴 줄 접기 「URL 한 줄이 세 줄로 감기는 것을 막는다」와 어긋난다.
+   제목이 URL 일 때(Clamp)와 같은 모양으로 맞춘다: 앞 58자 + …, 누르면 새 창. 전체 주소는 링크와 title 에 그대로 있다.
+   주소의 끝: 공백·한글·한글 글의 문장부호(「」『』（）。… 등)에서 끊고(「…/abc에서」의 조사, 「「…」」로 감싼 주소),
+   끝에 붙은 영문 문장부호는 링크 밖 글자로 돌린다(「(…/edit)」·「…/x.」). 괄호가 짝이 맞는 「)」는 주소의 일부다(위키 「Foo_(bar)」).
+   복사한 주소의 한글·전각 문자는 인코딩돼 있다(실측 2026-10-01 저장본 URL 45개 중 한글 0). */
+const URL_RE = /(https?:\/\/[^\sㄱ-ㆎ가-힣「」『』（）【】〈〉《》、。，…“”‘’]+)/g; /* split·replace 에만 쓴다(전역 정규식을 test 에 쓰면 lastIndex 가 남는다) */
+const LinkText = ({ text }) => (text || "").split(URL_RE).map((part, i) => {
+  if (!(i % 2)) return part;
+  let u = part, tail = "";
+  while (/[.,;:!?'"\]>)]$/.test(u)) {
+    if (u.endsWith(")") && (u.match(/\(/g) || []).length >= (u.match(/\)/g) || []).length) break;
+    tail = u.slice(-1) + tail; u = u.slice(0, -1);
+  }
+  return <React.Fragment key={i}><a href={u} target="_blank" rel="noreferrer" title={u} style={{ color: "#4338CA", wordBreak: "break-all" }}>{shortUrl(u)}</a>{tail}</React.Fragment>;
+});
 /* ★긴 줄 접기(2026-09-14 소유자) — 메모 한 건이 화면을 다 먹거나 URL 한 줄이 세 줄로 감기는 것을 막는다.
    접힌 상태에서도 첫 줄은 보이므로 무엇인지 알아볼 수 있다. 누르면 펼쳐진다. */
+/* ★글 속 URL 도 짧은 링크로(2026-10-02). 회고는 영역 카드(이 Clamp)와 히스토리(LinkText) 두 곳에 보이는데, 여기서는 URL 이
+   그대로 감겨 같은 회고가 두 모양이었다(실측: 7줄 회고 중간의 유튜브 주소). 그래서 글 전체를 LinkText 로 그린다.
+   통째 링크는 **글 전체가 주소 하나**일 때만 — 옛 조건(주소로 「시작」)은 「주소 + 설명」 글을 통째 링크로 만들어 설명이 사라졌다.
+   접기 판단(long)은 화면에 보이는 길이로 잰다 — 긴 주소는 58자로 줄어 보이므로 원문 길이로 재면 괜히 「더보기」가 붙는다. */
 const Clamp = ({ text, lines }) => {
   const [open, setOpen] = useState(false);
   const n = lines || 2;
-  const long = (text || "").length > 90 || (text || "").split(String.fromCharCode(10)).length > n;
-  const isUrl = /^https?:\/\//.test((text || "").trim());
-  if (isUrl) {
-    const u = text.trim();
-    const short = u.length > 60 ? u.slice(0, 58) + "…" : u;
-    return <a href={u} target="_blank" rel="noreferrer" style={{ color: "#4338CA", wordBreak: "break-all", fontSize: 12 }} title={u}>{short}</a>;
-  }
-  if (!long) return <span style={{ whiteSpace: "pre-wrap" }}>{text}</span>;
+  const shown = (text || "").replace(URL_RE, u => shortUrl(u));
+  const long = shown.length > 90 || shown.split(String.fromCharCode(10)).length > n;
+  const whole = (text || "").trim().split(URL_RE); /* 주소의 끝은 LinkText 와 같은 기준으로 잰다 — 「주소+조사」 한 덩어리가 통째 링크가 되지 않게 */
+  if (whole.length === 3 && !whole[0] && !whole[2]) return <span style={{ fontSize: 12 }}><LinkText text={whole[1]} /></span>;
+  if (!long) return <span style={{ whiteSpace: "pre-wrap" }}><LinkText text={text} /></span>;
   return (
     <span>
-      <span style={{ whiteSpace: "pre-wrap", display: "-webkit-box", WebkitLineClamp: open ? "unset" : n, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{text}</span>
+      <span style={{ whiteSpace: "pre-wrap", display: "-webkit-box", WebkitLineClamp: open ? "unset" : n, WebkitBoxOrient: "vertical", overflow: "hidden" }}><LinkText text={text} /></span>
       <span onClick={() => setOpen(!open)} style={{ fontSize: 11, color: "#6366F1", cursor: "pointer", userSelect: "none" }}>{open ? "▲ 접기" : "▼ 더보기"}</span>
     </span>
   );
@@ -1583,11 +1638,14 @@ const HistRow = ({ item, date, idx, onRestore, onUncancel, onEditMemo, onDeleteM
   const hasRecap = !!(orig.recap || "").trim(); /* ★여기서 고치는 것은 **회고**다. 메모(notes)는 아래에 읽기 전용으로 같이 보인다 */
   return (
     <div onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 4px", fontSize: 13, borderRadius: 4, background: h ? "#f8fafc" : "transparent" }}>
+      {/* ★줄이 꽉 차면 꼬리표(상태 변경·세부·시각·버튼)가 다음 줄로 내려가고 제목은 120px 를 지킨다(2026-10-02).
+           전역 줄바꿈(<style> body ★) 뒤로 제목의 최소폭이 한 글자까지 줄어, 상태+계획일을 함께 바꾼 기록 같은 꽉 찬 줄에서
+           제목이 한 글자씩 세로로 쌓였다(실측 375px: 제목 폭 12px · 줄 높이 299px. 그 전에도 32px · 133px 로 눌려 있었다). */}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "4px 4px", fontSize: 13, borderRadius: 4, background: h ? "#f8fafc" : "transparent" }}>
         <span style={{ fontSize: 12, flexShrink: 0 }}>{t.icon}</span>
         <span style={{ color: "#9ca3af", fontSize: 11, flexShrink: 0 }}>#{item.projectName}</span>
         {item.isSub && <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }} title={item.parentText ? "↳ " + item.parentText : "하위 할일"}>↳</span>}
-        <span style={{ flex: 1, ...(item.cancelled ? { textDecoration: "line-through", color: "#9ca3af" } : {}) }}>{item.text || <span style={{ color: "#9ca3af" }}>{(orig.recap || "").split(String.fromCharCode(10))[0].slice(0, 40)}</span>}</span>
+        <span style={{ flex: "1 1 120px", minWidth: 0, ...(item.cancelled ? { textDecoration: "line-through", color: "#9ca3af" } : {}) }}>{item.text ? <Clamp text={item.text} lines={2} /> : <span style={{ color: "#9ca3af" }}><Clamp text={(orig.recap || "").split(String.fromCharCode(10))[0]} lines={1} /></span>}</span>{/* 요약 줄 제목 = Clamp(2026-10-02 · planItem ★주석). 「회고만」 줄은 회고 첫 줄을 같은 Clamp 로 — 옛 40자 자르기는 URL 을 중간에서 잘라 원문 그대로 보였다 */}
         {item.cancelled && <span style={{ fontSize: 9, color: "#DC2626", background: "#FEF2F2", border: "1px solid #FECACA", padding: "0 4px", borderRadius: 4, flexShrink: 0 }}>취소됨</span>}
         {item.memoOnly && !item.cancelled && <span style={{ fontSize: 9, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", padding: "0 4px", borderRadius: 4, flexShrink: 0 }} title="회고만 남긴 기록입니다. 수행 카운트에는 안 들어가고 영역 카드에만 모입니다.">🪞 회고만</span>}
         {hasCtx && <span onClick={() => setOpen(!open)} title="메모·회고 보기" style={{ cursor: "pointer", fontSize: 10, color: open ? "#92400E" : "#B45309", background: open ? "#FEF3C7" : "#FFFBEB", border: "1px solid #FDE68A", padding: "1px 5px", borderRadius: 4, userSelect: "none", flexShrink: 0 }}>{orig.notes ? "📝" : ""}{orig.recap ? "🪞" : ""}</span>}
@@ -1609,8 +1667,8 @@ const HistRow = ({ item, date, idx, onRestore, onUncancel, onEditMemo, onDeleteM
             <button style={{ ...S.gh, fontSize: 11 }} onClick={() => setEditing(false)}>취소</button>
           </div>
         </div>}
-        {!editing && orig.recap && <div style={{ ...S.note, marginTop: 2, background: "#EEF2FF", borderColor: "#C7D2FE", color: "#3730A3" }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.6, marginRight: 5 }}>🪞 회고</span>{orig.recap}</div>}
-        {!editing && orig.notes && <div style={{ ...S.note, marginTop: 2 }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.6, marginRight: 5 }}>📝 메모</span>{orig.notes}</div>}
+        {!editing && orig.recap && <div style={{ ...S.note, marginTop: 2, background: "#EEF2FF", borderColor: "#C7D2FE", color: "#3730A3" }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.6, marginRight: 5 }}>🪞 회고</span><LinkText text={orig.recap} /></div>}
+        {!editing && orig.notes && <div style={{ ...S.note, marginTop: 2 }}><span style={{ fontSize: 9, fontWeight: 700, opacity: 0.6, marginRight: 5 }}>📝 메모</span><LinkText text={orig.notes} /></div>}
       </div>}
     </div>
   );
@@ -2201,6 +2259,9 @@ function App({ onSwitchWs }) {
   }, [tasks, projects, history, recurrings]);
 
   const showT = (msg, undo) => setToast({ msg, undo });
+  /* 알림 문구에 넣는 제목은 40자에서 자른다(2026-10-02). 600자 URL 제목이면 알림이 화면보다 길어져 되돌리기가 밖으로 나갔다.
+     ⛔ 문구에서만 자른다 — task.text 자체를 자르면 되돌리기(히스토리 항목을 text 로 찾음)가 어긋난다. */
+  const tName = (s) => (s || "").length > 40 ? s.slice(0, 40) + "…" : (s || "");
   const hideT = () => setToast(null);
   const nowTime = () => { const d = new Date(); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
 
@@ -2447,7 +2508,7 @@ function App({ onSwitchWs }) {
     setTasks(p => p.filter(t => t.id !== id));
     const subCount = (task.subtasks || []).length;
     addHistItem({ type: "done", text: task.text, projectName: proj?.name || "", project: task.project, orig: snap, subCount, time: nowTime() });
-    showT(`"${task.text}" 완료`, () => {
+    showT(`"${tName(task.text)}" 완료`, () => {
       setTasks(p => [...p, cloneTask(snap)]);
       removeHistItem(it => it.type === "done" && it.orig?.id === id);
       hideT();
@@ -2466,7 +2527,7 @@ function App({ onSwitchWs }) {
        반복 자체를 멈추려면 반복설정에서 삭제. */
     addHistItem({ type: "deleted", text: task.text, projectName: proj?.name || "", time: nowTime(),
       ...(task.recurringId ? { orig: { id: task.id, recurringId: task.recurringId, recurringPeriod: task.recurringPeriod, notes: task.notes } } : {}) });
-    showT(`"${task.text}" 삭제됨`, () => {
+    showT(`"${tName(task.text)}" 삭제됨`, () => {
       setTasks(p => [...p, cloneTask(task)]);
       if (orphanSubDone.length) setHistory(prev => { let next = [...prev]; orphanSubDone.forEach(({ date, item }) => { const ex = next.find(h => h.date === date); if (ex) next = next.map(h => h.date === date ? { ...h, items: [...h.items, item] } : h); else next = [...next, { date, items: [item] }]; }); return next; });
       removeHistItem(it => it.type === "deleted" && it.text === task.text);

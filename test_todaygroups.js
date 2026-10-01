@@ -96,5 +96,72 @@ console.log("\n[7] 알 수 없는 상태의 하위는 조용히 빠진다(터지
   ok("목록에는 상위만", !threw && flat(gs) === "action:TA", threw ? "throw" : flat(gs));
 }
 
+/* 2026-10-02 — 오늘 목록에 따로 선 하위는 상위 카드의 펼친 목록에서 뺀다(같은 하위 두 줄 표시 수정).
+   todaySubIds 본문과 TaskRow 의 listSubs 한 줄을 소스에서 그대로 뽑아 실행한다. */
+const ia = SRC.indexOf("const todaySubIds = useMemo(() => {");
+if (ia < 0) throw new Error("todaySubIds 를 못 찾음 — 패치 누락");
+const ie = SRC.indexOf("\n  }, [focusGroups]);", ia);
+const ID_BODY = SRC.slice(SRC.indexOf("{", ia + 30) + 1, ie);
+const lsLine = (SRC.match(/const listSubs = [^\n]*;/) || [])[0];
+if (!lsLine) throw new Error("listSubs 를 못 찾음 — 패치 누락");
+const todaySubIdsOf = (focusGroups) => new Function("focusGroups", ID_BODY)(focusGroups);
+const listSubsOf = (subs, hideSubIds) => new Function("subs", "hideSubIds", lsLine + "\nreturn listSubs;")(subs, hideSubIds);
+const ids = (arr) => arr.map(s => s.id).join(",");
+
+console.log("\n[8] 상위 바로 아래 선 하위는 펼친 목록에서 빠진다(소유자 실측 2026-10-02)");
+{
+  const q = { id: "q", status: "action" }, r = { id: "r", status: "action" }; /* q=오늘, r=날짜 없음 */
+  const p = { ...T("A"), subtasks: [q, r] };
+  const hide = todaySubIdsOf(makeGroups([p], [{ sub: q, parent: p }]));
+  ok("q 는 숨김 대상", hide.has("q") && !hide.has("r"), [...hide].join(","));
+  ok("펼친 목록엔 r 만", ids(listSubsOf(p.subtasks, hide)) === "r", ids(listSubsOf(p.subtasks, hide)));
+}
+
+console.log("\n[9] 상태가 달라 다른 무리에 선 하위도 펼친 목록에서 빠진다");
+{
+  const w = { id: "w", status: "waiting" };
+  const p = { ...T("A", "action"), subtasks: [w] };
+  const hide = todaySubIdsOf(makeGroups([p], [{ sub: w, parent: p }]));
+  ok("w 는 숨김 대상", hide.has("w"));
+  ok("펼친 목록이 비어 ▼ 도 안 뜬다", listSubsOf(p.subtasks, hide).length === 0);
+}
+
+console.log("\n[10] 오늘 목록에 못 선 하위(알 수 없는 상태)는 숨기지 않는다 — 어디에도 안 보이게 되면 안 된다");
+{
+  const bad = { id: "bad", status: "someday" };
+  const p = { ...T("A"), subtasks: [bad] };
+  const hide = todaySubIdsOf(makeGroups([p], [{ sub: bad, parent: p }]));
+  ok("bad 는 숨김 대상 아님", !hide.has("bad"));
+  ok("펼친 목록에 남는다", ids(listSubsOf(p.subtasks, hide)) === "bad");
+}
+
+console.log("\n[11] 영역 탭(hideSubIds 없음)은 전부 그대로");
+{
+  const subs = [{ id: "a" }, { id: "b" }];
+  ok("둘 다 보인다", ids(listSubsOf(subs, undefined)) === "a,b");
+}
+
+/* 2026-10-02 — 반복 인스턴스의 지난 하위는 「지난 계획 미처리」에 세우지 않는다(이미 「오늘 할 일」에 떠 있다).
+   PlanDateSummary 의 planned·recParentIds·overduePlan 을 소스에서 그대로 뽑아 실행한다. */
+const pa = SRC.indexOf("  const planned = useMemo(() => {");
+const pb = SRC.indexOf("\n", SRC.indexOf("  const overduePlan = ", pa));
+if (pa < 0 || pb < 0) throw new Error("PlanDateSummary 계산부를 못 찾음");
+if (!/recParentIds/.test(SRC.slice(pa, pb))) throw new Error("recParentIds 가 없음 — 패치 누락");
+const ddA = SRC.indexOf("const diffDays = (dateStr) => {");
+const DD = SRC.slice(ddA, SRC.indexOf("\n};", ddA) + 3);
+const overdueOf = (tasks, TODAY) => new Function("tasks", "TODAY", "useMemo",
+  DD + "\n" + SRC.slice(pa, pb) + "\nreturn overduePlan;")(tasks, TODAY, (f) => f());
+const TD = "2026-10-02", YD = "2026-10-01";
+
+console.log("\n[12] 반복 부모의 지난 하위는 지난 계획에서 빠진다");
+{
+  const rec = { id: "R", text: "🎤 보컬", status: "action", recurringId: "rq", planDate: YD, subtasks: [{ id: "rs", text: "고음 연습", status: "action", planDate: YD }] };
+  const plain = { id: "P", text: "일반", status: "action", planDate: TD, subtasks: [{ id: "ps", text: "일반 하위", status: "action", planDate: YD }] };
+  const od = overdueOf([rec, plain], TD).map(x => x.id).join(",");
+  ok("반복 부모 하위(rs)는 없다", !/\brs\b/.test(od), od);
+  ok("반복 인스턴스 자체(R)도 없다(09-17)", !/\bR\b/.test(od), od);
+  ok("일반 부모의 지난 하위(ps)는 남는다", /\bps\b/.test(od), od);
+}
+
 console.log("\n" + (fail ? "실패 " + fail + "건 / " : "") + "통과 " + pass + "건");
 process.exit(fail ? 1 : 0);
