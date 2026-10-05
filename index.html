@@ -1852,9 +1852,12 @@ const areaRecaps = (projectId, recurrings, history) => {
     if ((o.project || "proj_etc") !== projectId) return; /* ★영역 기준: 어느 세션에서 남겼든 같은 영역이면 모인다 */
     const text = (o.recap || "").trim(); if (!text) return;   /* ★회고만. 참조용 메모(notes)는 그 태스크 안에 둔다 */
     const date = day.date || "";
-    items.push({ date, idx, from: nameOf[o.recurringId] || "", text }); /* idx = 수정·삭제용 좌표 */
+    items.push({ date, idx, time: it.time || "", from: nameOf[o.recurringId] || "", text }); /* idx = 수정·삭제용 좌표 */
   }));
-  items.sort((a, b) => b.date.localeCompare(a.date)); /* 최신 위로(2026-07-25 소유자) */
+  /* 최신 위로(2026-07-25 소유자). ★같은 날은 나중에 적은 것이 위(2026-10-05 소유자) — 날짜로만 정렬해서 같은 날 안에서는
+     히스토리에 붙은 순서(먼저 적은 것)가 위에 남았다(실측: 보컬 하루 2건씩 4일 전부 23:16 이 23:29 위).
+     시각(HH:MM) 다음은 idx — 같은 분에 적은 것도 나중에 붙은 것(idx 큰 것)이 위다. 시각 없는 옛 기록은 그날 맨 아래. */
+  items.sort((a, b) => b.date.localeCompare(a.date) || b.time.localeCompare(a.time) || b.idx - a.idx);
   return { items };
 };
 function App({ onSwitchWs }) {
