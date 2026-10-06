@@ -528,7 +528,7 @@ const PERSONAL_PROJECTS = [
   { id: "rt_workout", name: "운동", order: 0, kind: "routine" },
   { id: "rt_english", name: "영어", order: 1, kind: "routine" },
   { id: "rt_vocal",   name: "보컬", order: 2, kind: "routine" },
-  { id: "rt_writing", name: "글쓰기", order: 3, kind: "routine" },
+  /* 글쓰기(rt_writing) 카드는 2026-10-06 영역 종료로 뺐다(소유자 「앱에서 글쓰기 카드 삭제」) — 아래 RETIRED_PROJ_IDS */
   { id: "p_invest", name: "투자원칙 정립", order: 4, kind: "project" },
   { id: "p_workcap", name: "PM 엔진", order: 5, kind: "project" }, /* vault `2. Project/2026.06 ~ PM 엔진` 와 1:1. 구 이름 「업무역량 시스템」은 그 폴더가 업무 루틴으로 나간 뒤 남은 잔재였다 */
   { id: "p_b464zvu", name: "PDS 시스템 개선", order: 6, kind: "project" },
@@ -540,7 +540,11 @@ const PERSONAL_PROJECTS = [
   /* 버킷(약속·집안일·기타) 전면 폐지(2026-07-01, 소유자 지시): 개인=루틴/프로젝트만. bucketTrimDone가 버킷 프로젝트 + Track2 미러([t2-*]) 데이터를 제거. */
 ];
 const PERSONAL_BUCKET_IDS = [];
-const ROUTINE_PROJ_IDS = ["rt_workout", "rt_english", "rt_vocal", "rt_writing"];
+/* ★종료 영역 카드 — 정본 목록에서 빼도 저장된 projects 에 남아 있으면 S4a 보강이 extra 로 계속 살려 두므로, 로드할 때 걷어 낸다.
+   할 일이 붙어 있으면 걷지 않는다(할 일이 갈 곳을 잃는다 · 그때는 영역 탭에서 카드를 지우면 된다).
+   ⚠ 같은 id 의 반복 묘비(PERSONAL_ROUTINES 의 rt_writing · disabled)는 남긴다 — 지우면 재시드로 부활한다. */
+const RETIRED_PROJ_IDS = new Set(["rt_writing"]); /* 2026-10-06 글쓰기 영역 종료 */
+const ROUTINE_PROJ_IDS = ["rt_workout", "rt_english", "rt_vocal"];
 /* ★"반복(recurring) 붙은 프로젝트 = 루틴" 자동 도출(2026-07-12): App이 recurrings에서 매 렌더 동기하는 프로젝트 id 집합.
    kind 수동관리·DB 직접쓰기 없이 새 영역에 반복만 걸면 자동으로 루틴이 됨. isRoutineProj·projSortKey가 참조 →
    회고탭·과제별·드롭다운·오늘탭 정렬이 한 규칙 공유. (기존 kind:routine·시드 id는 명시 override로 계속 존중.) */
@@ -568,7 +572,7 @@ const PERSONAL_ROUTINES = [
   { id: "rt_workout", type: "daily", text: "🏋️ 운동", project: "rt_workout" },
   { id: "rt_english", type: "daily", text: "🇬🇧 영어", project: "rt_english" },
   { id: "rt_vocal",   type: "daily", text: "🎤 보컬", project: "rt_vocal" },
-  { id: "rt_writing", type: "daily", text: "✍️ 글쓰기", project: "rt_writing" },
+  { id: "rt_writing", type: "daily", text: "✍️ 글쓰기", project: "rt_writing" }, /* 카드는 2026-10-06 삭제 · 이 줄은 disabled 묘비를 지키려고 남긴다 */
   /* 캘린더 고정 수업 → task-mgr 소유 루틴(2026-07-04): 기존 네이티브 캘린더 이벤트는 사용자가 삭제, 이후 task-mgr가 tmk 멱등키로 재등록(중복 0).
      링글 1:1 = 월요일, 노래(보컬) 레슨 = 목요일. time 있으면 타임드 이벤트로 push(운동/보컬 루틴과 동일 경로). */
   /* ⛔ `rt_ringle_mon` 은 2026-08-24 에 이 목록에서 뺐다(소유자 지시 "보컬 레슨처럼 다뤄지게").
@@ -2008,7 +2012,8 @@ function App({ onSwitchWs }) {
     setProjects(prev => {
       const byId = Object.fromEntries(prev.map(p => [p.id, p]));
       const canonical = PERSONAL_PROJECTS.map(p => byId[p.id] || p);
-      const extra = prev.filter(p => !PERSONAL_PROJECTS.some(c => c.id === p.id) && p.id !== "p_routine"); /* B2: 옛 🔁 루틴 프로젝트 마이그레이션 제거 */
+      const extra = prev.filter(p => !PERSONAL_PROJECTS.some(c => c.id === p.id) && p.id !== "p_routine" /* B2: 옛 🔁 루틴 프로젝트 마이그레이션 제거 */
+        && !(RETIRED_PROJ_IDS.has(p.id) && !tasks.some(t => t && t.project === p.id))); /* 종료 영역 카드(할 일 없을 때만) */
       const merged = [...canonical, ...extra];
       const same = merged.length === prev.length && merged.every((p, i) => p.id === prev[i]?.id);
       return same ? prev : merged;
@@ -2056,7 +2061,7 @@ function App({ onSwitchWs }) {
   useEffect(() => {
     if (isWork || !cloudLoaded || routineProjFixDone.current) return;
     routineProjFixDone.current = true;
-    const RID = new Set(ROUTINE_PROJ_IDS); /* rt_workout·rt_english·rt_vocal·rt_writing */
+    const RID = new Set(ROUTINE_PROJ_IDS); /* rt_workout·rt_english·rt_vocal */
     setRecurrings(prev => { let ch = false; const n = prev.map(r => (r.project === "p_routine" && RID.has(r.id)) ? (ch = true, { ...r, project: r.id }) : r); return ch ? n : prev; });
     setTasks(prev => { let ch = false; const n = prev.map(t => (t.project === "p_routine" && t.recurringId && RID.has(t.recurringId)) ? (ch = true, { ...t, project: t.recurringId }) : t); return ch ? n : prev; });
   }, [cloudLoaded]); /* eslint-disable-line */
