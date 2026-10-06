@@ -1596,8 +1596,8 @@ const HistoryView = ({ history, onRestore, onUncancel, onEditMemo, onDeleteMemo 
       )}
       {sorted.length === 0 && <div style={S.emp}>활동 기록이 여기에 쌓입니다.<br/>완료, 추가, 상태변경 등 모든 활동이 날짜별로 기록됩니다.</div>}
       {sorted.map(day => {
-        const filtered = filter === "all" ? day.items : day.items.filter(i => i.type === filter);
-        if (!filtered.length) return null;
+        const rows = histRows(day.items, filter); /* 같은 날은 최근 것이 위(2026-10-05 · newerFirst ★주석) */
+        if (!rows.length) return null;
         const doneCnt = day.items.filter(i => i.type === "done" && !i.cancelled && !i.memoOnly).length;
         const addCnt = day.items.filter(i => i.type === "added").length;
         const stsCnt = day.items.filter(i => i.type === "status").length;
@@ -1613,7 +1613,7 @@ const HistoryView = ({ history, onRestore, onUncancel, onEditMemo, onDeleteMemo 
               {stsCnt > 0 && <span>🔄 {stsCnt}건 변경</span>}
               {editCnt > 0 && <span>✏️ {editCnt}건 수정</span>}
             </div>
-            {filtered.map((item, i) => <HistRow key={(item.orig && item.orig.id) || (day.date + "#" + i)} item={item} date={day.date} idx={day.items.indexOf(item)} onRestore={onRestore} onUncancel={onUncancel} onEditMemo={onEditMemo} onDeleteMemo={onDeleteMemo} />)}
+            {rows.map(({ item, idx }) => <HistRow key={(item.orig && item.orig.id) || (day.date + "#" + idx)} item={item} date={day.date} idx={idx} onRestore={onRestore} onUncancel={onUncancel} onEditMemo={onEditMemo} onDeleteMemo={onDeleteMemo} />)}
           </div>
         );
       })}
@@ -1846,6 +1846,16 @@ const weekDoneCount = (doneSet, rid, wk) => { let n = 0; doneSet.forEach(k => { 
    ★2026-09-14 소유자 결정 — 정제된 메모를 접는 sweptThrough 기전을 폐기했다. 한 번도 접힌 적이 없었고
      (쓰기 5회 중 8루틴 가운데 2개만 값이 들어가 기준선이 늘 빈 문자열이었다) 앱·스크립트·검사기 세 곳에
      걸친 유지비만 들었다. 이제 정리한 메모는 일요일에 일지로 옮긴 뒤 그 자리에서 ✕ 로 지운다. */
+/* ★같은 날 안의 순서 = 최근 것이 위(2026-10-05 소유자) — 영역 회고(areaRecaps)와 히스토리 탭(histRows)이 함께 쓴다.
+   줄 오른쪽에 찍힌 시각(HH:MM) 내림차순, 같은 분이면 히스토리에 나중에 붙은 것(idx 큰 것)이 위. 시각 없는 기록은 그날 맨 아래.
+   붙은 순서보다 시각이 먼저인 이유: 주간 정제(sweep_write)가 덧붙이는 소급 기록은 끝에 붙지만 그 루틴에 정해 둔 시각(헬스 18:00 등)을
+   달고 와서, 붙은 순서로 세우면 찍힌 시각이 뒤죽박죽이 된다(2026-10-05 저장본: 붙은 순서≠시각 순서인 날 개인 9·업무 4).
+   그중 5일(개인 07-11 · 업무 04-27·05-11·05-18·06-08)은 자정을 넘긴 기록이 전날 날짜로 들어간 것이라 그날 맨 아래로 간다 —
+   2026-09-07 복귀 시 날짜 확인 뒤로는 0건이라 따로 고치지 않는다(추정 규칙을 넣으면 새벽 시각 소급 기록이 틀어진다). */
+const newerFirst = (a, b) => (b.time || "").localeCompare(a.time || "") || b.idx - a.idx;
+/* 히스토리 탭 하루치 줄 — idx 는 day.items 안의 원래 자리(되돌리기·회고 수정·삭제 좌표)라 순서를 바꿔도 그대로 넘긴다. */
+const histRows = (items, filter) => (items || []).map((item, idx) => ({ item, idx, time: item.time || "" }))
+  .filter(r => filter === "all" || r.item.type === filter).sort(newerFirst);
 const areaRecaps = (projectId, recurrings, history) => {
   const nameOf = {};
   (recurrings || []).forEach(r => { if (r.project === projectId) nameOf[r.id] = r.text || ""; });
@@ -1858,10 +1868,9 @@ const areaRecaps = (projectId, recurrings, history) => {
     const date = day.date || "";
     items.push({ date, idx, time: it.time || "", from: nameOf[o.recurringId] || "", text }); /* idx = 수정·삭제용 좌표 */
   }));
-  /* 최신 위로(2026-07-25 소유자). ★같은 날은 나중에 적은 것이 위(2026-10-05 소유자) — 날짜로만 정렬해서 같은 날 안에서는
-     히스토리에 붙은 순서(먼저 적은 것)가 위에 남았다(실측: 보컬 하루 2건씩 4일 전부 23:16 이 23:29 위).
-     시각(HH:MM) 다음은 idx — 같은 분에 적은 것도 나중에 붙은 것(idx 큰 것)이 위다. 시각 없는 옛 기록은 그날 맨 아래. */
-  items.sort((a, b) => b.date.localeCompare(a.date) || b.time.localeCompare(a.time) || b.idx - a.idx);
+  /* 최신 위로(2026-07-25 소유자). ★같은 날은 나중에 적은 것이 위(2026-10-05 소유자 · 규칙은 위 newerFirst) — 날짜로만 정렬해서
+     같은 날 안에서는 히스토리에 붙은 순서(먼저 적은 것)가 위에 남았다(실측: 보컬 하루 2건씩 4일 전부 23:16 이 23:29 위). */
+  items.sort((a, b) => b.date.localeCompare(a.date) || newerFirst(a, b));
   return { items };
 };
 function App({ onSwitchWs }) {
