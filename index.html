@@ -461,7 +461,7 @@ const generateRecurringTasks = (recurrings, tasks, projects, history) => {
   const allInstances = [...tasks, ...histInstances];
   const newTasks = [];
   recurrings.forEach(r => {
-    if (r.disabled) return; /* ★M5: 삭제 표식된 시드 루틴은 인스턴스 생성 안 함 */
+    if (r.disabled) return; /* 꺼진 반복은 인스턴스를 만들지 않는다(옛 시드 묘비 포함) */
     /* ★weekly: 그 요일 당일에만 인스턴스를 만든다(2026-09-12 소유자 결정 — 캘린더를 걷으면서 당일 글랜스가 사라졌다). */
     /* ★주N회(count)도 오늘 할 일에 띄운다(2026-09-15 소유자 「오늘 탭에 안 떠 있으니 체크 안 하게 될 것 같다」).
        구 동작은 인스턴스를 아예 안 만들고 주간 스트립에만 맡겼는데, 그 스트립은 루틴 탭을 영역 카드로 합칠 때
@@ -541,8 +541,7 @@ const PERSONAL_PROJECTS = [
 ];
 const PERSONAL_BUCKET_IDS = [];
 /* ★종료 영역 카드 — 정본 목록에서 빼도 저장된 projects 에 남아 있으면 S4a 보강이 extra 로 계속 살려 두므로, 로드할 때 걷어 낸다.
-   할 일이 붙어 있으면 걷지 않는다(할 일이 갈 곳을 잃는다 · 그때는 영역 탭에서 카드를 지우면 된다).
-   ⚠ 같은 id 의 반복 묘비(PERSONAL_ROUTINES 의 rt_writing · disabled)는 남긴다 — 지우면 재시드로 부활한다. */
+   할 일이 붙어 있으면 걷지 않는다(할 일이 갈 곳을 잃는다 · 그때는 영역 탭에서 카드를 지우면 된다). */
 const RETIRED_PROJ_IDS = new Set(["rt_writing"]); /* 2026-10-06 글쓰기 영역 종료 */
 const ROUTINE_PROJ_IDS = ["rt_workout", "rt_english", "rt_vocal"];
 /* ★"반복(recurring) 붙은 프로젝트 = 루틴" 자동 도출(2026-07-12): App이 recurrings에서 매 렌더 동기하는 프로젝트 id 집합.
@@ -567,22 +566,11 @@ const isStaleRoutine = (t) => {
   if (!(t && t.recurringId && t.planDate && t.planDate < TODAY)) return false;
   return (t.recurringPeriod || "").indexOf(getWeekId() + "-n") !== 0;
 };
-/* B2: 루틴 4종 = 매일 daily 반복 할일, 각자 영역 프로젝트(project=id) 소속. recurringId로 /sweep이 영역 일지 매핑. 메모=task.notes(전날 상속). */
-const PERSONAL_ROUTINES = [
-  { id: "rt_workout", type: "daily", text: "🏋️ 운동", project: "rt_workout" },
-  { id: "rt_english", type: "daily", text: "🇬🇧 영어", project: "rt_english" },
-  { id: "rt_vocal",   type: "daily", text: "🎤 보컬", project: "rt_vocal" },
-  { id: "rt_writing", type: "daily", text: "✍️ 글쓰기", project: "rt_writing" }, /* 카드는 2026-10-06 삭제 · 이 줄은 disabled 묘비를 지키려고 남긴다 */
-  /* 캘린더 고정 수업 → task-mgr 소유 루틴(2026-07-04): 기존 네이티브 캘린더 이벤트는 사용자가 삭제, 이후 task-mgr가 tmk 멱등키로 재등록(중복 0).
-     링글 1:1 = 월요일, 노래(보컬) 레슨 = 목요일. time 있으면 타임드 이벤트로 push(운동/보컬 루틴과 동일 경로). */
-  /* ⛔ `rt_ringle_mon` 은 2026-08-24 에 이 목록에서 뺐다(소유자 지시 "보컬 레슨처럼 다뤄지게").
-       시드 목록의 유일한 효과는 ① 없으면 다시 심기 ② SEED_ROUTINE_IDS = 삭제 시 완전 제거 대신 disabled 묘비.
-       링글은 이미 존재해 ①은 역할이 끝났고, ② 때문에 **보컬 레슨(g3qk0rh·비시드)과 삭제 거동만 갈려 있었다.**
-       빼도 잃는 것이 없다 — 루틴 자체·history 15건은 recurrings 에 그대로 있고 id 도 안 바뀐다.
-       ★`rt_vocal_lesson` 은 남긴다: 지금 **disabled 묘비 상태**라 목록에서 빼면 id 가 사라진 것으로 보여 재시드로 부활한다. */
-  { id: "rt_vocal_lesson", type: "weekly", dows: [4], time: "17:00", text: "🎤 노래 레슨",       project: "rt_vocal" },
-];
-const SEED_ROUTINE_IDS = new Set(PERSONAL_ROUTINES.map(r => r.id)); /* ★M5(2026-07-04): 시드 루틴 삭제는 제거 대신 disabled tombstone → 매 로드 재시드 부활 방지 */
+/* ★시드 반복 폐지(2026-10-06 · 소유자 「시드 묘비가 꼭 필요한거야?」 → 「진행해줘」).
+   예전엔 PERSONAL_ROUTINES(운동·영어·보컬·글쓰기·노래 레슨) 중 recurrings 에 없는 id 를 로드마다 다시 심었고(B2 · 2026-06-23),
+   그래서 그 다섯은 지워도 되살아나 disabled 묘비로만 남겼다(M5 · 2026-07-04 · 2026-07-19 실사고).
+   다섯 다 꺼져 있고 실제로 쓰는 반복은 따로 만든 것들이라, 다시 심기가 지키는 것은 묘비뿐이었다 → 다시 심기와 묘비 규칙을 걷는다.
+   이제 반복 삭제는 규칙 하나: 목록에서 뺀다. 옛 묘비 다섯은 배포 뒤 하네스 sweep_write prune 으로 지운다. */
 
 /* ─── localStorage (이중 백업, 워크스페이스별 키) ─── */
 const loadSaved = () => {
@@ -596,6 +584,10 @@ const loadSaved = () => {
   } catch { return null; }
 };
 /* 마이그레이션: scheduled 상태 제거 + planDate 필드 추가 */
+/* 반복 목록 정규화(2026-10-06): 클라우드 배열에 빈칸(null)이 생기거나 RTDB 가 희소 배열을 객체로 돌려주면
+   `r.disabled` 를 읽는 렌더가 던져 화면이 하얗게 된다(묘비 prune 뒤 prune 전부터 열려 있던 탭이 옛 인덱스로 쓰는 경우).
+   빈칸은 걸러 내고 객체는 값 목록으로 편다. 다음 저장이 바뀐 키만 보내며 클라우드도 채워진 배열로 돌아간다. */
+const recList = (v) => Array.isArray(v) ? v.filter(Boolean) : (v && typeof v === "object" ? Object.values(v).filter(Boolean) : null);
 const migrateData = (data) => {
   if (!data || !data.tasks) return data;
   const TASK_MIGRATION = {
@@ -1466,7 +1458,7 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus
   const wkNow = getWeekId();
   const doneSet = routineDoneSet(tasks, history);
   const delRec = (id) => { if (!window.confirm("이 반복 세션을 지울까요?")) return;
-    setRecurrings(prev => SEED_ROUTINE_IDS.has(id) ? prev.map(r => r.id === id ? { ...r, disabled: true } : r) : prev.filter(r => r.id !== id)); };
+    setRecurrings(prev => prev.filter(r => r.id !== id)); };
   const tog = id => setOpen(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   /* ★참조 무결성(2026-07-26·소유자): 과제 ↔ 반복 태스크. 헤더 숫자가 **미완료 할일만** 세던 탓에
      반복 3개짜리 살아있는 영역과 참조 0인 고아 과제가 화면에서 똑같이 "0" 으로 보였다 → 둘 다 문제였다:
@@ -1767,8 +1759,8 @@ const RecurringSettings = ({ recurrings: allRecurrings, setRecurrings, projects:
     }
     setNt(""); setNdows([]); setDom(1); setLastDay(false); setRTime(""); setFreqN(3);
   };
-  /* ★M5: 시드 루틴은 제거 대신 disabled 표식(재시드 부활 방지). 사용자 생성 반복은 완전 제거. */
-  const delR = (id) => { setRecurrings(p => SEED_ROUTINE_IDS.has(id) ? p.map(r => r.id === id ? { ...r, disabled: true } : r) : p.filter(r => r.id !== id)); }; /* 삭제/비활성 시 미래 placeholder 고아 제거(2026-07-06) */
+  /* 반복 삭제 = 목록에서 뺀다(시드 묘비 규칙은 2026-10-06 걷었다). */
+  const delR = (id) => { setRecurrings(p => p.filter(r => r.id !== id)); }; /* 삭제/비활성 시 미래 placeholder 고아 제거(2026-07-06) */
   const wkNow = getWeekId();
   const doneSet = routineDoneSet(tasks, history);
   return (
@@ -1882,7 +1874,7 @@ function App({ onSwitchWs }) {
   /* (2026-06-26) issues·projectInfo state 제거 (폐기) */
   /* (2026-07-31) 첨부 파일 목록 state 제거 — 배선 폐지. 옛 백업/blob 의 해당 키는 읽지도 쓰지도 않는다(비파괴). */
   const [history, setHistory] = useState(saved?.history || []);
-  const [recurrings, setRecurrings] = useState(saved?.recurrings || (isWork ? [
+  const [recurrings, setRecurrings] = useState(recList(saved?.recurrings) || (isWork ? [
     { id: gid(), type: "weekly", dows: [5], text: "다운로드 폴더 정리", project: "proj_etc" },
     { id: gid(), type: "weekly", dows: [3], text: "위클리 작성", project: "proj_etc" },
     { id: gid(), type: "weekly", dows: [2], text: "영어공부 기사 확인", project: "proj_etc" },
@@ -1931,7 +1923,7 @@ function App({ onSwitchWs }) {
           setTasks(m.tasks || []);
           setProjects(m.projects || INIT_PROJECTS);
           setHistory(m.history || []);
-          setRecurrings(m.recurrings || []);
+          setRecurrings(recList(m.recurrings) || []);
           lastSavedAtRef.current = normSavedAt(cloudData.savedAt); /* 채택했으니 기준도 클라우드 값으로(정규화해 보관 — 이후 비교가 전부 ISO 문자열 기준) */
         }
         /* ★PATCH diff 기준선 = **클라우드의 내용**(채택 여부와 무관). 채택 안 한 경우에도 이게 맞다 —
@@ -2243,14 +2235,8 @@ function App({ onSwitchWs }) {
   useEffect(() => {
     if (!cloudLoaded || recurDone.current) return;
     recurDone.current = true;
-    /* B: 개인 루틴 4종(daily)이 recurrings에 없으면 시드 후 같은 패스에서 생성 (한 번만) */
-    let eff = recurrings;
-    if (!isWork) {
-      const have = new Set(recurrings.map(r => r.id));
-      const missing = PERSONAL_ROUTINES.filter(r => !have.has(r.id));
-      if (missing.length) { eff = [...recurrings, ...missing]; setRecurrings(eff); }
-    }
-    const newTasks = generateRecurringTasks(eff, tasks, projects, history);
+    /* 개인 기본 반복 다시 심기는 2026-10-06 걷었다(위 「시드 반복 폐지」) — 있는 반복으로만 만든다. */
+    const newTasks = generateRecurringTasks(recurrings, tasks, projects, history);
     if (newTasks.length > 0) {
       setTasks(p => [...p, ...newTasks]);
       const now = new Date(); const hm = `${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
