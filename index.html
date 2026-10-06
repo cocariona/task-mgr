@@ -530,7 +530,7 @@ const PERSONAL_PROJECTS = [
   { id: "rt_vocal",   name: "보컬", order: 2, kind: "routine" },
   /* 글쓰기(rt_writing) 카드는 2026-10-06 영역 종료로 뺐다(소유자 「앱에서 글쓰기 카드 삭제」) — 아래 RETIRED_PROJ_IDS */
   { id: "p_invest", name: "투자원칙 정립", order: 4, kind: "project" },
-  { id: "p_workcap", name: "PM 엔진", order: 5, kind: "project" }, /* vault `2. Project/2026.06 ~ PM 엔진` 와 1:1. 구 이름 「업무역량 시스템」은 그 폴더가 업무 루틴으로 나간 뒤 남은 잔재였다 */
+  /* PM 엔진(p_workcap) 카드는 2026-10-07 업무 앱(INIT_PROJECTS)으로 옮겼다(소유자 10-03 동의 · 10-07 「카드 이동 먼저」) — 아래 RETIRED_PROJ_IDS */
   { id: "p_b464zvu", name: "PDS 시스템 개선", order: 6, kind: "project" },
   /* ★kind:"system" — PDS 자체를 굴리는 것. **영역 탭에 카드를 세우지 않는다.**
      주간 정제는 vault 폴더가 없는 유일한 반복이고(성과가 아니라 유지가 목적),
@@ -540,9 +540,12 @@ const PERSONAL_PROJECTS = [
   /* 버킷(약속·집안일·기타) 전면 폐지(2026-07-01, 소유자 지시): 개인=루틴/프로젝트만. bucketTrimDone가 버킷 프로젝트 + Track2 미러([t2-*]) 데이터를 제거. */
 ];
 const PERSONAL_BUCKET_IDS = [];
-/* ★종료 영역 카드 — 정본 목록에서 빼도 저장된 projects 에 남아 있으면 S4a 보강이 extra 로 계속 살려 두므로, 로드할 때 걷어 낸다.
+/* ★종료·이동한 카드 — 정본 목록에서 빼도 저장된 projects 에 남아 있으면 S4a 보강이 extra 로 계속 살려 두므로, 로드할 때 걷어 낸다.
    할 일이 붙어 있으면 걷지 않는다(할 일이 갈 곳을 잃는다 · 그때는 영역 탭에서 카드를 지우면 된다). */
-const RETIRED_PROJ_IDS = new Set(["rt_writing"]); /* 2026-10-06 글쓰기 영역 종료 */
+const RETIRED_PROJ_IDS = new Set([
+  "rt_writing", /* 2026-10-06 글쓰기 영역 종료 */
+  "p_workcap",  /* 2026-10-07 PM 엔진 카드 업무 앱으로 이동 · 할 일이 남아 있으면 그대로 보임(다 끝낸 뒤 다음 로드에 걷힌다) */
+]);
 const ROUTINE_PROJ_IDS = ["rt_workout", "rt_english", "rt_vocal"];
 /* ★"반복(recurring) 붙은 프로젝트 = 루틴" 자동 도출(2026-07-12): App이 recurrings에서 매 렌더 동기하는 프로젝트 id 집합.
    kind 수동관리·DB 직접쓰기 없이 새 영역에 반복만 걸면 자동으로 루틴이 됨. isRoutineProj·projSortKey가 참조 →
@@ -654,6 +657,10 @@ const INIT_PROJECTS = [
   { id: "p_judge", name: "업무", order: -1, kind: "routine" },
   { id: "proj_general", name: "과제 일반 업무", order: 8 },
   { id: "proj_etc", name: "기타 업무", order: 9 },
+  /* ★PM 엔진(2026-10-07 개인 앱에서 이동 · 소유자 10-03 동의 · 10-07 「카드 이동 먼저」) — vault `2. Project/2026.06 ~ PM 엔진` 과 1:1.
+     회사 엔진에 넣을 「회사 엔진 반영:」 할 일과 「구조 요약」 할 일이 여기 온다. 기존 업무 저장본에는 workcapProjDone 이 없을 때 한 번 심는다.
+     개인 쪽 카드는 RETIRED_PROJ_IDS 가 남은 할 일이 끝난 뒤 걷는다(id 를 그대로 써서 하네스 바인딩은 ws 만 바꾸면 된다). */
+  { id: "p_workcap", name: "PM 엔진", order: 10, kind: "project" },
   /* develop 버킷(지식·교훈·글감) 폐지(2026-07-01, 소유자 결정 #3): 사람이 3칸 분류하지 않음 →
      주1 정제가 메모+회고를 읽어 자동분류(회사지식/집중/피드백/글쓰기백로그 제안). 아래 workBucketDone에서 기존분 제거·이전. */
 ];
@@ -2146,13 +2153,11 @@ function App({ onSwitchWs }) {
     if (isWork || !cloudLoaded || personalKindDone.current) return;
     personalKindDone.current = true;
     const KIND = {}; PERSONAL_PROJECTS.forEach(p => { if (p.kind) KIND[p.id] = p.kind; });
-    /* 이름은 딱 한 건만 정정한다 — 앱에 영역 이름을 바꿀 UI 가 없어서 여기 말고는 고칠 자리가 없다.
-       전체를 시드 이름으로 덮지 않는다(소유자가 따로 붙인 이름을 되돌리게 된다). */
-    const RENAME = { p_workcap: "PM 엔진" };
+    /* (2026-10-07) 이름 정정 한 건(RENAME p_workcap → 「PM 엔진」)을 걷었다 — 그 카드가 업무 앱으로 옮겨 가 개인 정본에 없다.
+       저장본 이름은 이미 「PM 엔진」이다(실측 10-06 스냅샷). 전체를 시드 이름으로 덮지 않는 원칙은 그대로(소유자가 붙인 이름 보존). */
     setProjects(prev => { let ch = false; const n = prev.map(p => {
       let q = p;
       if (KIND[p.id] && p.kind !== KIND[p.id]) { q = { ...q, kind: KIND[p.id] }; ch = true; }
-      if (RENAME[p.id] && p.name !== RENAME[p.id]) { q = { ...q, name: RENAME[p.id] }; ch = true; }
       return q;
     }); return ch ? n : prev; });
   }, [cloudLoaded]); /* eslint-disable-line */
@@ -2186,6 +2191,20 @@ function App({ onSwitchWs }) {
       const isJudge = r.id === "ynt1fbp" || (r.type === "count" && (r.text || "").indexOf("판단 발신") === 0);
       return (isJudge && r.project !== "p_judge") ? (ch = true, { ...r, project: "p_judge" }) : r;
     }); return ch ? n : prev; });
+  }, [cloudLoaded]); /* eslint-disable-line */
+
+  /* ★PM 엔진 카드 심기(2026-10-07) — 개인 앱에서 옮겨 온 카드(INIT_PROJECTS 의 p_workcap)를 기존 업무 저장본에 없을 때 한 번 넣는다.
+     이미 있으면 아무것도 안 한다(소유자가 이름을 바꿨어도 되돌리지 않는다). 맨 뒤에 붙인다 — 화면 순서는 projSortKey(kind) 안정정렬이라
+     다른 「project」 카드들 뒤 · 과제 일반/기타 업무 앞에 선다. 개인 쪽 카드는 RETIRED_PROJ_IDS 가 걷는다. */
+  const workcapProjDone = useRef(false);
+  useEffect(() => {
+    if (!isWork || !cloudLoaded || workcapProjDone.current) return;
+    workcapProjDone.current = true;
+    const seed = INIT_PROJECTS.find(p => p.id === "p_workcap");
+    setProjects(prev => {
+      if (!seed || prev.some(p => p && p.id === "p_workcap")) return prev;
+      return [...prev, seed];
+    });
   }, [cloudLoaded]); /* eslint-disable-line */
 
   /* ★업무 반복의 구형 포맷을 고친다(2026-09-15) — `dow` 만 있고 `type` 이 없는 항목이 남아 있다.

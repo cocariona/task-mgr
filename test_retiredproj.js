@@ -43,7 +43,7 @@ ok("정본 목록에 글쓰기가 없다", !PERSONAL_PROJECTS.some(p => p.id ===
 
 const r1 = upgrade(saved, [{ id: "t1", project: "rt_vocal" }]);
 ok("할 일 없는 글쓰기 카드는 걷힌다", !ids(r1).includes("rt_writing"), ids(r1).join(","));
-ok("나머지 카드는 그대로·순서 유지", ids(r1).join(",") === ids(saved).filter(i => i !== "rt_writing").join(","), ids(r1).join(","));
+ok("나머지 카드는 그대로·순서 유지", ids(r1).join(",") === ids(saved).filter(i => !RETIRED_PROJ_IDS.has(i)).join(","), ids(r1).join(",")); /* 2026-10-07 p_workcap 도 종료 목록(업무 앱으로 이동) — 할 일 없는 이 픽스처에서는 함께 걷힌다 */
 
 const r2 = upgrade(r1, []);
 ok("다음 로드에 다시 심기지 않는다(같은 배열 그대로)", r2 === r1, ids(r2).join(","));
