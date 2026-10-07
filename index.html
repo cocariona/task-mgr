@@ -633,11 +633,7 @@ const recList = (v) => Array.isArray(v) ? v.filter(Boolean) : (v && typeof v ===
 const projList = (v) => { const a = recList(v); return a ? a.filter(p => p && p.id) : null; };
 const migrateData = (data) => {
   if (!data || !data.tasks) return data;
-  const TASK_MIGRATION = {
-    "과제 목표 달성 가능성 검토 (예시)": "waiting",
-  };
   data.tasks = data.tasks.map(t => {
-    if (TASK_MIGRATION[t.text]) t = { ...t, status: TASK_MIGRATION[t.text] };
     /* ★someday 폐지(2026-07-04): 나중에 → 다음행동(날짜 유지). 서브도 함께 */
     if (t.status === "someday") t = { ...t, status: "action" };
     if ((t.subtasks || []).some(s => s.status === "someday")) t = { ...t, subtasks: t.subtasks.map(s => s.status === "someday" ? { ...s, status: "action" } : s) };
