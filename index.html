@@ -570,10 +570,17 @@ const PERSONAL_PROJECTS = [
 ];
 const PERSONAL_BUCKET_IDS = [];
 /* ★종료·이동한 카드 — 정본 목록에서 빼도 저장된 projects 에 남아 있으면 S4a 보강이 extra 로 계속 살려 두므로, 로드할 때 걷어 낸다.
-   할 일이 붙어 있으면 걷지 않는다(할 일이 갈 곳을 잃는다 · 그때는 영역 탭에서 카드를 지우면 된다). */
+   할 일이나 반복(꺼진 것 포함)이 붙어 있으면 걷지 않는다(할 일이 갈 곳을 잃고, 반복이 「없는 영역」을 가리키면
+   수정 창 드롭다운이 엉뚱하게 보여 저장 때 잘못 옮겨진다 — 2026-06-30 사고). 다 끝내거나 옮기면 다음 로드에 걷힌다. */
 const RETIRED_PROJ_IDS = new Set([
   "rt_writing", /* 2026-10-06 글쓰기 영역 종료 */
   "p_workcap",  /* 2026-10-07 PM 엔진 카드 업무 앱으로 이동 · 할 일이 남아 있으면 그대로 보임(다 끝낸 뒤 다음 로드에 걷힌다) */
+]);
+/* ★업무 앱 종료 카드(2026-10-08 소유자 「필요할 줄 알았는데 만들고 보니 필요 없어짐」). 업무에는 S4a 같은 정본 병합이 없어서
+   workRetireDone 이 로드할 때 따로 걷는다. 규칙은 위와 같다 — 할 일이나 반복이 붙어 있으면 걷지 않는다.
+   (p_workcap 은 업무에서는 살아 있는 카드라 위 목록과 합치지 않는다.) ⚠ 공개 저장소 — 앱에서 만든 카드는 id 만 적는다. */
+const RETIRED_WORK_PROJ_IDS = new Set([
+  "p_2v5wwfb", /* 2026-06-17 앱 「새 과제 추가」로 만든 카드 · 06-30 이후 할 일 0 */
 ]);
 const ROUTINE_PROJ_IDS = ["rt_workout", "rt_english", "rt_vocal"];
 /* ★"반복(recurring) 붙은 프로젝트 = 루틴" 자동 도출(2026-07-12): App이 recurrings에서 매 렌더 동기하는 프로젝트 id 집합.
@@ -620,6 +627,10 @@ const loadSaved = () => {
    `r.disabled` 를 읽는 렌더가 던져 화면이 하얗게 된다(묘비 prune 뒤 prune 전부터 열려 있던 탭이 옛 인덱스로 쓰는 경우).
    빈칸은 걸러 내고 객체는 값 목록으로 편다. 다음 저장이 바뀐 키만 보내며 클라우드도 채워진 배열로 돌아간다. */
 const recList = (v) => Array.isArray(v) ? v.filter(Boolean) : (v && typeof v === "object" ? Object.values(v).filter(Boolean) : null);
+/* 과제·영역 목록도 같은 이유로 정규화한다(2026-10-08) — 업무 종료 카드를 배열 가운데서 걷으면, 그 전부터 열려 있던 탭(옛 빌드 포함)이
+   옛 인덱스로 써서 id 없는 빈 카드나 빈칸이 생길 수 있다(빈칸이면 `p.kind` 를 읽는 로드 보정이 던져 화면이 하얗게 된다).
+   빈칸과 id 없는 항목을 걸러 낸다. 다음 저장이 클라우드 내용을 기준선으로 diff 하므로 클라우드도 고쳐진다. */
+const projList = (v) => { const a = recList(v); return a ? a.filter(p => p && p.id) : null; };
 const migrateData = (data) => {
   if (!data || !data.tasks) return data;
   const TASK_MIGRATION = {
@@ -782,10 +793,22 @@ const StSel = ({ value, onChange, compact }) => (
     {SK.map(k => <option key={k} value={k}>{STATUSES[k].label}</option>)}
   </select>
 );
-/* 드롭다운 정렬: 프로젝트 → 그 외(버킷) → 기타(petc) 맨끝. 업무(kind 없음)는 전부 동일군 → 원순서 유지(안정정렬) */
+/* ★과제·영역 순서 = ① 묶음(projSortKey: 루틴 → 과제(kind project) → 그 외 → 기타) ② 묶음 안은 PROJ_ORDER ③ 표에 없는 카드는 그 묶음 끝(만든 순서).
+   드롭다운 전부(PrSel)·영역/과제 탭 카드·「이번 주」 동점·반복 설정 묶음이 이 한 규칙을 쓴다. */
 const isSystemProj = (p) => !!p && p.kind === "system"; /* PDS 자체를 굴리는 것 — 영역 탭에 세우지 않는다 */
 const projSortKey = (p) => isRoutineProj(p) ? 0 : (p && p.kind === "project") ? 1 : (p && (p.id === "petc" || p.id === "proj_etc")) ? 3 : 2; /* 루틴(kind 또는 반복보유) 먼저 = isRoutineProj로 자동 도출 반영(2026-07-12) */
-const sortProjsForSelect = (projects) => [...(projects || [])].sort((a, b) => projSortKey(a) - projSortKey(b));
+/* ★순서표(2026-10-08 소유자). 영역·과제의 생성·삭제·이름 수정·순서 변경은 소유자가 요청하면 코드로 바꾼다 — 앱에는 그 단추가 없다.
+   옛 규칙은 「묶음 안 = 배열 순서(만든 순서)」라 카드가 새로 들어올 때마다 엉뚱한 자리에 섰다
+   (09-07 앱에서 만든 과제가 RAG 위 · 10-07 옮겨 온 PM 엔진이 과제들 사이).
+   코드로 카드를 심을 때는 같은 커밋에서 여기에 id 를 넣는다(빠뜨리면 그 묶음 맨 끝).
+   저장 데이터의 projects[].order 는 정렬에 쓰지 않는 옛 값이다(값이 겹친다). ⚠ 공개 저장소 — 앱에서 만든 카드는 id 만 적는다. */
+const PROJ_ORDER = {
+  work: ["p_judge", "p_workcap", "accel", "hakchuin", "rag", "dokpamo", "p_fuxhhqz", "optcode", "gpu", "itrc", "compiler", "proj_general", "proj_etc"],
+  personal: PERSONAL_PROJECTS.map(p => p.id),
+};
+const projRank = (p) => { const i = (PROJ_ORDER[WS.key] || []).indexOf(p && p.id); return i < 0 ? 1e6 : i; };
+const projCmp = (a, b) => (projSortKey(a) - projSortKey(b)) || (projRank(a) - projRank(b));
+const sortProjsForSelect = (projects) => [...(projects || [])].sort(projCmp);
 /* ★날짜 칸 규칙(2026-09-17 소유자) — ① 연도는 4자리: max 를 주면 크롬이 연도 네 자리를 받고 곧장 월로 넘어간다.
      없으면 연도를 6자리까지 받아 `20260917` 을 치면 `202609-1-7` 처럼 먹힌다(실측).
    ② 「오늘」 버튼: 수행날짜 기본값은 여전히 빈칸이다. 누르면 오늘, 한 번 더 누르면 비운다. */
@@ -1318,8 +1341,9 @@ const WeeklyRoutineStrip = ({ recurrings, projects, tasks, history, onAddSession
     if (la !== lb) return lb - la;                        /* 많이 남은 것을 앞으로 */
     return (a.time || "99:99").localeCompare(b.time || "99:99");
   };
-  const areaIdx = (r) => { const i = (projects || []).findIndex(p => p && p.id === r.project); return i < 0 ? 999 : i; };
   const buildOrder = () => {
+    const ord = sortProjsForSelect(projects); /* 남은 개수가 같으면 영역 카드와 같은 순서(PROJ_ORDER · 2026-10-08) */
+    const areaIdx = (r) => { const i = ord.findIndex(p => p && p.id === r.project); return i < 0 ? 999 : i; };
     const groups = new Map();
     pool.forEach(r => { const k = r.project || "_none"; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
     return Array.from(groups.values())
@@ -1600,9 +1624,8 @@ const MemoRow = ({ m, onEdit, onDelete }) => {
    ★새 항목 종류를 만들지 않는다: 「생각·개선안」은 그냥 **날짜 없는 할일**이고 이미 그렇게 쓰이고 있었다
      (실측 2026-09-14: 개인 날짜 없는 할일 23건 = 글감·링크·미뤄둔 작업). 오늘 탭에 안 뜨고 여기에만 있다.
    ★카드 머리 숫자는 **실제 수행**만 — 세션 n/목표. 생각이 쌓인 양은 성과가 아니다(소유자). */
-const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onDelSub, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, isWork, setRecurrings, onUpdateRecurring, onAddSession, onRemoveSession, onAddMemo, onEditMemo, onDeleteMemo, onSetFocus }) => {
+const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onDelSub, onFocus, onAdd, onEdit, onUpdate, isWork, setRecurrings, onUpdateRecurring, onAddSession, onRemoveSession, onAddMemo, onEditMemo, onDeleteMemo, onSetFocus }) => {
   const [open, setOpen] = useState(new Set()); /* 항상 접힌 상태로 시작한다. 열린 할일이 있다고 자동으로 펼치지 않는다 */
-  const [np, setNp] = useState("");
   const [memoMore, setMemoMore] = useState(new Set());  /* 메모 더보기 — 카드별 */
   const [memoDraft, setMemoDraft] = useState({});        /* 영역별 메모 입력 중인 글 */
   const [newFor, setNewFor] = useState("");             /* 새 세션 폼을 연 영역 */
@@ -1700,7 +1723,7 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onDelSu
       </div>
     );
   };
-  const mainProjs = projects.filter(p => !isBucketProj(p) && !isSystemProj(p)).sort((a, b) => (b.focus ? 1 : 0) - (a.focus ? 1 : 0) || projSortKey(a) - projSortKey(b)); /* ★집중이 맨 위 */ /* 루틴(kind 또는 반복보유·isRoutineProj 자동도출) 먼저 그룹핑 = 드롭다운·회고탭과 한 규칙(2026-07-12). JS 안정정렬→같은 kind 내 기존순서 보존. 업무=무변경 */
+  const mainProjs = projects.filter(p => !isBucketProj(p) && !isSystemProj(p)).sort((a, b) => (b.focus ? 1 : 0) - (a.focus ? 1 : 0) || projCmp(a, b)); /* ★집중이 맨 위 */ /* 그다음은 드롭다운과 같은 순서(projCmp — 묶음 → PROJ_ORDER · 2026-10-08) */
   const bucketProjs = projects.filter(p => isBucketProj(p));
   return (
     <div style={{ marginTop: 12 }}>
@@ -1710,13 +1733,8 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onDelSu
         <div style={{ fontSize: 11, fontWeight: 700, color: "#9ca3af", margin: "14px 0 6px" }}>{isWork ? "📂 develop 버킷 (지식·교훈·글감)" : "🗂 그 외 (약속·집안일·기타)"}</div>
         {bucketProjs.map(renderProj)}
       </>}
-      {/* ★2026-09-14 소유자 — 개인 영역 여섯은 vault 폴더와 1:1 이라 앱에서 만들거나 지우지 않는다.
-          업무 과제는 실제로 드나들므로 추가만 남긴다(이름 수정·삭제는 양쪽 다 없앴다). */}
-      {isWork && <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 16, padding: "8px 0", flexWrap: "wrap" }}>
-        <input style={{ ...S.inp, maxWidth: 200 }} placeholder="새 과제 추가..." value={np} onChange={e => setNp(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && np.trim()) { onAddProj(np.trim(), "project"); setNp(""); }}} />
-        <button style={S.gh} onClick={() => { if (np.trim()) { onAddProj(np.trim(), "project"); setNp(""); }}}>+ 추가</button>
-      </div>}
+      {/* ★영역·과제의 생성·삭제·이름 수정·순서 변경은 소유자가 요청해서 코드로 바꾼다(2026-10-08 소유자 「원칙을 통일」).
+          개인은 2026-09-14 에 걷었고(「영역 추가도 앱에서 작업할 필요 없듯이.. (CRUD 관점)」), 남아 있던 업무 「새 과제 추가」 칸도 걷었다(넉 달에 두 번 썼다). */}
     </div>
   );
 };
@@ -1908,6 +1926,7 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate, weekDone, weekTarget, o
 const RecurringSettings = ({ recurrings: allRecurrings, setRecurrings, projects: allProjects, onUpdateRecurring, tasks, history }) => {
   const recurrings = (allRecurrings || []).filter(r => !isRoutineRec(r, allProjects));
   const projects = (allProjects || []).filter(p => p && !isRoutineProj(p));
+  const projOrd = sortProjsForSelect(projects); /* 설정 목록의 영역 묶음도 영역 카드와 같은 순서(2026-10-08) */
   const [show, setShow] = useState(false);
   const [nt, setNt] = useState(""); const [ndows, setNdows] = useState([]); const [np, setNp] = useState(() => projects.some(p => p.id === "proj_etc") ? "proj_etc" : ""); /* 없으면 고르게 한다 — 첫 항목 자동 선택은 오분류를 부른다(AddForm 과 같은 규칙) */
   const [rType, setRType] = useState("count"); const [dom, setDom] = useState(1); const [lastDay, setLastDay] = useState(false);
@@ -1944,7 +1963,7 @@ const RecurringSettings = ({ recurrings: allRecurrings, setRecurrings, projects:
         {/* ★설정 목록도 영역끼리 묶는다(2026-08-11) — 영역 카드와 같은 순서로 보이게. 배열(=만든 순서)에서는
             링글이 맨 앞, 영어 스피킹이 뒤쪽이라 같은 영역이 갈려 있었다. **렌더 순서만** 바꾸며 데이터는 안 건드린다. */}
         {recurrings.filter(r => !r.disabled)
-          .map((r, i) => ({ r, i, a: (() => { const k = (projects || []).findIndex(p => p && p.id === r.project); return k < 0 ? 999 : k; })() }))
+          .map((r, i) => ({ r, i, a: (() => { const k = projOrd.findIndex(p => p && p.id === r.project); return k < 0 ? 999 : k; })() }))
           .sort((x, y) => (x.a - y.a) || (x.i - y.i))
           .map(({ r }) => <RecurringRow key={r.id} r={r} projects={projects} showProto={false} onDelete={() => delR(r.id)} onUpdate={onUpdateRecurring}
             weekDone={weekDoneCount(doneSet, r.id, wkNow)} weekTarget={routineWeekTarget(r)} />)}
@@ -2039,7 +2058,7 @@ function App({ onSwitchWs }) {
   const saved = useMemo(() => loadSaved(), []);
   const [tab, setTab] = useState("today");
   const [tasks, setTasks] = useState(saved?.tasks || (isWork ? INIT_TASKS : []));
-  const [projects, setProjects] = useState(saved?.projects || (isWork ? INIT_PROJECTS : PERSONAL_PROJECTS));
+  const [projects, setProjects] = useState(projList(saved?.projects) || (isWork ? INIT_PROJECTS : PERSONAL_PROJECTS));
   /* (2026-06-26) issues·projectInfo state 제거 (폐기) */
   /* (2026-07-31) 첨부 파일 목록 state 제거 — 배선 폐지. 옛 백업/blob 의 해당 키는 읽지도 쓰지도 않는다(비파괴). */
   const [history, setHistory] = useState(saved?.history || []);
@@ -2090,7 +2109,7 @@ function App({ onSwitchWs }) {
           console.log("[Sync] 클라우드에서 복원:", cloudData.savedAt);
           const m = migrateData(cloudData);
           setTasks(m.tasks || []);
-          setProjects(m.projects || INIT_PROJECTS);
+          setProjects(projList(m.projects) || INIT_PROJECTS);
           setHistory(m.history || []);
           setRecurrings(recList(m.recurrings) || []);
           lastSavedAtRef.current = normSavedAt(cloudData.savedAt); /* 채택했으니 기준도 클라우드 값으로(정규화해 보관 — 이후 비교가 전부 ISO 문자열 기준) */
@@ -2183,7 +2202,7 @@ function App({ onSwitchWs }) {
       const byId = Object.fromEntries(prev.map(p => [p.id, p]));
       const canonical = PERSONAL_PROJECTS.map(p => byId[p.id] || p);
       const extra = prev.filter(p => !PERSONAL_PROJECTS.some(c => c.id === p.id) && p.id !== "p_routine" /* B2: 옛 🔁 루틴 프로젝트 마이그레이션 제거 */
-        && !(RETIRED_PROJ_IDS.has(p.id) && !tasks.some(t => t && t.project === p.id))); /* 종료 영역 카드(할 일 없을 때만) */
+        && !(RETIRED_PROJ_IDS.has(p.id) && !tasks.some(t => t && t.project === p.id) && !(recurrings || []).some(r => r && r.project === p.id))); /* 종료 영역 카드(할 일·반복 없을 때만) */
       const merged = [...canonical, ...extra];
       const same = merged.length === prev.length && merged.every((p, i) => p.id === prev[i]?.id);
       return same ? prev : merged;
@@ -2355,9 +2374,6 @@ function App({ onSwitchWs }) {
     }); return ch ? n : prev; });
   }, [cloudLoaded]); /* eslint-disable-line */
 
-  /* ★PM 엔진 카드 심기(2026-10-07) — 개인 앱에서 옮겨 온 카드(INIT_PROJECTS 의 p_workcap)를 기존 업무 저장본에 없을 때 한 번 넣는다.
-     이미 있으면 아무것도 안 한다(소유자가 이름을 바꿨어도 되돌리지 않는다). 맨 뒤에 붙인다 — 화면 순서는 projSortKey(kind) 안정정렬이라
-     다른 「project」 카드들 뒤 · 과제 일반/기타 업무 앞에 선다. 개인 쪽 카드는 RETIRED_PROJ_IDS 가 걷는다. */
   /* ★숨은 완료 할 일 정리(2026-10-08 · 소유자 「삭제」). 옛 히스토리 ↩ 가 루틴 회차 줄을 「완료」 상태 그대로 할 일 목록에 넣어
      화면에는 안 보이면서 남아 있던 것 하나(개인 · 🔈보컬 2026-07-20 · id 76g1gxg). ↩ 는 2026-10-07 에 취소 표시로 고쳤다.
      id 로만 걷고(다른 할 일은 건드리지 않는다) 삭제 기록을 남긴다. 걷은 뒤에는 찾을 것이 없어 아무것도 안 한다. */
@@ -2374,6 +2390,9 @@ function App({ onSwitchWs }) {
         orig: { id: t.id, recurringId: t.recurringId, recurringPeriod: t.recurringPeriod } }); });
   }, [cloudLoaded]); /* eslint-disable-line */
 
+  /* ★PM 엔진 카드 심기(2026-10-07) — 개인 앱에서 옮겨 온 카드(INIT_PROJECTS 의 p_workcap)를 기존 업무 저장본에 없을 때 한 번 넣는다.
+     이미 있으면 아무것도 안 한다(소유자가 이름을 바꿨어도 되돌리지 않는다). 배열 맨 뒤에 붙이고, 화면 자리는 PROJ_ORDER 가 정한다
+     (「업무」 바로 아래 · 2026-10-08). 개인 쪽 카드는 RETIRED_PROJ_IDS 가 걷는다. */
   const workcapProjDone = useRef(false);
   useEffect(() => {
     if (!isWork || !cloudLoaded || workcapProjDone.current) return;
@@ -2382,6 +2401,21 @@ function App({ onSwitchWs }) {
     setProjects(prev => {
       if (!seed || prev.some(p => p && p.id === "p_workcap")) return prev;
       return [...prev, seed];
+    });
+  }, [cloudLoaded]); /* eslint-disable-line */
+
+  /* ★업무 종료 카드 걷기(2026-10-08) — RETIRED_WORK_PROJ_IDS 의 카드를 로드할 때 한 번 걷는다.
+     할 일이 붙어 있거나 반복(꺼진 것 포함)이 가리키고 있으면 걷지 않는다 — 반복이 「없는 과제」를 가리키면
+     수정 창 드롭다운이 엉뚱한 과제로 보이고 저장 때 잘못 옮겨진다(2026-06-30 실제 발생).
+     걷은 뒤에는 찾을 것이 없어 아무것도 안 한다. 히스토리 줄은 과제 이름 글자를 따로 들고 있어 그대로 보인다. */
+  const workRetireDone = useRef(false);
+  useEffect(() => {
+    if (!isWork || !cloudLoaded || workRetireDone.current) return;
+    workRetireDone.current = true;
+    setProjects(prev => {
+      const n = prev.filter(p => !(p && RETIRED_WORK_PROJ_IDS.has(p.id)
+        && !tasks.some(t => t && t.project === p.id) && !(recurrings || []).some(r => r && r.project === p.id)));
+      return n.length === prev.length ? prev : n;
     });
   }, [cloudLoaded]); /* eslint-disable-line */
 
@@ -2804,15 +2838,22 @@ function App({ onSwitchWs }) {
       const day = prev.find(h => h.date === date); if (!day?.items[idx]) return prev;
       const item = day.items[idx];
       const restored0 = item.orig || { id: gid(), text: item.text, status: "action", project: projects.find(p => p.name === item.projectName)?.id || projects[0]?.id, scheduledDate: "", scheduledLabel: "", planDate: "",  createdAt: TODAY, notes: "", focus: false, subtasks: [] };
+      /* 그 할 일의 카드가 걷혔으면(종료 카드) 이름이 같은 카드 → 기타 업무(업무)로 되살린다. 둘 다 없으면 첫 카드로 자동 배정하지 않고
+         원래 id 를 두어 수정 창이 「주제 선택…」으로 묻게 한다(첫 항목 자동 선택은 오분류를 부른다 — AddForm 과 같은 규칙).
+         갈 카드가 없는 할 일은 영역 탭 어디에도 안 보이므로, 날짜가 없으면 오늘 할 일에 띄워 거기서 고르게 한다. */
+      const liveProj = (id) => projects.some(p => p && p.id === id) ? id : ((projects.find(p => p && p.name === item.projectName) || projects.find(p => p && p.id === "proj_etc") || {}).id || id || "");
+      const placeOrphan = (t) => { if (!t.planDate && !projects.some(p => p && p.id === t.project)) t.planDate = TODAY; return t; };
       if (item.type === "deleted" && item.isSub && item.orig) {
         /* 지운 하위: 상위 할 일이 남아 있으면 그 아래에, 없으면(상위도 지웠거나 끝냄) 같은 주제의 할 일로 되살린다 */
         const sub0 = { ...item.orig };
         setTasks(p => p.some(t => t.id === item.subParent)
           ? p.map(t => t.id === item.subParent && !(t.subtasks || []).some(x => x.id === sub0.id) ? { ...t, subtasks: [...(t.subtasks || []), sub0] } : t)
-          : [...p, cloneTask({ ...sub0, project: item.project || projects[0]?.id, status: sub0.status === "done" ? "action" : sub0.status, subtasks: [], createdAt: sub0.createdAt || TODAY })]);
+          : [...p, placeOrphan(cloneTask({ ...sub0, project: liveProj(item.project), status: sub0.status === "done" ? "action" : sub0.status, subtasks: [], createdAt: sub0.createdAt || TODAY }))]);
       } else {
       const restored = cloneTask(restored0); /* 원본을 직접 고치지 않게 사본으로 되돌린다 */
+      restored.project = liveProj(restored.project);
       if (!restored.planDate && item.type !== "deleted") restored.planDate = TODAY; /* 지운 할 일은 원래 날짜(없으면 없음) 그대로 되살린다 */
+      placeOrphan(restored);
       setTasks(p => [...p, restored]);
       }
       const ni = day.items.filter((_, i) => i !== idx);
@@ -2868,20 +2909,9 @@ function App({ onSwitchWs }) {
       return arr;
     });
   };
-  const addProj = (name, kind = "project") => {
-    const id = (kind === "bucket" ? "b_" : "p_") + gid();
-    setProjects(p => [...p, { id, name, order: p.length, kind }]);
-  };
-  const editProj = (id, name) => setProjects(p => p.map(pr => pr.id === id ? { ...pr, name } : pr));
-  const delProj = (id) => {
-    /* ★참조 무결성 2겹(2026-07-26): UI(askDel)에서도 막지만 여기서도 막는다 — 호출 경로가 늘어도 불변식이 유지되도록.
-       반복이 붙은 과제를 지우면 그 반복이 '없는 과제'를 가리키는 미아가 되고, 편집창 드롭다운이 첫 항목으로
-       잘못 표시돼 저장 시 엉뚱한 영역으로 재배정된다(2026-06-30 실제 발생). */
-    const attached = (recurrings || []).filter(r => !r.disabled && r.project === id);
-    if (attached.length) { showT("반복 태스크 " + attached.length + "개가 붙어 있어 삭제할 수 없습니다 — 반복설정에서 먼저 옮기세요", null); return; }
-    setProjects(p => p.filter(pr => pr.id !== id));
-    setTasks(p => p.filter(t => t.project !== id));
-  };
+  /* (cleanup 2026-10-08) addProj·editProj·delProj 제거 — 영역·과제 카드의 생성·삭제·이름 수정은 소유자 요청으로 코드에서 한다
+     (AreaView 맨 아래 ★주석). 카드를 걷는 길은 RETIRED_PROJ_IDS(개인 · S4a)·RETIRED_WORK_PROJ_IDS(업무 · workRetireDone)이고,
+     두 곳 모두 할 일·반복(꺼진 것 포함)이 붙은 카드는 걷지 않는다(참조 무결성 · 2026-06-30 사고). */
 
   const exportData = () => {
     const data = JSON.stringify({ tasks, projects, history, recurrings, exportedAt: new Date().toISOString() }, null, 2);
@@ -2924,7 +2954,7 @@ function App({ onSwitchWs }) {
       <div ref={tabTopRef} style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
         {tab === "today" && <><TodayView onDelSub={delSub} tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} onReorder={reorderTask} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} tasks={tasks} history={history} /></>}
-        {tab === "areas" && <AreaView onDelSub={delSub} tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} isWork={isWork} setRecurrings={setRecurrings} onUpdateRecurring={updateRecurring} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemo={addAreaRecap} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
+        {tab === "areas" && <AreaView onDelSub={delSub} tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} isWork={isWork} setRecurrings={setRecurrings} onUpdateRecurring={updateRecurring} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemo={addAreaRecap} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
       </div>
       {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} isWork={isWork} />}

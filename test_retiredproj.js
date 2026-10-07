@@ -19,7 +19,7 @@ const open = SRC.indexOf("setProjects(prev => {", anchor);
 const close = SRC.indexOf("\n    });", open);
 const BODY = SRC.slice(open + "setProjects(prev => {".length, close);
 if (!/RETIRED_PROJ_IDS/.test(BODY)) throw new Error("보강 본문에 종료 카드 처리가 없음 — 패치 누락");
-const upgrade = (prev, tasks) => new Function("ctx", "with (ctx) {\n" + BODY + "\n}")({ PERSONAL_PROJECTS, RETIRED_PROJ_IDS, prev, tasks });
+const upgrade = (prev, tasks, recurrings = []) => new Function("ctx", "with (ctx) {\n" + BODY + "\n}")({ PERSONAL_PROJECTS, RETIRED_PROJ_IDS, prev, tasks, recurrings });
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => {
@@ -50,6 +50,8 @@ ok("다음 로드에 다시 심기지 않는다(같은 배열 그대로)", r2 ==
 
 const r3 = upgrade(saved, [{ id: "t9", project: "rt_writing" }]);
 ok("할 일이 붙어 있으면 걷지 않는다", ids(r3).includes("rt_writing"), ids(r3).join(","));
+const r3b = upgrade(saved, [], [{ id: "r1", project: "rt_writing", disabled: true }]);
+ok("반복(꺼진 것 포함)이 가리키고 있으면 걷지 않는다(2026-10-08)", ids(r3b).includes("rt_writing"), ids(r3b).join(","));
 
 const custom = [...saved, { id: "p_new1", name: "새 과제", order: 9, kind: "project" }];
 const r4 = upgrade(custom, []);

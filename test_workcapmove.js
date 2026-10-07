@@ -15,9 +15,10 @@ const slice = (start, endTok) => { const a = SRC.indexOf(start); if (a < 0) thro
 const consts = new Function(
   slice("const PERSONAL_PROJECTS = [", "\n];") + "\n" +
   slice("const RETIRED_PROJ_IDS", ";") + "\n" +
+  slice("const RETIRED_WORK_PROJ_IDS", ";") + "\n" +
   slice("const INIT_PROJECTS = [", "\n];") +
-  "\nreturn { PERSONAL_PROJECTS, RETIRED_PROJ_IDS, INIT_PROJECTS };")();
-const { PERSONAL_PROJECTS, RETIRED_PROJ_IDS, INIT_PROJECTS } = consts;
+  "\nreturn { PERSONAL_PROJECTS, RETIRED_PROJ_IDS, RETIRED_WORK_PROJ_IDS, INIT_PROJECTS };")();
+const { PERSONAL_PROJECTS, RETIRED_PROJ_IDS, RETIRED_WORK_PROJ_IDS, INIT_PROJECTS } = consts;
 
 /* 2) 로드 때 한 번 도는 카드 보정 effect 본문(`xxxDone.current = true;` 다음부터 `}, [cloudLoaded]);` 앞까지) */
 const body = (ref) => {
@@ -28,7 +29,7 @@ const body = (ref) => {
 };
 /* 앱과 같은 순서(소스 순서)로 돈다. 개인 = 카드를 만지는 것 전부 · 업무 = 카드를 만지는 것 전부. */
 const PERSONAL_FX = ["personalProjDone", "bucketTrimDone", "dupMergeDone", "personalKindDone"];
-const WORK_FX = ["workKindDone", "judgeProjDone", "workcapProjDone", "workBucketDone"];
+const WORK_FX = ["workKindDone", "judgeProjDone", "workcapProjDone", "workRetireDone", "workBucketDone"]; /* workRetireDone(2026-10-08 업무 종료 카드 걷기)도 카드를 만진다 */
 const BODIES = Object.fromEntries([...PERSONAL_FX, ...WORK_FX].map(r => [r, body(r)]));
 if (!/p_workcap/.test(BODIES.workcapProjDone)) throw new Error("업무 심기 코드가 없음 — 패치 누락");
 if (/const RENAME|RENAME\[/.test(BODIES.personalKindDone)) throw new Error("개인 쪽 p_workcap 이름 정정(RENAME)이 남아 있음");
@@ -39,7 +40,7 @@ const load = (fxList, saved) => {
   const setter = (k) => (v) => { st[k] = typeof v === "function" ? v(st[k]) : v; };
   for (const ref of fxList) {
     const ctx = {
-      PERSONAL_PROJECTS, RETIRED_PROJ_IDS, INIT_PROJECTS,
+      PERSONAL_PROJECTS, RETIRED_PROJ_IDS, RETIRED_WORK_PROJ_IDS, INIT_PROJECTS,
       projects: saved.projects, tasks: saved.tasks, recurrings: saved.recurrings || [], history: saved.history || [],
       setProjects: setter("projects"), setTasks: setter("tasks"), setRecurrings: setter("recurrings"), setHistory: setter("history"),
     };
@@ -165,7 +166,9 @@ if (wFile) {
   const had = d.projects.some(p => p.id === "p_workcap");
   console.log("  ·   업무 저장본: 카드 " + d.projects.length + " · 할 일 " + d.tasks.length + " · p_workcap " + (had ? "있음" : "없음"));
   ok("업무 저장본: 더해지는 카드는 " + (had ? "없음" : "p_workcap 하나뿐"), had ? added.length === 0 : (added.length === 1 && added[0] === "p_workcap"), "더해짐=" + added.join(","));
-  ok("업무 저장본: 기존 카드는 같은 객체 · 같은 순서", sameRefs(o.projects.slice(0, d.projects.length), d.projects));
+  /* 업무 종료 카드(RETIRED_WORK_PROJ_IDS · 할 일·반복 없을 때)만 걷힌다 */
+  const keep = d.projects.filter(p => !(RETIRED_WORK_PROJ_IDS.has(p.id) && !d.tasks.some(t => t && t.project === p.id) && !(d.recurrings || []).some(r => r && r.project === p.id)));
+  ok("업무 저장본: 걷히는 건 종료 카드뿐 · 나머지는 같은 객체 · 같은 순서", sameRefs(o.projects.slice(0, keep.length), keep), "걷힘=" + ids(d.projects).filter(i => !ids(keep).includes(i)).join(","));
   ok("업무 저장본: 할 일·반복 그대로", o.tasks === d.tasks && o.recurrings === d.recurrings);
   const o2 = loadWork({ ...d, projects: o.projects, tasks: o.tasks, recurrings: o.recurrings });
   ok("업무 저장본: 두 번째 로드는 무변경(중복 0)", o2.projects === o.projects && o2.projects.filter(p => p.id === "p_workcap").length === 1);
