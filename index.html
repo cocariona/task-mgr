@@ -1156,15 +1156,17 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
           <div className="modal-row" style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 100 }}><div style={S.lbl}>상태</div><StSel value={f.status} onChange={v => u("status", v)} /></div>
             {!isSubtask && <div style={{ flex: 1, minWidth: 100 }}><div style={S.lbl}>{WS.key === "personal" ? "주제" : "과제"}</div><PrSel value={f.project} onChange={v => u("project", v)} projects={projects} /></div>}
-            <button style={{ ...S.star(f.focus), border: "1px solid #e5e7eb", borderRadius: 5, width: 32, height: 32 }} onClick={() => u("focus", !f.focus)} title="지금 먼저 할 것">
-              {f.focus ? "★" : "☆"}
-            </button>
           </div>
-          {/* ★업무 대응안에 포함(2026-10-07 · 소유자 「업무 앱 내 개별 태스크들 중에서 선별하여 대응안을 심도있게 짜는 전략 —
-              이 태스크 내용을 포함한다고 표시하고 싶음」 · 켜는 곳은 이 창 하나). 완료·「이번 주」 숫자와 묶지 않는다
+          {/* ☆ 「지금 먼저」와 「업무 대응안에 포함」은 한 줄에 나란히(2026-10-08 · 소유자 「세로로 나열되어 있어 어색함」).
+              업무 대응안에 포함(2026-10-07 · 소유자 「업무 앱 내 개별 태스크들 중에서 선별하여 대응안을 심도있게 짜는 전략 —
+              이 태스크 내용을 포함한다고 표시하고 싶음」 · 켜는 곳은 이 창 하나)은 완료·「이번 주」 숫자와 묶지 않는다
               (「태스크를 종결하는건 또 다른 일」). 표시한 할 일 제목은 과제 탭 「업무」 카드의 회고 칸 위에 모인다. */}
-          {isWork && !isSubtask && <div><button type="button" style={{ ...S.gh, fontSize: 12, fontWeight: f.respPlan ? 700 : 400, background: f.respPlan ? "#FFFBEB" : "#fff", color: f.respPlan ? "#B45309" : "#6b7280", borderColor: f.respPlan ? "#FCD34D" : "#e5e7eb" }}
-            onClick={() => u("respPlan", !f.respPlan)}>{f.respPlan ? "✓ 업무 대응안에 포함" : "＋ 업무 대응안에 포함"}</button></div>}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button type="button" onClick={() => u("focus", !f.focus)} title="오늘 할 일 중 지금 먼저 할 것(직접 끈다)"
+              style={{ ...S.gh, fontSize: 12, fontWeight: f.focus ? 700 : 400, background: f.focus ? "#FFFBEB" : "#fff", color: f.focus ? "#B45309" : "#6b7280", borderColor: f.focus ? "#FCD34D" : "#e5e7eb" }}>{f.focus ? "★ 지금 먼저" : "☆ 지금 먼저"}</button>
+            {isWork && !isSubtask && <button type="button" onClick={() => u("respPlan", !f.respPlan)}
+              style={{ ...S.gh, fontSize: 12, fontWeight: f.respPlan ? 700 : 400, background: f.respPlan ? "#FFFBEB" : "#fff", color: f.respPlan ? "#B45309" : "#6b7280", borderColor: f.respPlan ? "#FCD34D" : "#e5e7eb" }}>{f.respPlan ? "✓ 업무 대응안에 포함" : "＋ 업무 대응안에 포함"}</button>}
+          </div>
           <div>
             <div style={{ ...S.lbl, color: "#6366F1", fontWeight: 600 }}>📆 언제할지 (선택)</div>
             <div className="plan-fields" style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -1643,10 +1645,6 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onDelSu
 
         </div>
         {o && <div style={{ paddingLeft: 8, marginBottom: 12 }}>
-          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
-            <button style={{ ...S.gh, fontSize: 11, color: p.focus ? "#B45309" : "#6b7280" }} onClick={() => onSetFocus(p.id)}
-              title={p.focus ? "집중 해제" : "집중으로 — 루틴을 다 하고 남는 시간을 여기 쓴다(하나만)"}>{p.focus ? "★ 집중 해제" : "☆ 집중으로"}</button>
-          </div>
           {recs.length > 0 && <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#6366F1", marginBottom: 2 }}>반복 세션</div>
             <div style={S.card}>
@@ -1654,14 +1652,21 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onDelSu
                 weekDone={weekDoneCount(doneSet, r.id, wkNow)} weekTarget={routineWeekTarget(r)}
                 onAddSession={onAddSession} onRemoveSession={onRemoveSession} />)}
             </div>
-            {newFor === p.id
-              ? <NewSessionForm projectId={p.id} setRecurrings={setRecurrings} onClose={() => setNewFor("")} />
-              : <button style={{ ...S.gh, fontSize: 11, marginTop: 4 }} onClick={() => setNewFor(p.id)}>＋ 세션 추가</button>}
+            {/* 「＋ 세션 추가」와 「☆ 집중으로」는 한 줄 양 끝(2026-10-08 · 소유자 「반복세션을 가운데 두고 상하로 따로 떨어져 어색」) */}
+            {newFor === p.id && <NewSessionForm projectId={p.id} setRecurrings={setRecurrings} onClose={() => setNewFor("")} />}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 4 }}>
+              {newFor !== p.id ? <button style={{ ...S.gh, fontSize: 11 }} onClick={() => setNewFor(p.id)}>＋ 세션 추가</button> : <span />}
+              <button style={{ ...S.gh, fontSize: 11, color: p.focus ? "#B45309" : "#6b7280" }} onClick={() => onSetFocus(p.id)}
+                  title={p.focus ? "집중 해제" : "집중으로 — 루틴을 다 하고 남는 시간을 여기 쓴다(하나만)"}>{p.focus ? "★ 집중 해제" : "☆ 집중으로"}</button>
+            </div>
           </div>}
           {recs.length === 0 && <div style={{ marginBottom: 10 }}>
-            {newFor === p.id
-              ? <NewSessionForm projectId={p.id} setRecurrings={setRecurrings} onClose={() => setNewFor("")} />
-              : <button style={{ ...S.gh, fontSize: 11 }} onClick={() => setNewFor(p.id)}>＋ 세션 추가</button>}
+            {newFor === p.id && <NewSessionForm projectId={p.id} setRecurrings={setRecurrings} onClose={() => setNewFor("")} />}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              {newFor !== p.id ? <button style={{ ...S.gh, fontSize: 11 }} onClick={() => setNewFor(p.id)}>＋ 세션 추가</button> : <span />}
+              <button style={{ ...S.gh, fontSize: 11, color: p.focus ? "#B45309" : "#6b7280" }} onClick={() => onSetFocus(p.id)}
+                  title={p.focus ? "집중 해제" : "집중으로 — 루틴을 다 하고 남는 시간을 여기 쓴다(하나만)"}>{p.focus ? "★ 집중 해제" : "☆ 집중으로"}</button>
+            </div>
           </div>}
           <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#6366F1", marginBottom: 2 }}>🪞 회고 · 하고 나서 남긴 것</div>
@@ -2353,6 +2358,22 @@ function App({ onSwitchWs }) {
   /* ★PM 엔진 카드 심기(2026-10-07) — 개인 앱에서 옮겨 온 카드(INIT_PROJECTS 의 p_workcap)를 기존 업무 저장본에 없을 때 한 번 넣는다.
      이미 있으면 아무것도 안 한다(소유자가 이름을 바꿨어도 되돌리지 않는다). 맨 뒤에 붙인다 — 화면 순서는 projSortKey(kind) 안정정렬이라
      다른 「project」 카드들 뒤 · 과제 일반/기타 업무 앞에 선다. 개인 쪽 카드는 RETIRED_PROJ_IDS 가 걷는다. */
+  /* ★숨은 완료 할 일 정리(2026-10-08 · 소유자 「삭제」). 옛 히스토리 ↩ 가 루틴 회차 줄을 「완료」 상태 그대로 할 일 목록에 넣어
+     화면에는 안 보이면서 남아 있던 것 하나(개인 · 🔈보컬 2026-07-20 · id 76g1gxg). ↩ 는 2026-10-07 에 취소 표시로 고쳤다.
+     id 로만 걷고(다른 할 일은 건드리지 않는다) 삭제 기록을 남긴다. 걷은 뒤에는 찾을 것이 없어 아무것도 안 한다. */
+  const ORPHAN_DONE_IDS = ["76g1gxg"];
+  const orphanTrimDone = useRef(false);
+  useEffect(() => {
+    if (isWork || !cloudLoaded || orphanTrimDone.current) return;
+    orphanTrimDone.current = true;
+    const hit = tasks.filter(t => t && ORPHAN_DONE_IDS.includes(t.id) && t.status === "done");
+    if (!hit.length) return;
+    setTasks(prev => prev.filter(t => !(t && ORPHAN_DONE_IDS.includes(t.id) && t.status === "done")));
+    hit.forEach(t => { const pj = projects.find(x => x.id === t.project);
+      addHistItem({ type: "deleted", text: t.text, projectName: pj?.name || "", detail: "숨은 완료 기록 정리", time: nowTime(),
+        orig: { id: t.id, recurringId: t.recurringId, recurringPeriod: t.recurringPeriod } }); });
+  }, [cloudLoaded]); /* eslint-disable-line */
+
   const workcapProjDone = useRef(false);
   useEffect(() => {
     if (!isWork || !cloudLoaded || workcapProjDone.current) return;
@@ -2677,7 +2698,13 @@ function App({ onSwitchWs }) {
     const doneSnap = [];
     (history || []).forEach(h => (h.items || []).forEach(it => { if (it.type === "done" && it.isSub && it.orig?.id === subId) doneSnap.push({ date: h.date, item: it }); }));
     updateTask({ ...par, subtasks: list.filter(s => s.id !== subId) });
+    /* ★하위 삭제도 히스토리에 남긴다(2026-10-08 · 소유자 「이전에도 안남았던 것인지? 왜 안남게 한건지?」 — 처음부터 남지 않았다).
+       할 일 삭제처럼 원본과 걷어 낸 완료 기록을 함께 남겨 5초가 지나도 히스토리 ↩ 로 상위 할 일 아래에 되살린다. */
+    const proj = projects.find(p => p.id === par.project);
+    addHistItem({ type: "deleted", isSub: true, subParent: parentId, parentText: par.text, text: sub.text, projectName: proj?.name || "", project: par.project, time: nowTime(),
+      orig: { ...sub }, ...(doneSnap.length ? { subDone: doneSnap } : {}) });
     showT(`"${tName(sub.text)}" 삭제됨`, () => {
+      removeHistItem(it => it.type === "deleted" && it.isSub && it.orig && it.orig.id === subId);
       setTasks(p => p.map(t => { if (t.id !== parentId) return t; const cur = t.subtasks || []; if (cur.some(s => s.id === subId)) return t;
         return { ...t, subtasks: [...cur.slice(0, idx), sub, ...cur.slice(idx)] }; }));
       if (doneSnap.length) setHistory(prev => { let next = [...prev]; doneSnap.forEach(({ date, item }) => { const ex = next.find(h => h.date === date); if (ex) next = next.map(h => h.date === date ? { ...h, items: [...h.items, item] } : h); else next = [...next, { date, items: [item] }]; }); return next; });
@@ -2777,9 +2804,17 @@ function App({ onSwitchWs }) {
       const day = prev.find(h => h.date === date); if (!day?.items[idx]) return prev;
       const item = day.items[idx];
       const restored0 = item.orig || { id: gid(), text: item.text, status: "action", project: projects.find(p => p.name === item.projectName)?.id || projects[0]?.id, scheduledDate: "", scheduledLabel: "", planDate: "",  createdAt: TODAY, notes: "", focus: false, subtasks: [] };
+      if (item.type === "deleted" && item.isSub && item.orig) {
+        /* 지운 하위: 상위 할 일이 남아 있으면 그 아래에, 없으면(상위도 지웠거나 끝냄) 같은 주제의 할 일로 되살린다 */
+        const sub0 = { ...item.orig };
+        setTasks(p => p.some(t => t.id === item.subParent)
+          ? p.map(t => t.id === item.subParent && !(t.subtasks || []).some(x => x.id === sub0.id) ? { ...t, subtasks: [...(t.subtasks || []), sub0] } : t)
+          : [...p, cloneTask({ ...sub0, project: item.project || projects[0]?.id, status: sub0.status === "done" ? "action" : sub0.status, subtasks: [], createdAt: sub0.createdAt || TODAY })]);
+      } else {
       const restored = cloneTask(restored0); /* 원본을 직접 고치지 않게 사본으로 되돌린다 */
       if (!restored.planDate && item.type !== "deleted") restored.planDate = TODAY; /* 지운 할 일은 원래 날짜(없으면 없음) 그대로 되살린다 */
       setTasks(p => [...p, restored]);
+      }
       const ni = day.items.filter((_, i) => i !== idx);
       let next = !ni.length ? prev.filter(h => h.date !== date) : prev.map(h => h.date === date ? { ...h, items: ni } : h);
       /* 지운 할 일에 딸려 걷혔던 하위 완료 기록을 원래 날짜에 되돌린다(이미 있으면 두 번 넣지 않는다) — 알림의 되돌리기와 같은 결과 */
