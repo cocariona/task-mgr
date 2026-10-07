@@ -100,7 +100,7 @@
       .task-actions button { min-width: 32px; }
       .task-actions button:last-child { margin-left: 4px; } /* ✏️ 와 ✕(마지막) 사이는 8px */
       /* 「🔁 이번 주」 칩: − · ＋ 를 넓히되 한 줄에 두 칩이 그대로 들어가게 칩 안 여백을 줄인다(스크롤이 늘지 않게) */
-      .wk-chip { gap: 2px !important; padding-left: 7px !important; }
+      .wk-chip { gap: 0 !important; padding-left: 6px !important; }
       .wk-chip button { min-width: 30px; }
       .wk-btns button { min-width: 36px; }
     }
@@ -110,6 +110,12 @@
   <div id="root"></div>
   <script type="text/babel">
 const { useState, useMemo, useRef, useEffect } = React;
+/* ★연달아 두 번 누르면 다음 줄까지 완료되던 것을 막는다(2026-10-07). 완료한 줄이 빠지면 아랫줄이 같은 자리로 올라와
+   두 번째 손가락이 그것을 눌렀다. 할 일 ○ 와 오늘 목록의 하위 ○ 가 0.6초 창 하나를 같이 쓴다(할 일 → 하위로 올라와도 막힌다). */
+let LAST_DONE_AT = 0;
+const doneGuard = () => { const n = Date.now(); if (n - LAST_DONE_AT < 600) return false; LAST_DONE_AT = n; return true; };
+/* 완료 직후 0.6초 안의 「완료 해제」도 무시한다 — 펼친 하위 목록에서는 방금 완료한 줄이 같은 자리로 내려와 두 번째 손가락이 그것을 도로 풀었다 */
+const justDone = () => Date.now() - LAST_DONE_AT < 600;
 
 /* ─── 상수 ─── */
 const STATUSES = {
@@ -1043,7 +1049,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
           {listSubs.map(s => (
             <SubRow key={s.id} sub={s}
               onToggleFocus={() => onUpdate && onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, focus: !x.focus } : x) })}
-              onToggleDone={() => onUpdate && onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, status: x.status === "done" ? "action" : "done" } : x) })}
+              onToggleDone={() => { if (s.status !== "done" ? !doneGuard() : justDone()) return; onUpdate && onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, status: x.status === "done" ? "action" : "done" } : x) }); }}
               onDel={() => onDelSub ? onDelSub(task.id, s.id) : (onUpdate && onUpdate({ ...task, subtasks: subs.filter(x => x.id !== s.id) }))}
               onEdit={() => onEdit(s, task.id)}
             />
@@ -1407,7 +1413,11 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
     const parent = tasks.find(t => t.id === parentId);
     if (!parent || !onUpdate) return;
     if (field === "focus") onUpdate({ ...parent, subtasks: (parent.subtasks || []).map(s => s.id === subId ? { ...s, focus: !s.focus } : s) });
-    if (field === "done") onUpdate({ ...parent, subtasks: (parent.subtasks || []).map(s => s.id === subId ? { ...s, status: s.status === "done" ? "action" : "done" } : s) });
+    if (field === "done") {
+      const cur = (parent.subtasks || []).find(s => s.id === subId);
+      if (cur && cur.status !== "done" ? !doneGuard() : justDone()) return; /* 0.6초 안 두 번째 누름은 무시 */
+      onUpdate({ ...parent, subtasks: (parent.subtasks || []).map(s => s.id === subId ? { ...s, status: s.status === "done" ? "action" : "done" } : s) });
+    }
   };
 
   const renderItem = (item) => {
@@ -2436,6 +2446,16 @@ function App({ onSwitchWs }) {
 
   const toastSeq = useRef(0);
   const showT = (msg, undo) => setToast({ msg, undo, k: ++toastSeq.current });
+  /* 탭 줄이 위에 붙어 있어 아래로 내려간 채 탭을 바꿀 수 있다 — 바꾼 탭은 맨 위(탭 줄 바로 아래)부터 보이게 한다(2026-10-07).
+     맨 위 근처에서 바꿀 때는 움직이지 않는다. */
+  const tabTopRef = useRef(null); const tabFirst = useRef(true);
+  React.useLayoutEffect(() => {
+    if (tabFirst.current) { tabFirst.current = false; return; }
+    const el = tabTopRef.current; if (!el) return;
+    const bar = document.querySelector(".tab-bar");
+    const y = el.getBoundingClientRect().top + window.scrollY - (bar ? bar.offsetHeight : 0) - 8;
+    if (window.scrollY > y) window.scrollTo(0, Math.max(0, y));
+  }, [tab]);
   /* 알림 문구에 넣는 제목은 40자에서 자른다(2026-10-02). 600자 URL 제목이면 알림이 화면보다 길어져 되돌리기가 밖으로 나갔다.
      ⛔ 문구에서만 자른다 — task.text 자체를 자르면 되돌리기(히스토리 항목을 text 로 찾음)가 어긋난다. */
   const tName = (s) => (s || "").length > 40 ? s.slice(0, 40) + "…" : (s || "");
@@ -2707,11 +2727,8 @@ function App({ onSwitchWs }) {
      메모(notes) = 그 일을 **할 때 볼 것**. 그 태스크를 펼칠 때만 보인다.
      회고(recap) = 그 일을 **하고 나서 남긴 것**. 영역 카드에 쌓이고 /sweep 이 수확한다.
      둘이 한 칸에 섞여 있어 영역 카드에 참조용 메모까지 떠 있었다. */
-  /* ★연달아 두 번 누르면 다음 할 일까지 완료되던 것을 막는다(2026-10-07). 완료한 줄이 빠지면 아랫줄이 같은 자리로 올라와
-     두 번째 손가락이 다음 할 일의 ○ 를 눌렀다. 0.6초 안의 두 번째 완료는 무시한다. */
-  const lastDoneAt = useRef(0);
   const doneTask = (id) => {
-    const now = Date.now(); if (now - lastDoneAt.current < 600) return; lastDoneAt.current = now;
+    if (!doneGuard()) return; /* 0.6초 안 두 번째 완료는 무시(위 doneGuard) */
     const task = tasks.find(t => t.id === id); if (!task) return;
     const proj = projects.find(p => p.id === task.project);
     const snap = { ...task, recap: (task.recap || "").trim() };
@@ -2737,11 +2754,11 @@ function App({ onSwitchWs }) {
        반복 자체를 멈추려면 반복설정에서 삭제. */
     addHistItem({ type: "deleted", text: task.text, projectName: proj?.name || "", time: nowTime(),
       ...(task.recurringId ? { orig: { id: task.id, recurringId: task.recurringId, recurringPeriod: task.recurringPeriod, notes: task.notes } }
-        : { orig: cloneTask(task) }) }); /* 일반 할 일은 원본을 남겨 히스토리 ↩ 로 되살린다(2026-10-07 · 연달아 지우다 알림이 바뀌어도 나중에 살린다) */
+        : { orig: cloneTask(task), ...(orphanSubDone.length ? { subDone: orphanSubDone } : {}) }) }); /* 일반 할 일은 원본(과 걷어 낸 하위 완료 기록)을 남겨 히스토리 ↩ 로 되살린다(2026-10-07 · 연달아 지우다 알림이 바뀌어도 나중에 살린다) */
     showT(`"${tName(task.text)}" 삭제됨`, () => {
       setTasks(p => [...p, cloneTask(task)]);
       if (orphanSubDone.length) setHistory(prev => { let next = [...prev]; orphanSubDone.forEach(({ date, item }) => { const ex = next.find(h => h.date === date); if (ex) next = next.map(h => h.date === date ? { ...h, items: [...h.items, item] } : h); else next = [...next, { date, items: [item] }]; }); return next; });
-      removeHistItem(it => it.type === "deleted" && it.text === task.text);
+      removeHistItem(it => it.type === "deleted" && (it.orig ? it.orig.id === task.id : it.text === task.text)); /* 같은 제목의 다른 삭제 기록은 남긴다 */
       hideT();
     });
   };
@@ -2764,8 +2781,14 @@ function App({ onSwitchWs }) {
       if (!restored.planDate && item.type !== "deleted") restored.planDate = TODAY; /* 지운 할 일은 원래 날짜(없으면 없음) 그대로 되살린다 */
       setTasks(p => [...p, restored]);
       const ni = day.items.filter((_, i) => i !== idx);
-      if (!ni.length) return prev.filter(h => h.date !== date);
-      return prev.map(h => h.date === date ? { ...h, items: ni } : h);
+      let next = !ni.length ? prev.filter(h => h.date !== date) : prev.map(h => h.date === date ? { ...h, items: ni } : h);
+      /* 지운 할 일에 딸려 걷혔던 하위 완료 기록을 원래 날짜에 되돌린다(이미 있으면 두 번 넣지 않는다) — 알림의 되돌리기와 같은 결과 */
+      if (item.type === "deleted" && Array.isArray(item.subDone)) {
+        const has = new Set(); next.forEach(h => (h.items || []).forEach(it => { if (it.type === "done" && it.isSub && it.orig) has.add(it.orig.id); }));
+        item.subDone.forEach(({ date: d, item: it }) => { if (!it || !it.orig || has.has(it.orig.id)) return;
+          next = next.some(h => h.date === d) ? next.map(h => h.date === d ? { ...h, items: [...h.items, it] } : h) : [...next, { date: d, items: [it] }]; });
+      }
+      return next;
     });
     showT("할일로 복원됨", null);
   };
@@ -2863,7 +2886,7 @@ function App({ onSwitchWs }) {
       <div className="tab-bar" style={{ ...S.tabs, marginTop: 12 }}>
         {TABS_BY_WS[WS.key].map(t => <button key={t.id} style={S.tab(tab === t.id)} onClick={() => setTab(t.id)}>{t.icon} {t.label}</button>)}
       </div>
-      <div style={{ marginTop: 8 }}>
+      <div ref={tabTopRef} style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
         {tab === "today" && <><TodayView onDelSub={delSub} tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} onReorder={reorderTask} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} tasks={tasks} history={history} /></>}
         {tab === "areas" && <AreaView onDelSub={delSub} tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} isWork={isWork} setRecurrings={setRecurrings} onUpdateRecurring={updateRecurring} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemo={addAreaRecap} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
