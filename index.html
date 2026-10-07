@@ -75,11 +75,33 @@
       .modal-content .plan-fields > * { width: 100% !important; }
       .modal-row { flex-direction: column !important; gap: 8px !important; }
       .modal-row > div { width: 100% !important; }
+      /* ★휴대폰 다듬기(2026-10-07 · 소유자 「버튼이 너무 작아 잘못 누르거나」 · 「글자크기 너무 크고」).
+         화면 모양과 글자 크기는 그대로 두고, 누르는 자리와 이어서 하는 흐름만 고친다. */
+      /* 탭 줄을 위에 붙인다 — 오늘 탭에서 ＋ 를 누르고 영역 탭에서 회고를 쓰는 흐름이 1~2분 간격으로 반복된다. */
+      .tab-bar { position: sticky; top: 0; z-index: 50; }
+      /* 8~10px 글자만 11px 로 올린다(제목·다른 글자는 그대로). 보조 글자 최소 11 = Material 3 목록 · Apple HIG. */
+      [style*="font-size: 8px"], [style*="font-size: 9px"], [style*="font-size: 10px"] { font-size: 11px !important; }
+      [style*="color: rgb(192, 192, 192)"] { color: #6b7280 !important; }
+      /* 새 할일 입력은 접힌 한 줄(입력칸 + 추가)로 시작한다 — 펼친 7칸이 오늘 목록을 첫 화면 밖으로 밀었다(실측 413px). */
+      .add-compact { display: flex; gap: 6px; align-items: stretch; }
+      .add-compact input { flex: 1; min-width: 0; }
     }
     @media (hover: none) and (pointer: coarse) {
       .task-actions { display: flex !important; opacity: 0.6; }
       .task-actions:active { opacity: 1; }
       button, select { min-height: 36px; }
+      /* ★누르는 자리만 넓힌다(보이는 원·별·아이콘 크기는 그대로). 실측: ○ 폭 18px · ☆ 22px · ✏️ 와 ✕ 사이 3px.
+         안드로이드 기준 = 작은 아이콘 + 넓은 누르는 자리 + 8dp 간격. 줄 안 다른 간격을 줄여 제목 칸 폭은 거의 그대로 둔다. */
+      .task-row { gap: 2px !important; }
+      .hit-done { min-width: 32px; display: inline-flex; align-items: center; justify-content: center; }
+      .hit-star { min-width: 28px; }
+      .task-actions { gap: 4px !important; }
+      .task-actions button { min-width: 32px; }
+      .task-actions button:last-child { margin-left: 4px; } /* ✏️ 와 ✕(마지막) 사이는 8px */
+      /* 「🔁 이번 주」 칩: − · ＋ 를 넓히되 한 줄에 두 칩이 그대로 들어가게 칩 안 여백을 줄인다(스크롤이 늘지 않게) */
+      .wk-chip { gap: 2px !important; padding-left: 7px !important; }
+      .wk-chip button { min-width: 30px; }
+      .wk-btns button { min-width: 36px; }
     }
   </style>
 </head>
@@ -737,7 +759,10 @@ const S = {
 
 /* ─── 공통 컴포넌트 ─── */
 const Toast = ({ msg, onUndo, onX }) => {
-  useEffect(() => { const t = setTimeout(onX, 5000); return () => clearTimeout(t); }, [onX]);
+  /* 5초는 알림 하나당 한 번만 센다(2026-10-07). onX 가 그릴 때마다 새 함수라 화면이 다시 그려질 때마다 처음부터 다시 셌다.
+     알림이 바뀌면 key 로 새로 그려져 그때부터 다시 센다. */
+  const xRef = useRef(onX); xRef.current = onX;
+  useEffect(() => { const t = setTimeout(() => xRef.current(), 5000); return () => clearTimeout(t); }, []);
   return <div style={S.tst}><span>{msg}</span>
     {onUndo && <button style={S.tstB} onClick={onUndo}>되돌리기</button>}
     <button style={{ ...S.tstB, color: "#9ca3af", border: "none" }} onClick={onX}>✕</button>
@@ -768,14 +793,73 @@ const PrSel = ({ value, onChange, projects, highlight }) => (
     {sortProjsForSelect(projects).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
   </select>
 );
+/* ★할 일 별 = 「오늘 할 일 중 지금 먼저 할 것」(2026-10-07 · 소유자 「매일 할 일이라도 그중에서 지금 당장 집중할 것을 표시하고 싶다」).
+   켜도 줄은 움직이지 않는다(올리려면 ⠿). 날짜가 바뀌어도 저절로 꺼지지 않는다 — 직접 끈다(소유자 결정 2026-10-07).
+   영역/과제 카드의 별(집중)과는 다른 것이다: 그쪽은 카드 제목줄에 표시만 하고 카드 안에서 바꾼다. */
 const StarBtn = ({ on, onClick }) => (
-  <button style={S.star(on)} onClick={e => { e.stopPropagation(); onClick(); }} title={on ? "집중 업무 해제" : "집중 업무 표시"}>
+  <button className="hit-star" style={S.star(on)} onClick={e => { e.stopPropagation(); onClick(); }} title={on ? "「지금 먼저」 해제" : "지금 먼저 할 것으로 표시"}>
     {on ? "★" : "☆"}
   </button>
 );
+/* 휴대폰 폭인가 — CSS 의 @media (max-width: 640px) 와 같은 기준. 화면을 돌리면 다시 판단한다. */
+const PHONE_Q = "(max-width: 640px)";
+const useIsPhone = () => {
+  const [m, setM] = useState(() => { try { return window.matchMedia(PHONE_Q).matches; } catch { return false; } });
+  useEffect(() => {
+    let mq; try { mq = window.matchMedia(PHONE_Q); } catch { return; }
+    const f = () => setM(mq.matches);
+    if (mq.addEventListener) mq.addEventListener("change", f); else mq.addListener(f);
+    return () => { if (mq.removeEventListener) mq.removeEventListener("change", f); else mq.removeListener(f); };
+  }, []);
+  return m;
+};
+/* ★휴대폰 뒤로가기로 창을 닫는다(2026-10-07). history 처리가 없어 수정 창에서 뒤로가기를 누르면 창이 아니라 페이지를 떠났다.
+   창이 열릴 때 기록을 한 칸 쌓고, 뒤로가기가 그 칸을 꺼내면 닫는다. onBack 이 false 를 돌려주면(고친 내용이 있는데 닫기 취소)
+   다음 손가락·키 입력 때 칸을 다시 쌓는다 — 뒤로가기 처리 중에 바로 쌓으면 브라우저가 그 칸을 「건너뛸 칸」으로 표시해
+   다음 뒤로가기가 앱을 떠난다. 저장·취소로 닫힐 때는 이 창이 쌓은 칸만 스스로 꺼낸다. */
+try { if (history.state && history.state.tmModal) history.replaceState(null, ""); } catch {} /* 창을 연 채 새로고침(자정 포함)된 칸 정리 */
+let MODAL_SEQ = 0;
+const useBackClose = (onBack) => {
+  const ref = useRef(onBack); ref.current = onBack;
+  useEffect(() => {
+    const token = ++MODAL_SEQ + ":" + Date.now();
+    let armed = false, popped = false, rearm = null;
+    const arm = () => { try { history.pushState({ tmModal: token }, ""); armed = true; } catch {} };
+    const unhook = () => { if (rearm) { document.removeEventListener("pointerdown", rearm, true); document.removeEventListener("keydown", rearm, true); rearm = null; } };
+    const onPop = () => {
+      if (!armed) return;
+      armed = false; popped = true;
+      if (ref.current() === false) {
+        popped = false;
+        rearm = () => { unhook(); arm(); };
+        document.addEventListener("pointerdown", rearm, true); document.addEventListener("keydown", rearm, true);
+      }
+    };
+    arm();
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      unhook();
+      if (armed && !popped) { try { if (history.state && history.state.tmModal === token) history.back(); } catch {} }
+    };
+  }, []);
+};
+/* 고친 것이 있는지 — 없던 칸이 빈 값으로 생긴 것(회고를 한 글자 쓰고 지움 등)은 고친 것으로 보지 않는다. */
+const sameEdit = (a, b) => {
+  const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+  for (const k of keys) {
+    const x = a[k], y = b[k];
+    if (x === y || (!x && !y)) continue;
+    if (typeof x === "object" && typeof y === "object" && JSON.stringify(x) === JSON.stringify(y)) continue;
+    return false;
+  }
+  return true;
+};
+/* 내일 날짜(YYYY-MM-DD) — 수정 창의 「내일」 단추(하루 끝에 남은 일을 넘길 때 ✏️ → 내일 → 저장) */
+const tomorrowOf = (ymd) => { const d = new Date(ymd + "T00:00:00"); d.setDate(d.getDate() + 1); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 
 /* ─── SubRow (서브태스크 행) ─── */
-const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
+const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit, inToday }) => {
   const [h, setH] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const isDone = sub.status === "done";
@@ -784,12 +868,16 @@ const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
     <div style={{ ...S.row, padding: "4px 8px", opacity: isDone ? 0.45 : 1 }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}>
       <span style={{ color: "#9ca3af", fontSize: 12, fontWeight: 700, flexShrink: 0, marginTop: 1, userSelect: "none" }} title="하위 할일">↳</span>
       <StarBtn on={sub.focus} onClick={onToggleFocus} />
-      <button onClick={onToggleDone} title={isDone ? "되돌리기" : "완료"}
-        style={{ width: 16, height: 16, borderRadius: "50%", border: `2px solid ${STATUSES[sub.status]?.color || "#ccc"}`, background: isDone ? STATUSES.done.color : "transparent", cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
+      <button className="hit-done" onClick={onToggleDone} title={isDone ? "되돌리기" : "완료"}
+        style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer", flexShrink: 0, marginTop: 2 }}>
+        <span style={{ display: "block", width: 16, height: 16, boxSizing: "border-box", borderRadius: "50%", border: `2px solid ${STATUSES[sub.status]?.color || "#ccc"}`, background: isDone ? STATUSES.done.color : "transparent" }} />
+      </button>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
-          <Badge st={sub.status} />
-          {sub.planDate && <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "0px 4px", borderRadius: 4 }}>📆 {fd(sub.planDate)}{sub.planTime ? " 🕒" + sub.planTime : ""}</span>}
+          {/* 오늘 탭 목록에서는 같은 말을 두 번 하지 않는다 — 상태는 묶음 제목이, 수행날짜(오늘·지난 날)는 목록 자체가 말한다. 시간은 남긴다. */}
+          {!inToday && <Badge st={sub.status} />}
+          {sub.planDate && (!inToday || sub.planDate > TODAY) && <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "0px 4px", borderRadius: 4 }}>📆 {fd(sub.planDate)}{sub.planTime ? " 🕒" + sub.planTime : ""}</span>}
+          {inToday && sub.planDate && sub.planDate <= TODAY && sub.planTime && <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "0px 4px", borderRadius: 4 }}>🕒 {sub.planTime}</span>}
           {dl && <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span>}
           {sub.scheduledDate && <span style={{ fontSize: 9, color: "#6B7280" }}>마감 {fd(sub.scheduledDate)}</span>}
           {sub.scheduledLabel && <span style={{ fontSize: 9, color: "#9ca3af" }}>({sub.scheduledLabel})</span>}
@@ -798,10 +886,11 @@ const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
         <div style={{ ...S.txt, fontSize: 12.5, textDecoration: isDone ? "line-through" : "none", color: isDone ? "#9ca3af" : "#1a1a1a" }}><Clamp text={sub.text} lines={2} /></div>{/* 하위 제목도 상위 카드 제목과 같은 Clamp(2026-10-02) — URL 제목이 전역 줄바꿈 뒤로 열 줄 넘게 감겼다 */}
         {sub.notes && showNotes && <div style={{ marginTop: 3, fontSize: 11, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 5, padding: "3px 7px", color: "#92400E", whiteSpace: "pre-wrap" }}><span style={{ fontSize: 8, fontWeight: 700, opacity: 0.65, marginRight: 5 }}>📝</span><LinkText text={sub.notes} /></div>}
       </div>
-      {h && <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
+      {/* 휴대폰에서는 마우스를 올릴 수 없어 처음부터 보인다(.task-actions 터치 규칙). ✕ 는 5초 「되돌리기」가 뜬다(delSub). */}
+      <div className="task-actions" style={{ display: h ? "flex" : "none", gap: 3, flexShrink: 0 }}>
         <button style={{ ...S.gh, fontSize: 10 }} onClick={onEdit}>✏️</button>
         <button style={{ ...S.gh, color: "#EF4444", fontSize: 10 }} onClick={onDel}>✕</button>
-      </div>}
+      </div>
     </div>
   );
 };
@@ -810,16 +899,23 @@ const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit }) => {
 const SubAddForm = ({ onAdd, onCancel }) => {
   const [t, setT] = useState(""); const [s, setS] = useState("action"); const [sd, setSd] = useState(""); const [pd, setPd] = useState(""); const [f, setF] = useState(false); const r = useRef();
   useEffect(() => { r.current?.focus(); }, []);
-  const go = () => { if (!t.trim()) return; onAdd({ text: t.trim(), status: s, focus: f, scheduledDate: sd, scheduledLabel: "", planDate: pd }); };
+  /* ★추가해도 닫히지 않는다(2026-10-07 · 소유자 「sub 태스크는 각 태스크 추가와 유사하게 · 여러개 추가할 때 불편」).
+     위쪽 새 할일 입력처럼 칸이 비워지고 커서가 남아 다음 것을 바로 친다. 닫기 = 「닫기」 · Esc · +sub 다시 누르기.
+     날짜·마감은 이어서 넣는 하위에 그대로 남는다(같은 날짜로 몰아 넣는 경우가 많다). 휴대폰에서는 상태·날짜·마감·☆ 를 ▾ 뒤로 접는다. */
+  const phone = useIsPhone();
+  const [more, setMore] = useState(false);
+  const full = !phone || more;
+  const go = () => { if (!t.trim()) return; onAdd({ text: t.trim(), status: s, focus: f, scheduledDate: sd, scheduledLabel: "", planDate: pd }); setT(""); setF(false); r.current?.focus(); };
   return (
-    <div className="form-row" style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap", padding: "4px 0" }}>
-      <StarBtn on={f} onClick={() => setF(!f)} />
+    <div className={full ? "form-row" : "add-compact"} style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap", padding: "4px 0" }}>
+      {full && <StarBtn on={f} onClick={() => setF(!f)} />}
       <input ref={r} style={{ ...S.inp, fontSize: 12 }} placeholder="하위 할일..." value={t} onChange={e => setT(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} />
-      <StSel value={s} onChange={setS} compact />
-      <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>📆</span><input type="date" max={DATE_MAX} style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} title="📆 언제할지 (선택)" /><TodayBtn value={pd} onChange={setPd} /></div>
-      <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span><input type="date" max={DATE_MAX} style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={sd} onChange={e => setSd(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} title="마감일 (선택)" /></div>
+      {full && <StSel value={s} onChange={setS} compact />}
+      {full && <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>📆</span><input type="date" max={DATE_MAX} style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} title="📆 언제할지 (선택)" /><TodayBtn value={pd} onChange={setPd} /></div>}
+      {full && <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span><input type="date" max={DATE_MAX} style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={sd} onChange={e => setSd(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} title="마감일 (선택)" /></div>}
       <button style={S.btn()} onClick={go}>추가</button>
-      <button style={S.gh} onClick={onCancel}>취소</button>
+      {phone && <button style={S.gh} onClick={() => setMore(!more)} title="상태 · 날짜 · 마감">{more ? "▴" : "▾"}</button>}
+      <button style={S.gh} onClick={onCancel}>닫기</button>
     </div>
   );
 };
@@ -876,7 +972,7 @@ const useDragReorder = (onReorder, attr = "data-task-card") => {
     onPointerCancel: () => finish(false),
   };
 };
-const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onUpdate, dragHandlers, hideSubIds }) => {
+const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onUpdate, dragHandlers, hideSubIds, inToday, onDelSub }) => {
   const dh = dragHandlers || {};
   const [h, setH] = useState(false);
   const [showSubs, setShowSubs] = useState(false);
@@ -898,7 +994,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
     if (!onUpdate) return;
     const pd = planDate || "";
     onUpdate({ ...task, subtasks: [...subs, { id: gid(), text, status, focus, scheduledDate: scheduledDate || "", scheduledLabel: scheduledLabel || "", planDate: pd, notes: "", createdAt: TODAY }] }); /* 별=집중(날짜와 분리, 2026-06-30) */
-    setAddSub(false); setShowSubs(true);
+    setShowSubs(true); /* 입력칸은 열어 둔다 — 하위를 이어서 넣는다(2026-10-07) */
   };
 
   /* 카드에 남는 HTML5 드래그는 **섹션 이동 전용**이다(오늘로 보내기 / 오늘에서 내리기).
@@ -912,17 +1008,22 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
         {dh.onPointerDown && <span className="grip" style={{ color: "#9ca3af", fontSize: 15, cursor: "grab", flexShrink: 0, marginTop: 1, padding: "2px 4px", userSelect: "none", touchAction: "none" }} title="여기를 잡고 끌어 순서 변경"
           onPointerDown={(e) => dh.onPointerDown(task.id, e)} onPointerMove={dh.onPointerMove} onPointerUp={dh.onPointerUp} onPointerCancel={dh.onPointerCancel}>⠿</span>}
         <StarBtn on={task.focus} onClick={() => onFocus(task.id)} />
-        <button onClick={() => onDone(task.id)} title="완료"
-          style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${STATUSES[task.status]?.color || "#ccc"}`, background: "transparent", cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
+        <button className="hit-done" onClick={() => onDone(task.id)} title="완료"
+          style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer", flexShrink: 0, marginTop: 2 }}>
+          <span style={{ display: "block", width: 18, height: 18, boxSizing: "border-box", borderRadius: "50%", border: `2px solid ${STATUSES[task.status]?.color || "#ccc"}` }} />
+        </button>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-            <Badge st={task.status} />
-            {task.planDate && <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "1px 5px", borderRadius: 6 }}>📆 {fd(task.planDate)}{task.planTime ? " 🕒" + task.planTime : ""}</span>}
+            {/* 오늘 탭(오늘 할 일·전체 현황)에서는 같은 말을 두 번 하지 않는다 — 상태는 묶음 제목이, 오늘·지난 수행날짜는 목록이 말한다. 시간은 남긴다. */}
+            {!inToday && <Badge st={task.status} />}
+            {task.planDate && (!inToday || task.planDate > TODAY) && <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "1px 5px", borderRadius: 6 }}>📆 {fd(task.planDate)}{task.planTime ? " 🕒" + task.planTime : ""}</span>}
+            {inToday && task.planDate && task.planDate <= TODAY && task.planTime && <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, background: "#EEF2FF", padding: "1px 5px", borderRadius: 6 }}>🕒 {task.planTime}</span>}
             {task.scheduledDate && (() => { const dl = deadlineInfo(task.scheduledDate); return dl ? <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span> : null; })()}
             {task.scheduledDate && <span style={{ fontSize: 10, color: "#6B7280" }}>마감 {fd(task.scheduledDate)}</span>}
             {task.scheduledLabel && <span style={{ fontSize: 10, color: "#9ca3af" }}>({task.scheduledLabel})</span>}
             {subs.length > 0 && <span style={S.progBdg}>{doneSubCnt}/{subs.length}</span>}
             {showProj && p && <span style={{ fontSize: 11, color: "#9ca3af" }}>#{p.name}</span>}
+            {WS.key === "work" && task.respPlan && <span title="업무 대응안에 포함 — 「업무」 카드 회고 칸 위에 모인다(완료·횟수와는 묶지 않는다)" style={{ fontSize: 11, fontWeight: 600, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", padding: "0 5px", borderRadius: 6, whiteSpace: "nowrap" }}>대응안</span>}
             {/* (2026-06-26) 마커 표시 폐지 — 채널=프로젝트 버킷 */}
             {task.notes && <span onClick={(e) => { e.stopPropagation(); setShowNotes(!showNotes); }} style={{ cursor: "pointer", fontSize: 10, color: showNotes ? "#92400E" : "#B45309", background: showNotes ? "#FEF3C7" : "#FFFBEB", border: "1px solid #FDE68A", padding: "1px 5px", borderRadius: 4, userSelect: "none" }}>📝 메모</span>}
           </div>
@@ -931,7 +1032,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
         </div>
         <div className="task-actions" style={{ display: h ? "flex" : "none", gap: 3, flexShrink: 0, alignItems: "center" }}>
           {listSubs.length > 0 && <button style={S.gh} onClick={() => setShowSubs(!showSubs)} title="하위 할일">{showSubs ? "▲" : "▼"}</button>}
-          <button style={{ ...S.gh, fontSize: 10 }} onClick={() => { setAddSub(!addSub); if (!addSub) setShowSubs(true); }} title="하위 할일 추가">+sub</button>
+          <button style={{ ...S.gh, fontSize: 10, padding: "4px 6px" }} onClick={() => { setAddSub(!addSub); if (!addSub) setShowSubs(true); }} title="하위 할일 추가">+sub</button>
           <button style={S.gh} onClick={() => onEdit(task)}>✏️</button>
           <button style={{ ...S.gh, color: "#EF4444" }} onClick={() => onDel(task.id)}>✕</button>
         </div>
@@ -942,7 +1043,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
             <SubRow key={s.id} sub={s}
               onToggleFocus={() => onUpdate && onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, focus: !x.focus } : x) })}
               onToggleDone={() => onUpdate && onUpdate({ ...task, subtasks: subs.map(x => x.id === s.id ? { ...x, status: x.status === "done" ? "action" : "done" } : x) })}
-              onDel={() => onUpdate && onUpdate({ ...task, subtasks: subs.filter(x => x.id !== s.id) })}
+              onDel={() => onDelSub ? onDelSub(task.id, s.id) : (onUpdate && onUpdate({ ...task, subtasks: subs.filter(x => x.id !== s.id) }))}
               onEdit={() => onEdit(s, task.id)}
             />
           ))}
@@ -967,25 +1068,37 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
 const AddForm = ({ projects, onAdd, defProj }) => {
   const [t, setT] = useState(""); const [s, setS] = useState("action"); const [p, setP] = useState(defProj || ""); const [f, setF] = useState(false); const [sd, setSd] = useState(""); const [sl, setSl] = useState(""); const [pd, setPd] = useState(""); const r = useRef();
   /* 프로젝트/과제 미선택 상태로 시작(2026-07-04, 소유자) — 첫 항목 자동선택 안 함. 고르지 않으면 추가 안 됨(오분류 방지). */
-  const go = () => { if (!t.trim() || !p) return; onAdd({ text: t.trim(), status: s, project: p, focus: f, scheduledDate: sd, scheduledLabel: sl, planDate: pd }); setT(""); setS("action"); setF(false); setSd(""); setSl(""); setPd(""); r.current?.focus(); };
+  /* ★휴대폰에서는 접힌 한 줄(입력칸 + 추가)로 시작하고 입력칸을 누르면 지금 칸들이 그대로 펼쳐진다(2026-10-07).
+     입력칸은 두 모양에서 같은 자리(첫 자식)라 펼쳐져도 포커스·글자가 남는다. 주제 필수(2026-07-04)는 그대로 — 주제 없이 추가하면 펼치고 짚어 준다. */
+  const phone = useIsPhone();
+  const [open, setOpen] = useState(false);
+  const [need, setNeed] = useState(false);
+  const full = !phone || open;
+  const go = () => {
+    if (!t.trim()) return;
+    if (!p) { setOpen(true); setNeed(true); return; }
+    onAdd({ text: t.trim(), status: s, project: p, focus: f, scheduledDate: sd, scheduledLabel: sl, planDate: pd }); setT(""); setS("action"); setF(false); setSd(""); setSl(""); setPd(""); setNeed(false); r.current?.focus();
+  };
   return (
-    <div className="form-row" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-      <input ref={r} style={S.inp} placeholder="새 할일 입력..." value={t} onChange={e => setT(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} />
-      <StSel value={s} onChange={setS} compact />
-      {!defProj && <PrSel value={p} onChange={setP} projects={projects} highlight={!!t.trim() && !p} />}
-      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+    <div className={full ? "form-row" : "add-compact"} style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+      <input ref={r} style={S.inp} placeholder="새 할일 입력..." value={t} onChange={e => setT(e.target.value)} onFocus={() => setOpen(true)} onKeyDown={e => e.key === "Enter" && go()} />
+      {full && <StSel value={s} onChange={setS} compact />}
+      {full && !defProj && <PrSel value={p} onChange={v => { setP(v); setNeed(false); }} projects={projects} highlight={!!t.trim() && !p} />}
+      {full && need && !p && <div style={{ fontSize: 12, color: "#B45309" }}>{WS.key === "personal" ? "주제" : "과제"}를 골라야 추가됩니다</div>}
+      {full && <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
         <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600 }}>📆</span>
         <input type="date" max={DATE_MAX} style={{ ...S.fld, width: 130, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} title="📆 언제할지 (선택)" />
         <TodayBtn value={pd} onChange={setPd} />
-      </div>
-      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+      </div>}
+      {full && <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
         <span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span>
         <input type="date" max={DATE_MAX} style={{ ...S.fld, width: 130, flex: "none", fontSize: 11 }} value={sd} onChange={e => setSd(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} title="마감일 (선택)" />
-      </div>
-      <button className="star-btn" style={{ ...S.star(f), border: "1px solid #e5e7eb", borderRadius: 5, width: 28, height: 28 }} onClick={() => setF(!f)} title="오늘 집중">
+      </div>}
+      {full && <button className="star-btn" style={{ ...S.star(f), border: "1px solid #e5e7eb", borderRadius: 5, width: 28, height: 28 }} onClick={() => setF(!f)} title="지금 먼저 할 것으로 표시">
         {f ? "★" : "☆"}
-      </button>
+      </button>}
       <button style={S.btn()} onClick={go}>추가</button>
+      {phone && open && <button style={{ ...S.gh, fontSize: 12 }} onClick={() => { setOpen(false); setNeed(false); r.current?.blur(); }}>접기 ▲</button>}
     </div>
   );
 };
@@ -1020,8 +1133,15 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
   /* (2026-07-31) 첨부 제거로 저장/취소의 파일 부수효과(업로드 롤백·삭제 예약·업로드 중 저장 잠금)도 함께 사라짐 — 둘 다 순수 동작 */
   const cancel = () => { onClose(); };
   const commit = () => { onSave(f); onClose(); };
+  /* 바깥 회색·뒤로가기로 닫을 때는 고친 내용이 있을 때만 묻는다(2026-10-07). 「취소」는 버리겠다는 뜻이라 묻지 않는다. */
+  const softClose = () => {
+    if (!sameEdit(f, task) && !window.confirm("고친 내용을 저장하지 않고 닫을까요?")) return false;
+    onClose(); return true;
+  };
+  useBackClose(softClose);
+  const tmr = tomorrowOf(TODAY);
   return (
-    <div style={S.mod} onMouseDown={e => { overlayDown.current = e.target === e.currentTarget; }} onClick={e => { if (e.target === e.currentTarget && overlayDown.current) cancel(); }}>
+    <div style={S.mod} onMouseDown={e => { overlayDown.current = e.target === e.currentTarget; }} onClick={e => { if (e.target === e.currentTarget && overlayDown.current) softClose(); }}>
       <div className="modal-content" style={S.modC} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>{isSubtask ? "하위 할일 수정" : "할 일 수정"}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1029,15 +1149,23 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
           <div className="modal-row" style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 100 }}><div style={S.lbl}>상태</div><StSel value={f.status} onChange={v => u("status", v)} /></div>
             {!isSubtask && <div style={{ flex: 1, minWidth: 100 }}><div style={S.lbl}>{WS.key === "personal" ? "주제" : "과제"}</div><PrSel value={f.project} onChange={v => u("project", v)} projects={projects} /></div>}
-            <button style={{ ...S.star(f.focus), border: "1px solid #e5e7eb", borderRadius: 5, width: 32, height: 32 }} onClick={() => u("focus", !f.focus)} title="집중 업무">
+            <button style={{ ...S.star(f.focus), border: "1px solid #e5e7eb", borderRadius: 5, width: 32, height: 32 }} onClick={() => u("focus", !f.focus)} title="지금 먼저 할 것">
               {f.focus ? "★" : "☆"}
             </button>
           </div>
+          {/* ★업무 대응안에 포함(2026-10-07 · 소유자 「업무 앱 내 개별 태스크들 중에서 선별하여 대응안을 심도있게 짜는 전략 —
+              이 태스크 내용을 포함한다고 표시하고 싶음」 · 켜는 곳은 이 창 하나). 완료·「이번 주」 숫자와 묶지 않는다
+              (「태스크를 종결하는건 또 다른 일」). 표시한 할 일 제목은 과제 탭 「업무」 카드의 회고 칸 위에 모인다. */}
+          {isWork && !isSubtask && <div><button type="button" style={{ ...S.gh, fontSize: 12, fontWeight: f.respPlan ? 700 : 400, background: f.respPlan ? "#FFFBEB" : "#fff", color: f.respPlan ? "#B45309" : "#6b7280", borderColor: f.respPlan ? "#FCD34D" : "#e5e7eb" }}
+            onClick={() => u("respPlan", !f.respPlan)}>{f.respPlan ? "✓ 업무 대응안에 포함" : "＋ 업무 대응안에 포함"}</button></div>}
           <div>
             <div style={{ ...S.lbl, color: "#6366F1", fontWeight: 600 }}>📆 언제할지 (선택)</div>
             <div className="plan-fields" style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <input type="date" max={DATE_MAX} style={{ ...S.fld, width: 160, flex: "none" }} value={f.planDate || ""} onChange={e => u("planDate", e.target.value)} />
               <TodayBtn value={f.planDate || ""} onChange={v => u("planDate", v)} />
+              {/* 「내일」(2026-10-07) — 하루 끝에 남은 일을 다음 날로 넘길 때 ✏️ → 내일 → 저장 */}
+              <button type="button" onClick={() => u("planDate", f.planDate === tmr ? "" : tmr)} title={f.planDate === tmr ? "수행날짜 비우기" : "수행날짜를 내일로"}
+                style={{ ...S.gh, fontSize: 11, padding: "2px 7px", flexShrink: 0, background: f.planDate === tmr ? "#EEF2FF" : "#fff", color: f.planDate === tmr ? "#4338CA" : "#6b7280", fontWeight: f.planDate === tmr ? 700 : 400 }}>내일</button>
               <span style={{ fontSize: 11, color: "#6366F1" }}>🕒</span><input type="time" style={{ ...S.fld, width: 120, flex: "none" }} value={f.planTime || ""} onChange={e => u("planTime", e.target.value)} title="시간(선택)" />
             </div>
           </div>
@@ -1202,7 +1330,7 @@ const WeeklyRoutineStrip = ({ recurrings, projects, tasks, history, onAddSession
       <span style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", flexShrink: 0 }}>🔁 이번 주</span>
       {items.map(r => { const tgt = routineWeekTarget(r); const n = weekDoneCount(doneSet, r.id, wk); const hit = n >= tgt;
         return (
-          <span key={r.id} style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 12, background: hit ? "#ECFDF5" : "#FFFBEB", border: "1px solid " + (hit ? "#A7F3D0" : "#FDE68A"), borderRadius: 14, padding: "2px 4px 2px 9px" }}>
+          <span key={r.id} className="wk-chip" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 12, background: hit ? "#ECFDF5" : "#FFFBEB", border: "1px solid " + (hit ? "#A7F3D0" : "#FDE68A"), borderRadius: 14, padding: "2px 4px 2px 9px" }}>
             <span style={{ maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.text}</span>
             {/* − 자리는 늘 잡아 둔다: 0→1 에서 − 가 새로 생기면 ＋ 가 손가락 밑에서 밀려 연타가 엉뚱한 데를 누른다(미리보기 실측) */}
             <button onClick={() => n > 0 && onRemoveSession(r.id)} disabled={n === 0} title="이번 주 최근 완료 1건 취소(잘못 체크 정정)" style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "1px 6px", borderRadius: 10, color: "#DC2626", visibility: n > 0 ? "visible" : "hidden" }}>−</button>
@@ -1216,7 +1344,7 @@ const WeeklyRoutineStrip = ({ recurrings, projects, tasks, history, onAddSession
 };
 
 /* ═══ 오늘 뷰 (서브태스크 집중 포함) ═══ */
-const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onPlanToday, onClearToday, onReorder, onAddSession, onRemoveSession }) => {
+const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onPlanToday, onClearToday, onReorder, onAddSession, onRemoveSession, onDelSub }) => {
   const dragHandlers = useDragReorder(onReorder);
 
 
@@ -1279,7 +1407,7 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
   };
 
   const renderItem = (item) => {
-    if (item.type === "task") return <TaskRow key={item.data.id} task={item.data} projects={projects} showProj dragHandlers={dragHandlers} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} hideSubIds={todaySubIds} />;
+    if (item.type === "task") return <TaskRow inToday onDelSub={onDelSub} key={item.data.id} task={item.data} projects={projects} showProj dragHandlers={dragHandlers} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} hideSubIds={todaySubIds} />;
     return (
       <div key={item.data.id} style={item.underParent
         /* ★상위 바로 아래에 붙은 하위는 카드를 펼쳤을 때와 **같은 모양**으로 보인다(2026-09-08):
@@ -1287,10 +1415,10 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
         ? { marginLeft: 20, borderLeft: "2px solid #d1d5db", paddingLeft: 4 }
         : { paddingLeft: 8 }}>
         {!item.underParent && <div style={{ fontSize: 10, color: "#9ca3af", paddingLeft: 30, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={item.parent.text}>↳ {item.parent.text}</div>}{/* 소속 표시라 한 줄로 자른다 — 상위 제목이 URL 이면 통째로 감겨 몇 줄을 먹었다(2026-10-02) */}
-        <SubRow sub={item.data}
+        <SubRow sub={item.data} inToday
           onToggleFocus={() => toggleSubInParent(item.parent.id, item.data.id, "focus")}
           onToggleDone={() => toggleSubInParent(item.parent.id, item.data.id, "done")}
-          onDel={() => onUpdate && onUpdate({ ...item.parent, subtasks: (item.parent.subtasks || []).filter(s => s.id !== item.data.id) })}
+          onDel={() => onDelSub ? onDelSub(item.parent.id, item.data.id) : (onUpdate && onUpdate({ ...item.parent, subtasks: (item.parent.subtasks || []).filter(s => s.id !== item.data.id) }))}
           onEdit={() => onEdit(item.data, item.parent.id)} />
       </div>
     );
@@ -1332,8 +1460,8 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
         </div>
         {showRest && (
           <div>
-            {unfocusedActions.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#3B82F6", marginBottom: 6 }}>🔵 다음행동 ({unfocusedActions.length})</div>{unfocusedActions.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} hideSubIds={todaySubIds} />)}</div>}
-            {waitingAll.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#F59E0B", marginBottom: 6 }}>⏳ 대기중 ({waitingAll.length})</div>{waitingAll.map(t => <TaskRow key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} hideSubIds={todaySubIds} />)}</div>}
+            {unfocusedActions.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#3B82F6", marginBottom: 6 }}>🔵 다음행동 ({unfocusedActions.length})</div>{unfocusedActions.map(t => <TaskRow inToday onDelSub={onDelSub} key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} hideSubIds={todaySubIds} />)}</div>}
+            {waitingAll.length > 0 && <div style={S.sec}><div style={{ fontSize: 12, fontWeight: 500, color: "#F59E0B", marginBottom: 6 }}>⏳ 대기중 ({waitingAll.length})</div>{waitingAll.map(t => <TaskRow inToday onDelSub={onDelSub} key={t.id} task={t} projects={projects} showProj onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} hideSubIds={todaySubIds} />)}</div>}
           </div>
         )}
       </div>
@@ -1456,7 +1584,7 @@ const MemoRow = ({ m, onEdit, onDelete }) => {
    ★새 항목 종류를 만들지 않는다: 「생각·개선안」은 그냥 **날짜 없는 할일**이고 이미 그렇게 쓰이고 있었다
      (실측 2026-09-14: 개인 날짜 없는 할일 23건 = 글감·링크·미뤄둔 작업). 오늘 탭에 안 뜨고 여기에만 있다.
    ★카드 머리 숫자는 **실제 수행**만 — 세션 n/목표. 생각이 쌓인 양은 성과가 아니다(소유자). */
-const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, isWork, setRecurrings, onUpdateRecurring, onAddSession, onRemoveSession, onAddMemo, onEditMemo, onDeleteMemo, onSetFocus }) => {
+const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onDelSub, onFocus, onAdd, onEdit, onAddProj, onEditProj, onDelProj, onUpdate, isWork, setRecurrings, onUpdateRecurring, onAddSession, onRemoveSession, onAddMemo, onEditMemo, onDeleteMemo, onSetFocus }) => {
   const [open, setOpen] = useState(new Set()); /* 항상 접힌 상태로 시작한다. 열린 할일이 있다고 자동으로 펼치지 않는다 */
   const [np, setNp] = useState("");
   const [memoMore, setMemoMore] = useState(new Set());  /* 메모 더보기 — 카드별 */
@@ -1486,8 +1614,10 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus
         <div style={S.ph(o)} onClick={() => tog(p.id)}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
             <span style={{ fontSize: 11, color: "#9ca3af" }}>{o ? "▼" : "▶"}</span>
-            <button style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "0 4px", border: "none", background: "none", color: p.focus ? "#F59E0B" : "#d1d5db" }}
-              onClick={e => { e.stopPropagation(); onSetFocus(p.id); }} title={p.focus ? "집중 해제" : "집중으로 — 루틴을 다 하고 남는 시간을 여기 쓴다"}>{p.focus ? "★" : "☆"}</button>
+            {/* ★제목줄의 별은 표시만 한다 — 집중 카드에만 ★(2026-10-07 · 소유자 「실제로는 그렇게 할 일이 거의 없음」).
+                카드를 열려고 누르는 줄에 켜고 끄는 단추가 있어 잘못 누르면 집중이 조용히 꺼졌다(10-05~06 저장본 사이에 실제로 꺼졌다).
+                바꾸는 단추는 카드를 펼친 안쪽 첫 줄에 있다. */}
+            {p.focus && <span style={{ fontSize: 13, color: "#F59E0B" }} title="집중 — 루틴을 다 하고 남는 시간을 여기 쓴다">★</span>}
             <span style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</span>
             <span style={S.cnt(pt.length)}>{pt.length}</span>
             {sTgt > 0 && <span style={{ fontSize: 10, color: sDone >= sTgt ? "#059669" : "#4338CA", background: sDone >= sTgt ? "#ECFDF5" : "#EEF2FF", border: "1px solid " + (sDone >= sTgt ? "#A7F3D0" : "#C7D2FE"), padding: "0 5px", borderRadius: 6, fontWeight: 600, flexShrink: 0 }}
@@ -1499,6 +1629,10 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus
 
         </div>
         {o && <div style={{ paddingLeft: 8, marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
+            <button style={{ ...S.gh, fontSize: 11, color: p.focus ? "#B45309" : "#6b7280" }} onClick={() => onSetFocus(p.id)}
+              title={p.focus ? "집중 해제" : "집중으로 — 루틴을 다 하고 남는 시간을 여기 쓴다(하나만)"}>{p.focus ? "★ 집중 해제" : "☆ 집중으로"}</button>
+          </div>
           {recs.length > 0 && <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#6366F1", marginBottom: 2 }}>반복 세션</div>
             <div style={S.card}>
@@ -1518,6 +1652,11 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus
           <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#6366F1", marginBottom: 2 }}>🪞 회고 · 하고 나서 남긴 것</div>
             <div style={S.card}>
+              {/* 「업무 대응안에 포함」으로 표시한 할 일 — 이 루틴 카드에서 대응안을 쓸 때 눈앞에(읽기만) · 로드맵 「다음 비슷한 사안을 쓰기 시작할 때 눈앞에」 */}
+              {isWork && recs.some(r => isStripRec(r, projects)) && (() => { const rp = tasks.filter(t => t.respPlan && t.status !== "done"); return rp.length > 0 &&
+                <div style={{ fontSize: 12, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "4px 8px", marginBottom: 6 }}>
+                  <b>대응안에 포함 {rp.length}</b> · {rp.map(t => t.text.length > 30 ? t.text.slice(0, 30) + "…" : t.text).join(" · ")}
+                </div>; })()}
               <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
                 <textarea value={memoDraft[p.id] || ""} onChange={e => setMemoDraft({ ...memoDraft, [p.id]: e.target.value })} rows={2}
                   placeholder="하고 나서 남길 것: 코치가 고쳐 준 것, 하다가 발견한 것, 판단이 맞았는지"
@@ -1535,7 +1674,7 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus
             </div>
           </div>
           {SK.map(s => { const items = pt.filter(t => t.status === s); if (!items.length) return null;
-            return <div key={s} style={{ marginBottom: 4 }}>{items.map(t => <TaskRow key={t.id} task={t} projects={projects} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} />)}</div>; })}
+            return <div key={s} style={{ marginBottom: 4 }}>{items.map(t => <TaskRow key={t.id} onDelSub={onDelSub} task={t} projects={projects} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} />)}</div>; })}
           {pt.length === 0 && <div style={{ ...S.emp, padding: 12, fontSize: 12 }}>할 일 없음</div>}
           <div style={S.div} /><AddForm projects={projects} onAdd={onAdd} defProj={p.id} />
         </div>}
@@ -1657,7 +1796,7 @@ const HistRow = ({ item, date, idx, onRestore, onUncancel, onEditMemo, onDeleteM
         {item.subCount > 0 && <span style={{ fontSize: 10, color: "#9ca3af" }}>+{item.subCount} sub</span>}
         {item.time && <span style={{ fontSize: 10, color: "#c0c0c0", flexShrink: 0 }}>{item.time}</span>}
         {item.cancelled && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", color: "#059669", borderColor: "#A7F3D0" }} onClick={() => onUncancel(date, idx)} title="취소 복원 — 다시 이번 주 카운트에 포함">↺ 복원</button>}
-        {h && item.type === "done" && !item.cancelled && !item.memoOnly && !item.routineKey && !item.isSub && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
+        {h && ((item.type === "done" && !item.cancelled && !item.memoOnly && !item.routineKey && !item.isSub) || (item.type === "deleted" && item.orig && !item.orig.recurringId)) && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px" }} onClick={() => onRestore(date, idx)}>↩ 되돌리기</button>}
         {h && canEditMemo && !item.cancelled && onEditMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", ...(hasRecap ? {} : { color: "#4338CA", borderColor: "#C7D2FE" }) }} onClick={() => { setEt(orig.recap || ""); setEditing(true); setOpen(true); }} title={hasRecap ? "회고 수정 (영역 카드에 반영됩니다)" : "회고 추가: 하고 나서 알게 된 것을 끝난 뒤에도 남길 수 있습니다"}>{hasRecap ? "🪞" : "🪞＋"}</button>}
         {h && canEditMemo && hasRecap && !item.cancelled && onDeleteMemo && <button style={{ ...S.gh, fontSize: 10, padding: "2px 6px", color: "#DC2626" }} onClick={() => onDeleteMemo(date, idx)} title={item.memoOnly ? "이 회고 삭제: 영역 카드에서 제거됩니다(↺ 복원 가능)" : "회고만 삭제: 완료 기록과 수행 카운트는 그대로 유지됩니다"}>🗑</button>}
       </div>
@@ -1704,14 +1843,18 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate, weekDone, weekTarget, o
   const label = type === "count" ? `주 ${r.freqPerWeek || 1}회` : type === "daily" ? "매일" : type === "weekly" ? `매주 ${wdays.map(x => DAYS_KO[x]).join("·")}` : r.lastDay ? "매월 마지막일" : `매월 ${r.dom}일`;
   return (
     <div style={{ borderBottom: "1px solid #f3f4f6", padding: "6px 4px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+      {/* ★− · n/목표 · ＋ 순서를 「🔁 이번 주」 줄과 맞추고 − 자리를 늘 잡아 둔다(0→1 에서 ＋ 가 밀리지 않게).
+          휴대폰에서 이름이 한 글자씩 세로로 쌓이던 것(실측 「보컬 레슨」)을 막는다 — 이름 칸 최소 폭 · 단추 묶음은 모자라면 다음 줄로(2026-10-07). */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, flexWrap: "wrap" }}>
         <span style={{ background: "#EEF2FF", color: "#4338CA", fontWeight: 700, fontSize: 12, padding: "2px 8px", borderRadius: 6, flexShrink: 0 }}>{label}{r.time ? ` ${r.time}` : ""}</span>
-        <span style={{ flex: 1 }}>{r.text}</span>
-        {weekTarget > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: weekDone > weekTarget ? "#4338CA" : weekDone >= weekTarget ? "#059669" : "#9ca3af", flexShrink: 0 }} title={weekDone > weekTarget ? "목표보다 " + (weekDone - weekTarget) + "회 더 했다" : ""}>{weekDone}/{weekTarget}</span>}
-        {onAddSession && <button style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "0 6px", color: "#059669" }} onClick={() => onAddSession(r.id, "")} title="이번 회차 완료로 기록">＋</button>}
-        {onRemoveSession && weekDone > 0 && <button style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "0 6px", color: "#EF4444" }} onClick={() => onRemoveSession(r.id)} title="이번 주 최근 1건 취소">−</button>}
-        <button style={{ ...S.gh, fontSize: 10, background: open ? "#EEF2FF" : "#fff" }} onClick={() => setOpen(!open)} title={showProto ? "편집(이름·시간·요일·과제·실행방법)" : "편집(이름·시간·요일·과제)"}>✏️{showProto && r.protocol ? "📋" : ""}</button>
-        <button style={{ ...S.gh, color: "#EF4444", fontSize: 10 }} onClick={onDelete}>✕</button>
+        <span style={{ flex: "1 1 96px", minWidth: 96 }}>{r.text}</span>
+        <div className="wk-btns" style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", flexShrink: 0 }}>
+          {onRemoveSession && <button disabled={weekDone === 0} style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "0 6px", color: "#EF4444", visibility: weekDone > 0 ? "visible" : "hidden" }} onClick={() => weekDone > 0 && onRemoveSession(r.id)} title="이번 주 최근 1건 취소">−</button>}
+          {weekTarget > 0 && <b style={{ fontSize: 11, fontWeight: 700, color: weekDone > weekTarget ? "#4338CA" : weekDone >= weekTarget ? "#059669" : "#9ca3af", flexShrink: 0 }} title={weekDone > weekTarget ? "목표보다 " + (weekDone - weekTarget) + "회 더 했다" : ""}>{weekDone}/{weekTarget}</b>}
+          {onAddSession && <button style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "0 6px", color: "#059669" }} onClick={() => onAddSession(r.id, "")} title="이번 회차 완료로 기록">＋</button>}
+          <button style={{ ...S.gh, fontSize: 10, background: open ? "#EEF2FF" : "#fff" }} onClick={() => setOpen(!open)} title={showProto ? "편집(이름·시간·요일·과제·실행방법)" : "편집(이름·시간·요일·과제)"}>✏️{showProto && r.protocol ? "📋" : ""}</button>
+          <button style={{ ...S.gh, color: "#EF4444", fontSize: 10 }} onClick={onDelete} title="이 반복 지우기(확인 창이 뜬다)">✕</button>
+        </div>
       </div>
       {open && <div style={{ marginTop: 4 }}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
@@ -1767,7 +1910,7 @@ const RecurringSettings = ({ recurrings: allRecurrings, setRecurrings, projects:
     setNt(""); setNdows([]); setDom(1); setLastDay(false); setRTime(""); setFreqN(3);
   };
   /* 반복 삭제 = 목록에서 뺀다(시드 묘비 규칙은 2026-10-06 걷었다). */
-  const delR = (id) => { setRecurrings(p => p.filter(r => r.id !== id)); }; /* 삭제/비활성 시 미래 placeholder 고아 제거(2026-07-06) */
+  const delR = (id) => { if (!window.confirm("이 반복을 지울까요?")) return; setRecurrings(p => p.filter(r => r.id !== id)); }; /* 영역 카드 delRec 처럼 확인을 받는다(2026-10-07) */ /* 삭제/비활성 시 미래 placeholder 고아 제거(2026-07-06) */
   const wkNow = getWeekId();
   const doneSet = routineDoneSet(tasks, history);
   return (
@@ -2287,7 +2430,8 @@ function App({ onSwitchWs }) {
     if (cloudLoadedRef.current) cloudSave(data);
   }, [tasks, projects, history, recurrings]);
 
-  const showT = (msg, undo) => setToast({ msg, undo });
+  const toastSeq = useRef(0);
+  const showT = (msg, undo) => setToast({ msg, undo, k: ++toastSeq.current });
   /* 알림 문구에 넣는 제목은 40자에서 자른다(2026-10-02). 600자 URL 제목이면 알림이 화면보다 길어져 되돌리기가 밖으로 나갔다.
      ⛔ 문구에서만 자른다 — task.text 자체를 자르면 되돌리기(히스토리 항목을 text 로 찾음)가 어긋난다. */
   const tName = (s) => (s || "").length > 40 ? s.slice(0, 40) + "…" : (s || "");
@@ -2342,8 +2486,13 @@ function App({ onSwitchWs }) {
     setTasks(p => p.map(t => (t.recurringId === id && t.status !== "done") ? merge(t) : t));
   };
   /* 지난 루틴 소급 체크/해제(2026-07-01): 완료=history done 항목 + 미완료 인스턴스 정리 / 해제=반대 */
+  /* ★＋ 뒤에도 「되돌리기」(2026-10-07). 잘못 누른 ＋ 를 바로잡는 길 = ＋ 직후 되돌리기 · 그 주 안 언제든 − · 히스토리 ↺. */
   const addRoutineSession = (rid, memo) => {
-    const rec = recurrings.find(r => r.id === rid); if (!rec) return;
+    const r = recordSession(rid, memo);
+    if (r) showT(r.msg, () => { r.undo(); hideT(); });
+  };
+  const recordSession = (rid, memo) => {
+    const rec = recurrings.find(r => r.id === rid); if (!rec) return null;
     const wk = getWeekId();
     const isWeekly = rec.type === "weekly";
     /* ★weekly 초과 기록 허용(2026-08-08 소유자 지시 — "레슨·링글도 다른 것들과 똑같이 초과 등록되게").
@@ -2368,7 +2517,14 @@ function App({ onSwitchWs }) {
     setHistory(prev => { const item = { type: "done", text: orig.text, projectName: proj ? proj.name : "", project: orig.project, orig, time: nowTime() };
       const ex = prev.find(h => h.date === TODAY); if (ex) return prev.map(h => h.date === TODAY ? { ...h, items: [...h.items, item] } : h); return [...prev, { date: TODAY, items: [item] }]; });
     if (pend) setTasks(prev => prev.filter(t => t.id !== pend.id)); /* 완료로 흡수됐으므로 대기 목록에서 뺀다(일반 완료와 같은 처리) */
-    showT("\"" + rec.text + "\" 기록 ✅ (" + ((isWeekly && already === 0) ? "이번 주 완료" : "이번 주 +1") + (memoTrim ? " · 회고 저장" : "") + ")", null);
+    return {
+      msg: "\"" + rec.text + "\" 기록 ✅ (" + ((isWeekly && already === 0) ? "이번 주 완료" : "이번 주 +1") + (memoTrim ? " · 회고 저장" : "") + ")",
+      /* 되돌리기 = 남긴 회차를 빼고, 흡수한 대기 인스턴스가 있으면 그대로 돌려놓는다 */
+      undo: () => {
+        setHistory(prev => prev.map(h => ({ ...h, items: (h.items || []).filter(it => !(it.type === "done" && it.orig && it.orig.id === orig.id)) })).filter(h => h.items.length > 0));
+        if (pend) setTasks(prev => prev.some(t => t.id === pend.id) ? prev : [...prev, pend]);
+      },
+    };
   };
 
   /* 주N회 −(2026-07-07): 이번 주 '가장 최근' 완료 1건 취소(잘못 체크·오카운트 정정). history done 우선(➕·요일체크 공통), 없으면 tasks done.
@@ -2385,7 +2541,7 @@ function App({ onSwitchWs }) {
     if (target.kind === "hist") {
       setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: true } : it) } : h));
       const rec0 = recurrings.find(r => r.id === rid);
-      showT("이번 주 완료 1건 취소 — 히스토리서 복원 가능", () => { setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: false } : it) } : h)); hideT(); }); /* R1(2026-07-08): 되돌리기=능동 재-lay(closure history엔 target 아직 non-cancelled→excludeId 없이 메모 포함)로 즉시 복귀. futureThrough:"" 리셋 레이스·once-per-mount futureEvtDone 의존 제거 */
+      showT((rec0 ? "\"" + rec0.text + "\" " : "") + "이번 주 완료 1건 취소 — 히스토리서 복원 가능", () => { setHistory(prev => prev.map(h => h.date === target.date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === target.origId) ? { ...it, cancelled: false } : it) } : h)); hideT(); }); /* R1(2026-07-08): 되돌리기=능동 재-lay(closure history엔 target 아직 non-cancelled→excludeId 없이 메모 포함)로 즉시 복귀. futureThrough:"" 리셋 레이스·once-per-mount futureEvtDone 의존 제거 */
     } else {
       setTasks(prev => prev.map(t => t.id === target.taskId ? { ...t, cancelled: true } : t));
       showT("이번 주 완료 1건 취소 — 복원 가능", () => { setTasks(prev => prev.map(t => t.id === target.taskId ? { ...t, cancelled: false } : t)); hideT(); });
@@ -2457,7 +2613,7 @@ function App({ onSwitchWs }) {
     const task = tasks.find(t => t.id === id);
     if (task) {
       const proj = projects.find(p => p.id === task.project);
-      addHistItem({ type: "edited", text: task.text, projectName: proj?.name || "", detail: !task.focus ? "⭐ 집중 설정" : "⭐ 집중 해제", time: nowTime() });
+      addHistItem({ type: "edited", text: task.text, projectName: proj?.name || "", detail: !task.focus ? "⭐ 지금 먼저" : "⭐ 지금 먼저 해제", time: nowTime() });
     }
     setTasks(p => p.map(t => t.id === id ? { ...t, focus: !t.focus } : t));
   };
@@ -2488,6 +2644,22 @@ function App({ onSwitchWs }) {
   };
 
   const handleEdit = (taskOrSub, parentId) => setEditTarget({ task: taskOrSub, parentId: parentId || null });
+  /* 하위 할일 줄의 ✕(2026-10-07) — 지금까지는 되돌리기 없이 지웠다. 5초 「되돌리기」를 준다.
+     지울 때는 옛 경로처럼 updateTask → syncSubDoneHist 가 이 하위의 완료 이력을 걷고, 되돌릴 때는 걷힌 이력을 원래 날짜·시각 그대로 되살린다. */
+  const delSub = (parentId, subId) => {
+    const par = tasks.find(t => t.id === parentId); if (!par) return;
+    const list = par.subtasks || []; const idx = list.findIndex(s => s.id === subId); if (idx < 0) return;
+    const sub = list[idx];
+    const doneSnap = [];
+    (history || []).forEach(h => (h.items || []).forEach(it => { if (it.type === "done" && it.isSub && it.orig?.id === subId) doneSnap.push({ date: h.date, item: it }); }));
+    updateTask({ ...par, subtasks: list.filter(s => s.id !== subId) });
+    showT(`"${tName(sub.text)}" 삭제됨`, () => {
+      setTasks(p => p.map(t => { if (t.id !== parentId) return t; const cur = t.subtasks || []; if (cur.some(s => s.id === subId)) return t;
+        return { ...t, subtasks: [...cur.slice(0, idx), sub, ...cur.slice(idx)] }; }));
+      if (doneSnap.length) setHistory(prev => { let next = [...prev]; doneSnap.forEach(({ date, item }) => { const ex = next.find(h => h.date === date); if (ex) next = next.map(h => h.date === date ? { ...h, items: [...h.items, item] } : h); else next = [...next, { date, items: [item] }]; }); return next; });
+      hideT();
+    });
+  };
   const handleEditSave = (updated) => {
     if (!editTarget) return;
     if (editTarget.parentId) {
@@ -2510,7 +2682,8 @@ function App({ onSwitchWs }) {
       if (prev.project !== updated.project) { const pp = projects.find(p => p.id === prev.project); changes.push(`과제: ${pp?.name || prev.project}→${proj?.name || updated.project}`); }
       if (prev.planDate !== updated.planDate) changes.push(`계획일: ${prev.planDate || "없음"}→${updated.planDate || "없음"}`);
       if (prev.scheduledDate !== updated.scheduledDate) changes.push(`마감일: ${prev.scheduledDate || "없음"}→${updated.scheduledDate || "없음"}`);
-      if (prev.focus !== updated.focus) changes.push(updated.focus ? "⭐ 집중 설정" : "⭐ 집중 해제");
+      if (prev.focus !== updated.focus) changes.push(updated.focus ? "⭐ 지금 먼저" : "⭐ 지금 먼저 해제");
+      if (!!prev.respPlan !== !!updated.respPlan) changes.push(updated.respPlan ? "업무 대응안에 포함" : "업무 대응안에서 뺌");
       if (prev.notes !== updated.notes) changes.push("메모 수정");
       if ((prev.recap || "") !== (updated.recap || "")) changes.push("회고 수정");
       if (changes.length > 0) {
@@ -2530,7 +2703,11 @@ function App({ onSwitchWs }) {
      메모(notes) = 그 일을 **할 때 볼 것**. 그 태스크를 펼칠 때만 보인다.
      회고(recap) = 그 일을 **하고 나서 남긴 것**. 영역 카드에 쌓이고 /sweep 이 수확한다.
      둘이 한 칸에 섞여 있어 영역 카드에 참조용 메모까지 떠 있었다. */
+  /* ★연달아 두 번 누르면 다음 할 일까지 완료되던 것을 막는다(2026-10-07). 완료한 줄이 빠지면 아랫줄이 같은 자리로 올라와
+     두 번째 손가락이 다음 할 일의 ○ 를 눌렀다. 0.6초 안의 두 번째 완료는 무시한다. */
+  const lastDoneAt = useRef(0);
   const doneTask = (id) => {
+    const now = Date.now(); if (now - lastDoneAt.current < 600) return; lastDoneAt.current = now;
     const task = tasks.find(t => t.id === id); if (!task) return;
     const proj = projects.find(p => p.id === task.project);
     const snap = { ...task, recap: (task.recap || "").trim() };
@@ -2555,7 +2732,8 @@ function App({ onSwitchWs }) {
     /* 반복 인스턴스 삭제 시 orig(recurringId+period)를 남겨 '이 회차 건너뜀'으로 기록 → 같은 기간 재생성 방지(2026-07-03).
        반복 자체를 멈추려면 반복설정에서 삭제. */
     addHistItem({ type: "deleted", text: task.text, projectName: proj?.name || "", time: nowTime(),
-      ...(task.recurringId ? { orig: { id: task.id, recurringId: task.recurringId, recurringPeriod: task.recurringPeriod, notes: task.notes } } : {}) });
+      ...(task.recurringId ? { orig: { id: task.id, recurringId: task.recurringId, recurringPeriod: task.recurringPeriod, notes: task.notes } }
+        : { orig: cloneTask(task) }) }); /* 일반 할 일은 원본을 남겨 히스토리 ↩ 로 되살린다(2026-10-07 · 연달아 지우다 알림이 바뀌어도 나중에 살린다) */
     showT(`"${tName(task.text)}" 삭제됨`, () => {
       setTasks(p => [...p, cloneTask(task)]);
       if (orphanSubDone.length) setHistory(prev => { let next = [...prev]; orphanSubDone.forEach(({ date, item }) => { const ex = next.find(h => h.date === date); if (ex) next = next.map(h => h.date === date ? { ...h, items: [...h.items, item] } : h); else next = [...next, { date, items: [item] }]; }); return next; });
@@ -2565,12 +2743,21 @@ function App({ onSwitchWs }) {
   };
 
   const restoreHist = (date, idx) => {
+    /* ★반복 회차 줄(＋·요일 체크로 남은 루틴 1회)의 ↩ 는 − 와 같이 취소 표시만 한다(2026-10-07).
+       예전에는 「완료」 상태 그대로 할 일 목록에 들어가 화면에는 안 보이면서 앱 숫자에는 남고, 히스토리만 읽는 주간 집계에서는 빠졌다. */
+    const day0 = (history || []).find(h => h.date === date); const it0 = day0 && day0.items[idx];
+    if (it0 && it0.type === "done" && it0.orig && it0.orig.recurringId && it0.orig.status === "done" && !it0.memoOnly) {
+      const oid = it0.orig.id;
+      setHistory(prev => prev.map(h => h.date === date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === oid) ? { ...it, cancelled: true } : it) } : h));
+      showT("\"" + (it0.text || "") + "\" 이번 주 완료 1건 취소 — 히스토리서 복원 가능", () => { setHistory(prev => prev.map(h => h.date === date ? { ...h, items: (h.items || []).map(it => (it.orig && it.orig.id === oid) ? { ...it, cancelled: false } : it) } : h)); hideT(); });
+      return;
+    }
     setHistory(prev => {
       const day = prev.find(h => h.date === date); if (!day?.items[idx]) return prev;
       const item = day.items[idx];
       const restored0 = item.orig || { id: gid(), text: item.text, status: "action", project: projects.find(p => p.name === item.projectName)?.id || projects[0]?.id, scheduledDate: "", scheduledLabel: "", planDate: "",  createdAt: TODAY, notes: "", focus: false, subtasks: [] };
       const restored = cloneTask(restored0); /* 원본을 직접 고치지 않게 사본으로 되돌린다 */
-      if (!restored.planDate) restored.planDate = TODAY;
+      if (!restored.planDate && item.type !== "deleted") restored.planDate = TODAY; /* 지운 할 일은 원래 날짜(없으면 없음) 그대로 되살린다 */
       setTasks(p => [...p, restored]);
       const ni = day.items.filter((_, i) => i !== idx);
       if (!ni.length) return prev.filter(h => h.date !== date);
@@ -2590,7 +2777,19 @@ function App({ onSwitchWs }) {
      tier 를 올리는 것이 아니라 **추가 투입처**를 하나 고르는 것이라, 표시는 영역 카드의 별 하나면 된다.
      루틴이든 프로젝트든 구분하지 않는다 — 시간은 하나의 통이다. 언제나 0개 또는 1개. */
   const setFocusArea = (pid) => {
+    /* 바뀐 것을 알리고 되돌릴 수 있게 하고, 히스토리에 한 줄 남긴다(2026-10-07) — 10-05~06 사이에 집중 별이 꺼졌는데 기록이 없어 이유를 알 수 없었다. */
+    const before = projects.map(p => ({ id: p.id, focus: !!p.focus }));
+    const tgt = projects.find(p => p.id === pid); const old = projects.find(p => p.focus && p.id !== pid);
     setProjects(prev => prev.map(p => p.id === pid ? { ...p, focus: !p.focus } : { ...p, focus: false }));
+    if (!tgt) return;
+    const detail = tgt.focus ? `⭐ 집중 해제: ${tgt.name}` : `⭐ 집중: ${old ? old.name + " → " : ""}${tgt.name}`;
+    const hid = gid();
+    addHistItem({ type: "edited", text: tgt.name, projectName: tgt.name, project: tgt.id, detail, focusArea: true, hid, time: nowTime() });
+    showT(detail.replace("⭐ ", ""), () => {
+      setProjects(prev => prev.map(p => { const b = before.find(x => x.id === p.id); return b ? { ...p, focus: b.focus } : p; }));
+      removeHistItem(it => it.focusArea && it.hid === hid);
+      hideT();
+    });
   };
   /* ★순서 바꾸기(2026-09-14 복원) — 오늘 탭 목록 안에서만. tasks 배열의 자리를 바꾼다.
      수행날짜·상태는 건드리지 않는다(구 「오늘에서 내리기」는 복원하지 않았다). */
@@ -2662,13 +2861,13 @@ function App({ onSwitchWs }) {
       </div>
       <div style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <><TodayView tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} onReorder={reorderTask} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} tasks={tasks} history={history} /></>}
-        {tab === "areas" && <AreaView tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} isWork={isWork} setRecurrings={setRecurrings} onUpdateRecurring={updateRecurring} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemo={addAreaRecap} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
+        {tab === "today" && <><TodayView onDelSub={delSub} tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} onReorder={reorderTask} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} tasks={tasks} history={history} /></>}
+        {tab === "areas" && <AreaView onDelSub={delSub} tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onAddProj={addProj} onEditProj={editProj} onDelProj={delProj} onUpdate={updateTask} isWork={isWork} setRecurrings={setRecurrings} onUpdateRecurring={updateRecurring} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemo={addAreaRecap} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
       </div>
       {editTarget && <EditModal task={editTarget.task} projects={projects} onSave={handleEditSave} onClose={() => setEditTarget(null)} isSubtask={!!editTarget.parentId} isWork={isWork} />}
       {clearTarget && <ClearTodayModal task={clearTarget} onApply={(nd) => applyClearToday(clearTarget.id, nd)} onCancel={() => setClearTarget(null)} />}
-      {toast && <Toast msg={toast.msg} onUndo={toast.undo} onX={hideT} />}
+      {toast && <Toast key={toast.k} msg={toast.msg} onUndo={toast.undo} onX={hideT} />}
     </div>
   );
 }

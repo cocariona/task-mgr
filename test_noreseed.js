@@ -49,7 +49,8 @@ const runDel = (body, list, id) => {
 };
 const runDelR = (list, id) => {
   let out = null;
-  const delR = new Function("ctx", "with (ctx) {\n" + DELR + "\nreturn delR;\n}")({ ...ctxBase, setRecurrings: (fn) => { out = fn(list); } });
+  /* delR 은 지우기 전에 확인 창을 띄운다(2026-10-07) — 시험에서는 「확인」을 누른 것으로 둔다 */
+  const delR = new Function("ctx", "with (ctx) {\n" + DELR + "\nreturn delR;\n}")({ ...ctxBase, window: { confirm: () => true }, setRecurrings: (fn) => { out = fn(list); } });
   delR(id);
   return out;
 };
