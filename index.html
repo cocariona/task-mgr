@@ -85,6 +85,7 @@
       /* 새 할일 입력은 접힌 한 줄(입력칸 + 추가)로 시작한다 — 펼친 7칸이 오늘 목록을 첫 화면 밖으로 밀었다(실측 413px). */
       .add-compact { display: flex; gap: 6px; align-items: stretch; }
       .add-compact input { flex: 1; min-width: 0; }
+      .plan-fields > div > button { flex: 1 1 0; } /* 수정 창 「오늘」·「내일」 반씩 */
     }
     @media (hover: none) and (pointer: coarse) {
       .task-actions { display: flex !important; opacity: 0.6; }
@@ -1162,10 +1163,13 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
             <div style={{ ...S.lbl, color: "#6366F1", fontWeight: 600 }}>📆 언제할지 (선택)</div>
             <div className="plan-fields" style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <input type="date" max={DATE_MAX} style={{ ...S.fld, width: 160, flex: "none" }} value={f.planDate || ""} onChange={e => u("planDate", e.target.value)} />
-              <TodayBtn value={f.planDate || ""} onChange={v => u("planDate", v)} />
-              {/* 「내일」(2026-10-07) — 하루 끝에 남은 일을 다음 날로 넘길 때 ✏️ → 내일 → 저장 */}
-              <button type="button" onClick={() => u("planDate", f.planDate === tmr ? "" : tmr)} title={f.planDate === tmr ? "수행날짜 비우기" : "수행날짜를 내일로"}
-                style={{ ...S.gh, fontSize: 11, padding: "2px 7px", flexShrink: 0, background: f.planDate === tmr ? "#EEF2FF" : "#fff", color: f.planDate === tmr ? "#4338CA" : "#6b7280", fontWeight: f.planDate === tmr ? 700 : 400 }}>내일</button>
+              {/* 「오늘」·「내일」은 한 묶음 — 휴대폰에서 칸이 세로로 쌓여도 둘은 한 줄에 나란히 선다(창이 길어지지 않게).
+                  「내일」(2026-10-07) = 하루 끝에 남은 일을 다음 날로 넘길 때 ✏️ → 내일 → 저장 */}
+              <div style={{ display: "flex", gap: 6 }}>
+                <TodayBtn value={f.planDate || ""} onChange={v => u("planDate", v)} />
+                <button type="button" onClick={() => u("planDate", f.planDate === tmr ? "" : tmr)} title={f.planDate === tmr ? "수행날짜 비우기" : "수행날짜를 내일로"}
+                  style={{ ...S.gh, fontSize: 11, padding: "2px 7px", flexShrink: 0, background: f.planDate === tmr ? "#EEF2FF" : "#fff", color: f.planDate === tmr ? "#4338CA" : "#6b7280", fontWeight: f.planDate === tmr ? 700 : 400 }}>내일</button>
+              </div>
               <span style={{ fontSize: 11, color: "#6366F1" }}>🕒</span><input type="time" style={{ ...S.fld, width: 120, flex: "none" }} value={f.planTime || ""} onChange={e => u("planTime", e.target.value)} title="시간(선택)" />
             </div>
           </div>
