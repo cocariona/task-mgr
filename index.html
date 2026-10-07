@@ -2034,11 +2034,7 @@ function App({ onSwitchWs }) {
   /* (2026-06-26) issues·projectInfo state 제거 (폐기) */
   /* (2026-07-31) 첨부 파일 목록 state 제거 — 배선 폐지. 옛 백업/blob 의 해당 키는 읽지도 쓰지도 않는다(비파괴). */
   const [history, setHistory] = useState(saved?.history || []);
-  const [recurrings, setRecurrings] = useState(recList(saved?.recurrings) || (isWork ? [
-    { id: gid(), type: "weekly", dows: [5], text: "다운로드 폴더 정리", project: "proj_etc" },
-    { id: gid(), type: "weekly", dows: [3], text: "위클리 작성", project: "proj_etc" },
-    { id: gid(), type: "weekly", dows: [2], text: "영어공부 기사 확인", project: "proj_etc" },
-  ] : []));
+  const [recurrings, setRecurrings] = useState(recList(saved?.recurrings) || []);
   /* "반복 붙은 프로젝트=루틴" 자동 도출 동기(2026-07-12): 매 렌더 recurrings에서 재계산해 모듈 집합에 반영(자식 렌더 前·동기). 새 영역에 반복 걸면 자동 루틴 — kind 수동관리·DB 직접쓰기 불필요.
      ★개인 워크스페이스 한정: 업무는 recurring이 proj_etc(기타)에 붙어 루틴 개념이 아님(도출하면 기타가 맨앞 오분류) → 업무는 빈 집합=정렬 무변경. */
   const SYS_PROJ_IDS = new Set((projects || []).filter(isSystemProj).map(p => p.id));
