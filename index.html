@@ -160,8 +160,12 @@ const checkDayRollover = async () => {
 setInterval(checkDayRollover, 60000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkDayRollover(); });
 window.addEventListener("focus", checkDayRollover);
-/* ★탭 닫기/숨김 시 대기중 저장 flush(2026-07-04, best-effort keepalive) */
+/* ★탭 닫기/숨김 시 대기중 저장 flush(2026-07-04, best-effort keepalive)
+   ★숨김에서도 flush(2026-10-08): 모바일은 앱 전환·홈 버튼으로 숨긴 탭을 pagehide 없이 정리하기도 하고,
+     숨긴 탭의 2초 타이머가 멈춘다(위 자정 주석과 같은 현상). 숨는 순간 보내 두면 그 뒤에 무슨 일이 생겨도 상관없다.
+     데스크톱에서 탭을 바꿀 때도 저장이 2초 빨리 나갈 뿐이다. */
 window.addEventListener("pagehide", () => { try { flushCloudSave(); } catch {} });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") { try { flushCloudSave(); } catch {} } });
 const gid = () => Math.random().toString(36).slice(2, 9);
 const fd = (d) => { const t = new Date(d); return `${t.getFullYear()}.${String(t.getMonth()+1).padStart(2,"0")}.${String(t.getDate()).padStart(2,"0")}`; };
 const diffDays = (dateStr) => {
@@ -202,10 +206,19 @@ const fbUser = () => { try { return fbAuth()?.currentUser || null; } catch { ret
 
 const fbDataUrl = () => "https://taskmgr-sync-default-rtdb.firebaseio.com/" + WS.fbPath + ".json";
 /* 로그인 상태면 ID 토큰을 ?auth= 로 붙여 인증 (잠근 DB 통과). 미로그인/미설정이면 빈 문자열=공개모드. */
+/* ★토큰 캐시(2026-10-08): 탭닫기 flush 는 **await 없이** 요청을 내야 한다(flushCloudSave 주석).
+   getIdToken 은 토큰이 살아 있으면 마이크로태스크만으로 끝나지만, 만료(또는 30초 전)면 네트워크로 갱신하고
+   그 뒤는 언로드 중에 실행되지 않는다(실측 2026-10-08: setTimeout 한 번만 끼어도 keepalive 요청이 안 나감).
+   SDK 는 다른 Firebase SDK 가 붙어야 미리 갱신하므로(이 앱은 REST 만 씀) 한 시간 넘게 열어 둔 탭이 여기 걸린다.
+   → authParam 이 받을 때마다 쿼리와 만료 시각을 적어 두고, flush 는 그 값을 동기로 쓴다. */
+let _authQ = null, _authExp = 0;
+const jwtExpMs = (t) => { try { return JSON.parse(atob(t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).exp * 1000 || 0; } catch { return 0; } };
 const authParam = async () => {
-  try { const u = fbUser(); if (u) return "?auth=" + await u.getIdToken(); } catch {}
+  try { const u = fbUser(); if (u) { const t = await u.getIdToken(); _authQ = "?auth=" + t; _authExp = jwtExpMs(t); return _authQ; } } catch {}
   return "";
 };
+/* 지금 바로 쓸 수 있는 인증 쿼리. 캐시가 없거나 만료 1분 전이면 null(호출측이 authParam 을 기다린다). */
+const authParamNow = () => !fbUser() ? "" : (_authQ && Date.now() < _authExp - 60000 ? _authQ : null);
 
 /* ★기기 계측(P0·2026-07-17·PDS §14.8 ⑤): "미동기가 회사 PC 에서만 나나?" 는 **기기 식별자가 없어 판정 불가**였다(§14.8 ③).
    프록시 차단·GAS 콜드스타트·탭 닫힘·네트워크 글리치가 전부 동일 지문(savedAt 은 갱신됐는데 calEventId 만 빔)을 남겨 비진단적.
@@ -402,6 +415,7 @@ const cloudSave = (data) => {
      치명 버그 차단(WS는 모듈 전역·전환 시 리마운트돼도 _saveTimer는 생존). */
   const path = WS.fbPath; _pendingPath = path;
   const url = "https://taskmgr-sync-default-rtdb.firebaseio.com/" + path + ".json";
+  authParam(); /* ★토큰 캐시를 지금 데워 둔다(2026-10-08) — 오래 열어 둔 탭이면 여기서 갱신돼, 2초 안에 탭을 닫아도 flush 가 동기로 나간다 */
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(async () => {
     _saveTimer = null;
@@ -432,22 +446,34 @@ const cloudSave = (data) => {
   }, 2000);
 };
 /* ★디바운스 중인 저장을 즉시 flush(2026-07-04) — 자정 리로드/탭닫기로 2초 저장이 소멸하는 것 방지. keepalive로 언로드에도 도달 시도 */
-const flushCloudSave = async () => {
-  if (!_pendingData) return;
+/* ★await 없이 요청을 낸다(2026-10-08). 언로드 중에는 pagehide 처리 직후의 마이크로태스크까지만 돌고
+   타이머·네트워크 뒤의 코드는 실행되지 않는다(실측: 동기·마이크로태스크 뒤 요청은 도착, setTimeout 뒤는 미도착).
+   ① 인증 쿼리는 캐시(authParamNow)를 쓴다. 캐시가 없거나 만료 직전일 때만 예전처럼 authParam 을 기다린다(최선).
+   ② diff 는 **await 앞에서** 계산한다 — 워크스페이스 전환은 이 함수 바로 뒤에 resetSyncState() 를 부르므로,
+      await 뒤에서 계산하면 기준선이 이미 비어 PATCH 대신 blob 통째 PUT 이 나갔다.
+   ③ keepalive 는 본문 64KB 까지만 허용된다(넘으면 요청 자체가 거부됨·실측). 큰 본문은 keepalive 없이 보낸다 —
+      숨김·전환·자정 리로드(이 promise 를 기다림)에서는 그대로 도착하고, 탭닫기에서는 최선. */
+const KEEPALIVE_MAX = 60000;
+const flushCloudSave = () => {
+  if (!_pendingData) return Promise.resolve();
   clearTimeout(_saveTimer); _saveTimer = null;
   const data = _pendingData; const path = _pendingPath || WS.fbPath; _pendingData = null; /* ★E2: 예약 시점 경로로 flush(전환돼도 옛 데이터는 옛 경로로) */
   const url = "https://taskmgr-sync-default-rtdb.firebaseio.com/" + path + ".json";
-  /* ★언로드 경로라 네트워크 왕복을 더 붙이면 flush 자체가 유실될 수 있다 → 캐시(_sweptCache)만 동기 적용.
-     캐시는 직전 cloudSave 가 채워두므로 '편집 → 2초 내 탭닫기' 창에서도 직전 관측값이 살아 있다.
-     ★여기서도 바뀐 키만 PATCH. 성공 확인이 불가능한 경로라 기준선(_syncBase)은 갱신하지 않는다(다음 저장이 조금 더 보내면 그만·안전측). */
+  /* ★여기서도 바뀐 키만 PATCH. 성공 확인이 불가능한 경로라 기준선(_syncBase)은 갱신하지 않는다(다음 저장이 조금 더 보내면 그만·안전측).
+     전환 직후에 응답이 오면 이미 다른 워크스페이스의 기준선이므로, 여기서 갱신하면 안 된다. */
+  let req;
   try {
-    const q = await authParam();
     const patch = diffForPatch(data);
     const sendAll = data;
     const sendRec = !!(patch && Object.prototype.hasOwnProperty.call(patch, "recurrings"));
     const payload = patch ? { ...patch, ...(sendRec ? { recurrings: sendAll.recurrings } : {}) } : sendAll;
-    await fetch(url + q, { method: patch ? "PATCH" : "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), keepalive: true });
-  } catch {}
+    const body = JSON.stringify(payload);
+    req = { method: patch ? "PATCH" : "PUT", headers: { "Content-Type": "application/json" }, body, keepalive: new TextEncoder().encode(body).length <= KEEPALIVE_MAX };
+  } catch { return Promise.resolve(); }
+  const send = (q) => fetch(url + q, req).catch(() => {});
+  const q = authParamNow();
+  if (q !== null) return send(q);
+  return authParam().then(send).catch(() => {});
 };
 
 /* 클라우드 로드: Firebase GET (1회 요청). 실패와 '빈 DB'를 구분해 반환 —
