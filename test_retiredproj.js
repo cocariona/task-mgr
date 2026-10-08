@@ -34,6 +34,7 @@ const saved = [
   { id: "rt_vocal", name: "보컬", order: 2, kind: "routine" },
   { id: "rt_writing", name: "글쓰기", order: 3, kind: "routine" },
   { id: "p_invest", name: "투자원칙 정립", order: 4, kind: "project" },
+  { id: "p_career", name: "커리어", order: 5, kind: "project" }, /* 2026-10-08 새 카드 — 저장본에 이미 심어진 뒤의 모양 */
   { id: "p_workcap", name: "PM 엔진", order: 5, kind: "project" },
   { id: "p_b464zvu", name: "PDS 시스템 개선", order: 6, kind: "project" },
   { id: "p_sweep", name: "🗓️ 주간 정제", order: 7, kind: "system" },

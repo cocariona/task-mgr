@@ -98,6 +98,7 @@ const personalSaved = {
     { id: "rt_english", name: "영어", order: 1, kind: "routine" },
     { id: "rt_vocal", name: "보컬", order: 2, kind: "routine" },
     { id: "p_invest", name: "투자원칙 정립", order: 0, kind: "project" },
+    { id: "p_career", name: "커리어", order: 5, kind: "project" }, /* 2026-10-08 새 카드 — 저장본에 이미 심어진 뒤의 모양 */
     { id: "p_workcap", name: "PM 엔진", order: 1, kind: "project" },
     { id: "p_b464zvu", name: "PDS 시스템 개선", order: 5, kind: "project" },
     { id: "p_sweep", name: "🗓️ 주간 정제", order: 4, kind: "system" },
@@ -112,7 +113,7 @@ const others = (ps) => ps.filter(p => p.id !== "p_workcap");
 
 const p1 = loadPersonal(personalSaved);
 ok("(b) 할 일이 남아 있으면 개인 카드는 남는다", ids(p1.projects).includes("p_workcap"), ids(p1.projects).join(","));
-ok("(b) 남은 카드는 같은 객체(이름 「PM 엔진」 · kind project 그대로)", p1.projects.find(p => p.id === "p_workcap") === personalSaved.projects[4]);
+ok("(b) 남은 카드는 같은 객체(이름 「PM 엔진」 · kind project 그대로)", p1.projects.find(p => p.id === "p_workcap") === personalSaved.projects.find(p => p.id === "p_workcap"));
 ok("(b) 그 할 일은 다른 카드로 합쳐지지 않는다(할 일 배열 그대로)", p1.tasks === personalSaved.tasks && p1.tasks.filter(t => t.project === "p_workcap").length === 2);
 ok("(c) 다른 카드는 같은 객체 · 같은 순서", sameRefs(others(p1.projects), others(personalSaved.projects)), ids(p1.projects).join(","));
 

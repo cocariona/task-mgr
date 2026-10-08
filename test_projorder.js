@@ -117,7 +117,7 @@ ok("드롭다운은 집중과 상관없이 제자리", eq(ids(sortProjsForSelect
 /* ── (d) 개인: 2026-10-07 저장본과 같은 배열 모양 ── */
 setWS("personal");
 const pSaved = () => ({
-  projects: [W("rt_workout", "routine"), W("rt_english", "routine"), W("rt_vocal", "routine"), W("p_invest", "project"),
+  projects: [W("rt_workout", "routine"), W("rt_english", "routine"), W("rt_vocal", "routine"), W("p_invest", "project"), W("p_career", "project"),
     W("p_b464zvu", "project"), W("p_sweep", "system"), W("p_workcap", "project")],
   tasks: [{ id: "a", project: "p_workcap", status: "action" }],
 });
@@ -126,7 +126,7 @@ const pSel = ids(sortProjsForSelect(p1.projects));
 ok("개인 드롭다운 = 옛 규칙과 같음", eq(pSel, ids(old(p1.projects))), pSel.join(","));
 ok("개인에 남은 PM 엔진은 프로젝트 끝(PDS 뒤)·투자원칙 위로 가지 않는다", pSel.indexOf("p_workcap") === pSel.indexOf("p_b464zvu") + 1);
 ok("주간 정제(system)는 개인 드롭다운 맨 끝 · 카드 목록에는 없다", pSel[pSel.length - 1] === "p_sweep" && !mainOf(p1.projects).some(p => p.id === "p_sweep"));
-const shuffled = [p1.projects[4], p1.projects[0], p1.projects[6], p1.projects[2], p1.projects[5], p1.projects[1], p1.projects[3]].filter(Boolean);
+const shuffled = [...p1.projects.slice(3), ...p1.projects.slice(0, 3)].reverse(); /* 카드 수와 상관없이 순열(2026-10-08 커리어 카드 추가 때 고정 색인이 한 장을 빠뜨렸다) */
 ok("개인 배열을 섞어도(S4a 재배열) 화면 순서는 같다", eq(ids(sortProjsForSelect(shuffled)), pSel));
 setWS("work");
 ok("워크스페이스를 바꾸면 그쪽 순서표를 쓴다(WS 를 부를 때 읽는다)", eq(ids(sortProjsForSelect(w1.projects)), OWNER_WORK));
