@@ -64,6 +64,9 @@
       .form-row > div { width: 100% !important; flex-direction: column !important; }
       .form-row > div > * { width: 100% !important; flex: none !important; box-sizing: border-box !important; }
       .form-row .star-btn { width: 40px !important; }
+      /* 체크박스는 위 100% 규칙에서 뺀다(2026-10-08 · 소유자 「매월 선택시 마지막일 체크하는 부분이 밖으로 튕겨」).
+         상자가 칸 너비만큼 늘어나 「마지막일」 글자를 칸 밖으로 밀어냈다. 누르기 쉽게 20px 로 둔다. */
+      .form-row input[type="checkbox"] { width: 20px !important; height: 20px; min-height: 0; flex: none !important; margin: 0; }
       .task-row { padding: 10px 8px !important; }
       /* ★손잡이는 휴대폰에서도 보인다(2026-09-07): 순서변경의 유일한 잡는 자리다.
          옛 규칙은 display:none 이라, 터치로는 시작조차 안 되는 옛 방식 위에 손잡이마저 감춰 두었다. */
