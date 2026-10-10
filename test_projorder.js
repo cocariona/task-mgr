@@ -33,9 +33,12 @@ const lib = new Function(
   line("const projRank") +
   line("const projCmp") +
   line("const sortProjsForSelect") +
+  line("const areaCmp") +
+  line("const areaCards") +
   "const mainOf = (projects) => { " + slice("const mainProjs =", ";") + " return mainProjs; };\n" +
-  "return { setWS: (k) => { WS = { key: k }; }, PERSONAL_PROJECTS, RETIRED_PROJ_IDS, RETIRED_WORK_PROJ_IDS, INIT_PROJECTS, PROJ_ORDER, projSortKey, sortProjsForSelect, mainOf };")();
-const { setWS, PERSONAL_PROJECTS, RETIRED_PROJ_IDS, RETIRED_WORK_PROJ_IDS, INIT_PROJECTS, PROJ_ORDER, projSortKey, sortProjsForSelect, mainOf } = lib;
+  "const overviewOf = (projects, tasks) => { " + line("  const areaRank =") + line("  const byArea =") + " return tasks.slice().sort(byArea); };\n" +
+  "return { setWS: (k) => { WS = { key: k }; }, PERSONAL_PROJECTS, RETIRED_PROJ_IDS, RETIRED_WORK_PROJ_IDS, INIT_PROJECTS, PROJ_ORDER, projSortKey, sortProjsForSelect, mainOf, areaCards, overviewOf };")();
+const { setWS, PERSONAL_PROJECTS, RETIRED_PROJ_IDS, RETIRED_WORK_PROJ_IDS, INIT_PROJECTS, PROJ_ORDER, projSortKey, sortProjsForSelect, mainOf, areaCards, overviewOf } = lib;
 
 /* 로드 때 한 번 도는 카드 보정 effect 본문(`xxxDone.current = true;` 다음부터 `}, [cloudLoaded]);` 앞까지) — 소스 순서대로 */
 const body = (ref) => {
@@ -113,6 +116,17 @@ ok("배열 순서를 섞어도 같은 순서", eq(ids(sortProjsForSelect([...w1.
 const focused = w1.projects.map(p => p.id === "gpu" ? { ...p, focus: true } : p);
 ok("★집중 카드는 카드 목록 맨 위, 나머지는 순서표대로", eq(ids(mainOf(focused)), ["gpu", ...OWNER_WORK.filter(i => i !== "gpu")]));
 ok("드롭다운은 집중과 상관없이 제자리", eq(ids(sortProjsForSelect(focused)), OWNER_WORK));
+
+/* ── (f) 오늘 탭 「전체 현황」 = 영역/과제 탭과 같은 카드 순서(2026-10-11 소유자) ── */
+{ const T = (id, project) => ({ id, project, status: "action" });
+  const tasksMixed = [T("x1", "rag"), T("x2", "proj_general"), T("x3", "accel"), T("x4", "proj_etc"), T("x5", "p_judge"),
+    T("x6", "dokpamo"), T("x7", "gpu"), T("x8", "p_judge"), T("x9", "p_gone"), T("x10", "rag"), T("x11", undefined)];
+  const ov = ids(overviewOf(w1.projects, tasksMixed));
+  ok("전체 현황: 카드 순서표대로 모이고, 같은 카드 안은 원래 순서", eq(ov, ["x5", "x8", "x3", "x1", "x10", "x6", "x7", "x2", "x4", "x9", "x11"]), ov.join(","));
+  ok("전체 현황: 카드 순서 = 영역 탭 카드 순서(areaCards 앞부분 = mainOf)", eq(ids(areaCards(w1.projects)).slice(0, mainOf(w1.projects).length), ids(mainOf(w1.projects))));
+  const ovF = ids(overviewOf(focused, tasksMixed));
+  ok("전체 현황: ★집중 카드의 할 일이 맨 위(영역 탭과 같음)", ovF[0] === "x7" && eq(ovF.slice(1, 3), ["x5", "x8"]), ovF.join(","));
+  ok("전체 현황: 원래 할 일 배열은 건드리지 않는다", eq(ids(tasksMixed), ["x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11"])); }
 
 /* ── (d) 개인: 2026-10-07 저장본과 같은 배열 모양 ── */
 setWS("personal");

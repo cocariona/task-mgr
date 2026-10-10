@@ -793,7 +793,8 @@ const StSel = ({ value, onChange, compact }) => (
   </select>
 );
 /* ★과제·영역 순서 = ① 묶음(projSortKey: 루틴 → 과제(kind project) → 그 외 → 기타) ② 묶음 안은 PROJ_ORDER ③ 표에 없는 카드는 그 묶음 끝(만든 순서).
-   드롭다운 전부(PrSel)·영역/과제 탭 카드·「이번 주」 동점·반복 설정 묶음이 이 한 규칙을 쓴다. */
+   드롭다운 전부(PrSel)·영역/과제 탭 카드·오늘 탭 「전체 현황」·「이번 주」 동점·반복 설정 묶음이 이 한 규칙을 쓴다.
+   영역/과제 탭 카드와 「전체 현황」은 집중(★) 카드를 맨 위에 올린다(areaCmp · areaCards). */
 const isSystemProj = (p) => !!p && p.kind === "system"; /* PDS 자체를 굴리는 것 — 영역 탭에 세우지 않는다 */
 const projSortKey = (p) => isRoutineProj(p) ? 0 : (p && p.kind === "project") ? 1 : (p && (p.id === "petc" || p.id === "proj_etc")) ? 3 : 2; /* 루틴(kind 또는 반복보유) 먼저 = isRoutineProj로 자동 도출 반영(2026-07-12) */
 /* ★순서표(2026-10-08 소유자). 영역·과제의 생성·삭제·이름 수정·순서 변경은 소유자가 요청하면 코드로 바꾼다 — 앱에는 그 단추가 없다.
@@ -808,6 +809,10 @@ const PROJ_ORDER = {
 const projRank = (p) => { const i = (PROJ_ORDER[WS.key] || []).indexOf(p && p.id); return i < 0 ? 1e6 : i; };
 const projCmp = (a, b) => (projSortKey(a) - projSortKey(b)) || (projRank(a) - projRank(b));
 const sortProjsForSelect = (projects) => [...(projects || [])].sort(projCmp);
+/* ★영역 화면 순서 = 집중(★) 맨 위 → projCmp. 그 아래 버킷(배열 순서) — 영역/과제 탭이 그리는 순서 그대로다.
+   오늘 탭 「전체 현황」도 이 순서로 줄을 세운다(2026-10-11 소유자 「전체 현황 토글도 영역/과제에서 정의한 카테고리 순서대로」). */
+const areaCmp = (a, b) => ((b && b.focus ? 1 : 0) - (a && a.focus ? 1 : 0)) || projCmp(a, b);
+const areaCards = (projects) => [...(projects || []).filter(p => !isBucketProj(p) && !isSystemProj(p)).sort(areaCmp), ...(projects || []).filter(p => isBucketProj(p))];
 /* ★날짜 칸 규칙(2026-09-17 소유자) — ① 연도는 4자리: max 를 주면 크롬이 연도 네 자리를 받고 곧장 월로 넘어간다.
      없으면 연도를 6자리까지 받아 `20260917` 을 치면 `202609-1-7` 처럼 먹힌다(실측).
    ② 「오늘」 버튼: 수행날짜 기본값은 여전히 빈칸이다. 누르면 오늘, 한 번 더 누르면 비운다. */
@@ -1399,8 +1404,13 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
     return { focusedTasks: ft, focusedSubs: fs };
   }, [tasks, projects, recurrings]); /* recurrings dep(2026-07-12): pk→projSortKey→isRoutineProj가 ROUTINE_REC_PROJ_IDS(recurrings 파생) 참조 → 반복 추가/비활성으로 루틴 도출이 바뀔 때 오늘 정렬 즉시 재계산(stale 방지) */
   const totalFocused = focusedTasks.length + focusedSubs.length;
-  const unfocusedActions = tasks.filter(t => t.status === "action" && !onToday(t) && !isStaleRoutine(t));
-  const waitingAll = tasks.filter(t => t.status === "waiting" && !onToday(t) && !isStaleRoutine(t));
+  /* ★전체 현황 = 영역/과제 탭과 같은 카드 순서(areaCards · 2026-10-11 소유자). 같은 카드 안은 저장 순서 그대로(안정 정렬)이고,
+     영역 탭에 서지 않는 카드(system · 걷힌 카드 · 카드 없음)는 맨 뒤다. 화면에서만 정렬한다 — tasks 저장 순서는 건드리지 않는다.
+     useMemo 로 묶지 않는다: 루틴 판정(projSortKey)이 반복 변경에 따라 바뀌므로 매 렌더 다시 센다(위 recurrings dep 주석). */
+  const areaRank = new Map(areaCards(projects).map((p, i) => [p.id, i]));
+  const byArea = (a, b) => (areaRank.has(a.project) ? areaRank.get(a.project) : 1e6) - (areaRank.has(b.project) ? areaRank.get(b.project) : 1e6);
+  const unfocusedActions = tasks.filter(t => t.status === "action" && !onToday(t) && !isStaleRoutine(t)).sort(byArea);
+  const waitingAll = tasks.filter(t => t.status === "waiting" && !onToday(t) && !isStaleRoutine(t)).sort(byArea);
   const [showRest, setShowRest] = useState(false);
 
   /* 집중 그룹: 일반 task + 서브태스크 통합 */
@@ -1722,7 +1732,7 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onDelSu
       </div>
     );
   };
-  const mainProjs = projects.filter(p => !isBucketProj(p) && !isSystemProj(p)).sort((a, b) => (b.focus ? 1 : 0) - (a.focus ? 1 : 0) || projCmp(a, b)); /* ★집중이 맨 위 */ /* 그다음은 드롭다운과 같은 순서(projCmp — 묶음 → PROJ_ORDER · 2026-10-08) */
+  const mainProjs = projects.filter(p => !isBucketProj(p) && !isSystemProj(p)).sort(areaCmp); /* ★집중이 맨 위, 그다음은 드롭다운과 같은 순서(areaCmp → projCmp — 묶음 → PROJ_ORDER · 2026-10-08). 오늘 탭 「전체 현황」과 같은 비교 함수 */
   const bucketProjs = projects.filter(p => isBucketProj(p));
   return (
     <div style={{ marginTop: 12 }}>
