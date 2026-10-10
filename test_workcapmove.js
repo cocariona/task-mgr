@@ -28,7 +28,7 @@ const body = (ref) => {
   return SRC.slice(a + (ref + ".current = true;").length, b);
 };
 /* 앱과 같은 순서(소스 순서)로 돈다. 개인 = 카드를 만지는 것 전부 · 업무 = 카드를 만지는 것 전부. */
-const PERSONAL_FX = ["personalProjDone", "bucketTrimDone", "dupMergeDone", "personalKindDone"];
+const PERSONAL_FX = ["sweepMergeDone", "personalProjDone", "bucketTrimDone", "dupMergeDone", "personalKindDone"];
 const WORK_FX = ["workKindDone", "judgeProjDone", "workcapProjDone", "workRetireDone", "workBucketDone"]; /* workRetireDone(2026-10-08 업무 종료 카드 걷기)도 카드를 만진다 */
 const BODIES = Object.fromEntries([...PERSONAL_FX, ...WORK_FX].map(r => [r, body(r)]));
 if (!/p_workcap/.test(BODIES.workcapProjDone)) throw new Error("업무 심기 코드가 없음 — 패치 누락");
@@ -100,8 +100,7 @@ const personalSaved = {
     { id: "p_invest", name: "투자원칙 정립", order: 0, kind: "project" },
     { id: "p_career", name: "커리어", order: 5, kind: "project" }, /* 2026-10-08 새 카드 — 저장본에 이미 심어진 뒤의 모양 */
     { id: "p_workcap", name: "PM 엔진", order: 1, kind: "project" },
-    { id: "p_b464zvu", name: "PDS 시스템 개선", order: 5, kind: "project" },
-    { id: "p_sweep", name: "🗓️ 주간 정제", order: 4, kind: "system" },
+    { id: "p_b464zvu", name: "PDS 시스템", order: 5, kind: "project" }, /* 2026-10-11 주간 정제 카드(p_sweep)를 합친 뒤의 모양 — 합치기 검증은 test_pdsmerge.js */
   ],
   tasks: [
     { id: "yisqoos", text: "PM 엔진 문서의 옛 커리어 참조 정리", project: "p_workcap", status: "action" },

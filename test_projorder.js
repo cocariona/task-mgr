@@ -49,7 +49,7 @@ const body = (ref) => {
 const WORK_FX = ["workKindDone", "judgeProjDone", "workcapProjDone", "workRetireDone", "workBucketDone"];
 const lst = SRC.slice(SRC.indexOf("const recList"), SRC.indexOf("\n", SRC.indexOf("const projList")) + 1);
 const { projList } = new Function(lst + "\nreturn { projList };")();
-const PERSONAL_FX = ["personalProjDone", "bucketTrimDone", "dupMergeDone", "personalKindDone"];
+const PERSONAL_FX = ["sweepMergeDone", "personalProjDone", "bucketTrimDone", "dupMergeDone", "personalKindDone"];
 const BODIES = Object.fromEntries([...WORK_FX, ...PERSONAL_FX].map(r => [r, body(r)]));
 if (!/RETIRED_WORK_PROJ_IDS/.test(BODIES.workRetireDone)) throw new Error("업무 종료 카드 걷기 코드가 없음 — 패치 누락");
 const load = (fxList, saved) => {
@@ -139,7 +139,7 @@ const p1 = load(PERSONAL_FX, pSaved());
 const pSel = ids(sortProjsForSelect(p1.projects));
 ok("개인 드롭다운 = 옛 규칙과 같음", eq(pSel, ids(old(p1.projects))), pSel.join(","));
 ok("개인에 남은 PM 엔진은 프로젝트 끝(PDS 뒤)·투자원칙 위로 가지 않는다", pSel.indexOf("p_workcap") === pSel.indexOf("p_b464zvu") + 1);
-ok("주간 정제(system)는 개인 드롭다운 맨 끝 · 카드 목록에는 없다", pSel[pSel.length - 1] === "p_sweep" && !mainOf(p1.projects).some(p => p.id === "p_sweep"));
+ok("옛 주간 정제 카드(p_sweep)는 할 일·반복이 없으면 걷혀 드롭다운·카드 목록 어디에도 없다(2026-10-11 PDS 시스템으로 합침)", !pSel.includes("p_sweep") && !mainOf(p1.projects).some(p => p.id === "p_sweep"), pSel.join(","));
 const shuffled = [...p1.projects.slice(3), ...p1.projects.slice(0, 3)].reverse(); /* 카드 수와 상관없이 순열(2026-10-08 커리어 카드 추가 때 고정 색인이 한 장을 빠뜨렸다) */
 ok("개인 배열을 섞어도(S4a 재배열) 화면 순서는 같다", eq(ids(sortProjsForSelect(shuffled)), pSel));
 setWS("work");

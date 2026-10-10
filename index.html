@@ -591,12 +591,10 @@ const PERSONAL_PROJECTS = [
   /* ★커리어(2026-10-08 소유자) — 회사 밖에서 하는 커리어 일. 회사 안에서 하는 커리어 일은 업무 앱 「업무」 카드. 나누는 질문 = 「그 일을 회사 안에서 하나?」 */
   { id: "p_career", name: "커리어", order: 5, kind: "project" },
   /* PM 엔진(p_workcap) 카드는 2026-10-07 업무 앱(INIT_PROJECTS)으로 옮겼다(소유자 10-03 동의 · 10-07 「카드 이동 먼저」) — 아래 RETIRED_PROJ_IDS */
-  { id: "p_b464zvu", name: "PDS 시스템 개선", order: 6, kind: "project" },
-  /* ★kind:"system" — PDS 자체를 굴리는 것. **영역 탭에 카드를 세우지 않는다.**
-     주간 정제는 vault 폴더가 없는 유일한 반복이고(성과가 아니라 유지가 목적),
-     영역이 아닌데 영역 카드로 서 있었다. 만들고 고치는 자리는 **오늘 탭의 반복 설정**,
-     체크하는 자리는 **오늘 할 일 목록**이다(weekly 라 그 요일에 뜬다). */
-  { id: "p_sweep", name: "🗓️ 주간 정제", order: 7, kind: "system" },
+  /* ★PDS 시스템(2026-10-11 소유자) — 주간 루프(Weekly Review)가 매주 돌아 모든 루틴이 굴러가게 하는 프로젝트.
+     옛 「🗓️ 주간 정제」 카드(p_sweep · kind:"system")의 반복을 이 카드로 옮겼다(sweepMergeDone) — 업무 앱 PM 엔진 카드의
+     「PM 엔진 업데이트」처럼 프로젝트를 굴리는 반복이다. 프로젝트 카드의 반복은 루틴이 아니다(ROUTINE_REC_PROJ_IDS 에서 뺀다). */
+  { id: "p_b464zvu", name: "PDS 시스템", order: 6, kind: "project" },
   /* 버킷(약속·집안일·기타) 전면 폐지(2026-07-01, 소유자 지시): 개인=루틴/프로젝트만. bucketTrimDone가 버킷 프로젝트 + Track2 미러([t2-*]) 데이터를 제거. */
 ];
 const PERSONAL_BUCKET_IDS = [];
@@ -606,6 +604,7 @@ const PERSONAL_BUCKET_IDS = [];
 const RETIRED_PROJ_IDS = new Set([
   "rt_writing", /* 2026-10-06 글쓰기 영역 종료 */
   "p_workcap",  /* 2026-10-07 PM 엔진 카드 업무 앱으로 이동 · 할 일이 남아 있으면 그대로 보임(다 끝낸 뒤 다음 로드에 걷힌다) */
+  "p_sweep",    /* 2026-10-11 주간 정제 카드 → PDS 시스템 카드로 합침(sweepMergeDone 이 반복·할 일을 옮긴 뒤 다음 로드에 걷힌다) */
 ]);
 /* ★업무 앱 종료 카드(2026-10-08 소유자 「필요할 줄 알았는데 만들고 보니 필요 없어짐」). 업무에는 S4a 같은 정본 병합이 없어서
    workRetireDone 이 로드할 때 따로 걷는다. 규칙은 위와 같다 — 할 일이나 반복이 붙어 있으면 걷지 않는다.
@@ -623,7 +622,7 @@ const isRoutineProj = (p) => p && (p.kind === "routine" || ROUTINE_PROJ_IDS.incl
 /* ★루틴 세션 = 루틴 영역에 붙은 주 단위 반복(2026-09-17 소유자).
    이것들은 오늘 할 일에 날짜로 뜨지 않고 **오늘 탭 맨 위 「🔁 이번 주」 스트립에서만** 체크한다.
    특정 날짜에 박으면 그날 안 할 루틴도 목록에 떠 있어서 오늘 할 일을 끝내지 못하는 느낌이 들었다.
-   잡무 반복(업무 기타·주간 정제)은 루틴이 아니므로 종전대로 그 요일에 오늘 할 일로 뜬다.
+   잡무 반복(업무 기타·PDS 시스템의 Weekly Review)은 루틴이 아니므로 종전대로 그 요일에 오늘 할 일로 뜬다.
    ⚠ 매일·매월은 주 단위로 셀 수 없어 스트립에 못 서므로 종전 동작(오늘 할 일)을 유지한다. */
 const isRoutineRec = (r, projects) => !!r && !!isRoutineProj((projects || []).find(p => p && p.id === r.project));
 const isStripRec = (r, projects) => isRoutineRec(r, projects) && routineWeekTarget(r) > 0;
@@ -1521,7 +1520,7 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
 /* ═══ 과제별 뷰 ═══ */
 /* ★새 세션 폼 — 영역 카드 안에서만 연다. 과제 드롭다운이 없는 것이 핵심이다:
    어디서 만들었는지가 곧 소속이라 「이게 어느 영역인가」를 따로 판단할 일이 없다.
-   영역 밖의 반복 할일(주간 정제·업무 잡무)은 오늘 탭에서 만든다. */
+   영역 밖의 반복 할일(Weekly Review·업무 잡무)은 오늘 탭에서 만든다. */
 const NewSessionForm = ({ projectId, setRecurrings, onClose }) => {
   const [nt, setNt] = useState(""); const [rType, setRType] = useState("count");
   const [ndows, setNdows] = useState([]); const [freqN, setFreqN] = useState(3);
@@ -1930,7 +1929,7 @@ const RecurringRow = ({ r, projects, onDelete, onUpdate, weekDone, weekTarget, o
    진행 숫자(n/목표)만 참고로 보인다. */
 /* ★루틴 아닌 반복만 다룬다(2026-09-17 소유자 「개인 앱의 반복 설정은 루틴 액션을 만들기 위함이 아니지 않은지」).
    루틴 세션은 영역 탭 그 영역 카드에서 만들고 고친다(NewSessionForm · RecurringRow). 여기 남는 것은 업무 잡무와
-   주간 정제처럼 **영역의 성과가 아니라 유지가 목적인 반복**이다. 과제 드롭다운에서도 루틴 영역을 뺀다 —
+   Weekly Review(PDS 시스템 카드)처럼 **영역의 성과가 아니라 유지가 목적인 반복**이다. 과제 드롭다운에서도 루틴 영역을 뺀다 —
    여기서 루틴 영역에 붙이면 만든 줄이 이 목록에서 사라져 「어디 갔지」가 된다. */
 const RecurringSettings = ({ recurrings: allRecurrings, setRecurrings, projects: allProjects, onUpdateRecurring, tasks, history }) => {
   const recurrings = (allRecurrings || []).filter(r => !isRoutineRec(r, allProjects));
@@ -2074,7 +2073,8 @@ function App({ onSwitchWs }) {
   const [recurrings, setRecurrings] = useState(recList(saved?.recurrings) || []);
   /* "반복 붙은 프로젝트=루틴" 자동 도출 동기(2026-07-12): 매 렌더 recurrings에서 재계산해 모듈 집합에 반영(자식 렌더 前·동기). 새 영역에 반복 걸면 자동 루틴 — kind 수동관리·DB 직접쓰기 불필요.
      ★개인 워크스페이스 한정: 업무는 recurring이 proj_etc(기타)에 붙어 루틴 개념이 아님(도출하면 기타가 맨앞 오분류) → 업무는 빈 집합=정렬 무변경. */
-  const SYS_PROJ_IDS = new Set((projects || []).filter(isSystemProj).map(p => p.id));
+  /* 반복이 붙어도 루틴으로 치지 않는 카드 = system · kind:"project"(2026-10-11 — PDS 시스템 카드의 Weekly Review 처럼 프로젝트를 굴리는 반복). */
+  const SYS_PROJ_IDS = new Set((projects || []).filter(p => isSystemProj(p) || (p && p.kind === "project")).map(p => p.id));
   ROUTINE_REC_PROJ_IDS = isWork ? new Set() : new Set((recurrings || []).filter(r => !r.disabled && r.project && !SYS_PROJ_IDS.has(r.project)).map(r => r.project));
   const [editTarget, setEditTarget] = useState(null);
   const [clearTarget, setClearTarget] = useState(null); /* 오늘에서 내리기 얼럿 대상(2026-07-04) */
@@ -2197,6 +2197,22 @@ function App({ onSwitchWs }) {
       return nt;
     }));
   }, [cloudLoaded, tasks]); /* eslint-disable-line */
+
+  /* ★PDS 시스템 합치기(2026-10-11 소유자 「그냥 PDS 시스템이라고 프로젝트 명을 하고, 이 루프가 잘 돌게끔 하는 것을 목적으로한 프로젝트라고 정의」 ·
+     「weekly review로 통일해줘」). ① 카드 이름 「PDS 시스템 개선」 → 「PDS 시스템」(소유자가 붙인 다른 이름이면 그대로 둔다)
+     ② 「🗓️ 주간 정제」 카드(p_sweep)의 반복·할 일을 PDS 시스템(p_b464zvu)으로 옮기고, 옛 이름이면 「🗓️ Weekly Review」로 바꾼다.
+     반복 id(wksweep)는 그대로다 — 하네스가 이 id 로 지난 Weekly Review 날을 찾는다. 히스토리는 지난 기록이라 고치지 않는다.
+     ③ p_sweep 은 RETIRED_PROJ_IDS — 옮긴 것이 저장된 뒤 다음 로드에 S4a 가 걷는다(같은 렌더의 tasks·recurrings 는 아직 옮기기 전 값). */
+  const sweepMergeDone = useRef(false);
+  useEffect(() => {
+    if (isWork || !cloudLoaded || sweepMergeDone.current) return;
+    sweepMergeDone.current = true;
+    const FROM = "p_sweep", TO = "p_b464zvu", NEW_TEXT = "🗓️ Weekly Review", OLD_TEXT = /^🗓️ 주간 정제/;
+    const move = (x) => (x && x.project === FROM) ? { ...x, project: TO, text: OLD_TEXT.test(x.text || "") ? NEW_TEXT : x.text } : x;
+    setProjects(prev => { let ch = false; const n = prev.map(p => (p && p.id === TO && p.name === "PDS 시스템 개선") ? (ch = true, { ...p, name: "PDS 시스템" }) : p); return ch ? n : prev; });
+    setRecurrings(prev => (prev || []).some(r => r && r.project === FROM) ? (prev || []).map(move) : prev);
+    setTasks(prev => (prev || []).some(t => t && t.project === FROM) ? (prev || []).map(move) : prev);
+  }, [cloudLoaded]); /* eslint-disable-line */
 
   /* S4a: 개인 프로젝트 5종 보강(기존 데이터에 신규 추가, 정본 순서·id 보존) */
   const personalProjDone = useRef(false);
@@ -2332,8 +2348,8 @@ function App({ onSwitchWs }) {
   }, [cloudLoaded]); /* eslint-disable-line */
 
   /* ★개인 영역의 kind 를 시드와 맞춘다(2026-09-15) — 앱에서 만든 영역에는 kind 가 안 붙어 있다.
-     특히 「🗓️ 주간 정제」(p_sweep)는 kind:"system" 이어야 영역 탭에서 내려간다.
-     그 반복은 영역에 속한 것이 아니라 PDS 자체를 굴리는 것이고, 오늘 탭에서 만들고 고친다. */
+     (옛 「🗓️ 주간 정제」 카드(p_sweep · kind:"system")는 2026-10-11 PDS 시스템 카드로 합쳤다 — sweepMergeDone.
+     그 반복(Weekly Review)은 영역에 속한 것이 아니라 PDS 를 굴리는 것이고, 오늘 탭 반복 설정에서 만들고 고친다.) */
   const personalKindDone = useRef(false);
   useEffect(() => {
     if (isWork || !cloudLoaded || personalKindDone.current) return;
