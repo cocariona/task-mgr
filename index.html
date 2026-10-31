@@ -64,6 +64,10 @@
       .form-row > div { width: 100% !important; flex-direction: column !important; }
       .form-row > div > * { width: 100% !important; flex: none !important; box-sizing: border-box !important; }
       .form-row .star-btn { width: 40px !important; }
+      /* ☆ + 「추가」 묶음은 세로로 쌓지 않고 한 줄 — 별은 40px, 추가가 나머지 폭(2026-10-31 · 소유자 「별표가 한칸을 다 차지」) */
+      .form-row > .add-actions { flex-direction: row !important; }
+      .form-row > .add-actions > .star-btn { width: 40px !important; flex: none !important; }
+      .form-row > .add-actions > button:not(.star-btn) { flex: 1 1 auto !important; width: auto !important; }
       /* 체크박스는 위 100% 규칙에서 뺀다(2026-10-08 · 소유자 「매월 선택시 마지막일 체크하는 부분이 밖으로 튕겨」).
          상자가 칸 너비만큼 늘어나 「마지막일」 글자를 칸 밖으로 밀어냈다. 누르기 쉽게 20px 로 둔다. */
       .form-row input[type="checkbox"] { width: 20px !important; height: 20px; min-height: 0; flex: none !important; margin: 0; }
@@ -944,12 +948,14 @@ const SubAddForm = ({ onAdd, onCancel }) => {
   const go = () => { if (!t.trim()) return; onAdd({ text: t.trim(), status: s, focus: f, scheduledDate: sd, scheduledLabel: "", planDate: pd }); setT(""); setF(false); r.current?.focus(); };
   return (
     <div className={full ? "form-row" : "add-compact"} style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap", padding: "4px 0" }}>
-      {full && <StarBtn on={f} onClick={() => setF(!f)} />}
       <input ref={r} style={{ ...S.inp, fontSize: 12 }} placeholder="하위 할일..." value={t} onChange={e => setT(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} />
       {full && <StSel value={s} onChange={setS} compact />}
       {full && <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>📆</span><input type="date" max={DATE_MAX} style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} title="📆 언제할지 (선택)" /><TodayBtn value={pd} onChange={setPd} /></div>}
-      <button style={S.btn()} onClick={go}>추가</button>
-      {phone && <button style={S.gh} onClick={() => setMore(!more)} title="상태 · 날짜 · 마감">{more ? "▴" : "▾"}</button>}
+      <div className="add-actions" style={{ display: "flex", gap: 4, alignItems: "center" }}>
+        {full && <button className="star-btn" style={{ ...S.star(f), border: "1px solid #e5e7eb", borderRadius: 5, width: 26, height: 26 }} onClick={() => setF(!f)} title="지금 먼저 할 것으로 표시">{f ? "★" : "☆"}</button>}
+        <button style={S.btn()} onClick={go}>추가</button>
+      </div>
+      {phone && <button style={S.gh} onClick={() => setMore(!more)} title="상태 · 날짜">{more ? "▴" : "▾"}</button>}
       <button style={S.gh} onClick={onCancel}>닫기</button>
     </div>
   );
@@ -1126,10 +1132,13 @@ const AddForm = ({ projects, onAdd, defProj }) => {
         <TodayBtn value={pd} onChange={setPd} />
       </div>}
       {/* 마감일 칸은 걷었다(2026-10-31 · 소유자 「필요없는거 쓰지말자 (ex. 마감일 …) 기능적으로 최소화하기」 · 개인·업무 모두) — 날짜는 「언제할지」 하나 */}
-      {full && <button className="star-btn" style={{ ...S.star(f), border: "1px solid #e5e7eb", borderRadius: 5, width: 28, height: 28 }} onClick={() => setF(!f)} title="지금 먼저 할 것으로 표시">
-        {f ? "★" : "☆"}
-      </button>}
-      <button style={S.btn()} onClick={go}>추가</button>
+      {/* ☆ 와 「추가」는 한 묶음(2026-10-31 · 소유자 「별표가 한칸을 다 차지하고 있어서 어색」) — 휴대폰 세로 쌓기에서도 한 줄(.add-actions) */}
+      <div className="add-actions" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        {full && <button className="star-btn" style={{ ...S.star(f), border: "1px solid #e5e7eb", borderRadius: 5, width: 28, height: 28 }} onClick={() => setF(!f)} title="지금 먼저 할 것으로 표시">
+          {f ? "★" : "☆"}
+        </button>}
+        <button style={S.btn()} onClick={go}>추가</button>
+      </div>
       {phone && open && <button style={{ ...S.gh, fontSize: 12 }} onClick={() => { setOpen(false); setNeed(false); r.current?.blur(); }}>접기 ▲</button>}
     </div>
   );
@@ -1177,7 +1186,12 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
       <div className="modal-content" style={S.modC} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>{isSubtask ? "하위 할일 수정" : "할 일 수정"}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <input style={{ ...S.inp, flex: "none" }} value={f.text} onChange={e => u("text", e.target.value)} />
+          {/* ☆ 지금 먼저 = 제목 칸 오른쪽 작은 단추(2026-10-31 · 소유자 「별표가 한칸을 다 차지하고 있어서 어색」 — 개인 앱에서는 이 단추 혼자 한 줄을 차지했다) */}
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input style={{ ...S.inp, flex: 1, minWidth: 0 }} value={f.text} onChange={e => u("text", e.target.value)} />
+            <button type="button" onClick={() => u("focus", !f.focus)} title={f.focus ? "「지금 먼저」 해제" : "오늘 할 일 중 지금 먼저 할 것(직접 끈다)"}
+              style={{ ...S.star(f.focus), border: "1px solid " + (f.focus ? "#FCD34D" : "#e5e7eb"), background: f.focus ? "#FFFBEB" : "#fff", borderRadius: 6, width: 34, height: 34, flex: "none" }}>{f.focus ? "★" : "☆"}</button>
+          </div>
           <div className="modal-row" style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 100 }}><div style={S.lbl}>상태</div><StSel value={f.status} onChange={v => u("status", v)} /></div>
             {!isSubtask && <div style={{ flex: 1, minWidth: 100 }}><div style={S.lbl}>{WS.key === "personal" ? "주제" : "과제"}</div><PrSel value={f.project} onChange={v => u("project", v)} projects={projects} /></div>}
@@ -1186,12 +1200,10 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
               업무 대응안에 포함(2026-10-07 · 소유자 「업무 앱 내 개별 태스크들 중에서 선별하여 대응안을 심도있게 짜는 전략 —
               이 태스크 내용을 포함한다고 표시하고 싶음」 · 켜는 곳은 이 창 하나)은 완료·「이번 주」 숫자와 묶지 않는다
               (「태스크를 종결하는건 또 다른 일」). 표시한 할 일 제목은 과제 탭 「업무」 카드의 회고 칸 위에 모인다. */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <button type="button" onClick={() => u("focus", !f.focus)} title="오늘 할 일 중 지금 먼저 할 것(직접 끈다)"
-              style={{ ...S.gh, fontSize: 12, fontWeight: f.focus ? 700 : 400, background: f.focus ? "#FFFBEB" : "#fff", color: f.focus ? "#B45309" : "#6b7280", borderColor: f.focus ? "#FCD34D" : "#e5e7eb" }}>{f.focus ? "★ 지금 먼저" : "☆ 지금 먼저"}</button>
-            {isWork && !isSubtask && <button type="button" onClick={() => u("respPlan", !f.respPlan)}
-              style={{ ...S.gh, fontSize: 12, fontWeight: f.respPlan ? 700 : 400, background: f.respPlan ? "#FFFBEB" : "#fff", color: f.respPlan ? "#B45309" : "#6b7280", borderColor: f.respPlan ? "#FCD34D" : "#e5e7eb" }}>{f.respPlan ? "✓ 업무 대응안에 포함" : "＋ 업무 대응안에 포함"}</button>}
-          </div>
+          {isWork && !isSubtask && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button type="button" onClick={() => u("respPlan", !f.respPlan)}
+              style={{ ...S.gh, fontSize: 12, fontWeight: f.respPlan ? 700 : 400, background: f.respPlan ? "#FFFBEB" : "#fff", color: f.respPlan ? "#B45309" : "#6b7280", borderColor: f.respPlan ? "#FCD34D" : "#e5e7eb" }}>{f.respPlan ? "✓ 업무 대응안에 포함" : "＋ 업무 대응안에 포함"}</button>
+          </div>}
           <div>
             <div style={{ ...S.lbl, color: "#6366F1", fontWeight: 600 }}>📆 언제할지 (선택)</div>
             <div className="plan-fields" style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -1671,11 +1683,16 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onDelSu
   const recOf = (pid) => (recurrings || []).filter(r => !r.disabled && r.project === pid);
   const renderProj = (p) => {
     const pt = tasks.filter(t => t.project === p.id && t.status !== "done" && !t.recurringId); /* 반복 인스턴스는 세션 줄이 맡는다 */
-    const recs = recOf(p.id);
+    /* ★영역 카드의 「반복 세션」 줄은 루틴 반복만(2026-10-31 · 소유자 「영역 탭에서도, 오늘탭에서도 weekly review가 둘 다 있는 이유가 뭐지?
+       우리가 역할을 구분하기로 했던 것 같은데」). 루틴이 아닌 반복(PDS 시스템의 Weekly Review · PM 엔진 업데이트 · 잡무)은
+       오늘 할 일에 회차로 뜨고, 만들고 고치는 자리는 오늘 탭 아래 「반복 설정」이다(RecurringSettings ★주석) — 여기에 ＋ 를 또 두면 누르는 자리가 둘이 된다.
+       10-11 Weekly Review 를 PDS 시스템 카드로 옮기면서 그 카드에 ＋ 줄이 생겼던 것을 걷는다. 반복 개수(🔁)와 삭제 막기는 전부로 센다. */
+    const recsAll = recOf(p.id);
+    const recs = recsAll.filter(r => isRoutineRec(r, projects));
     const memo = areaRecaps(p.id, recurrings, history);
     const sess = recs.map(r => ({ tgt: routineWeekTarget(r), n: weekDoneCount(doneSet, r.id, wkNow) })).filter(x => x.tgt > 0);
     const sTgt = sess.reduce((a, b) => a + b.tgt, 0), sDone = sess.reduce((a, b) => a + Math.min(b.n, b.tgt), 0);
-    const rc = recs.length; /* 반복 개수 — 이게 안 보여서 살아있는 영역과 고아가 구분이 안 됐다 */
+    const rc = recsAll.length; /* 반복 개수 — 이게 안 보여서 살아있는 영역과 고아가 구분이 안 됐다 */
     const fc = pt.filter(t => t.focus).length;
     const o = open.has(p.id);
     return (
@@ -1692,7 +1709,7 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onDelSu
             {sTgt > 0 && <span style={{ fontSize: 10, color: sDone >= sTgt ? "#059669" : "#4338CA", background: sDone >= sTgt ? "#ECFDF5" : "#EEF2FF", border: "1px solid " + (sDone >= sTgt ? "#A7F3D0" : "#C7D2FE"), padding: "0 5px", borderRadius: 6, fontWeight: 600, flexShrink: 0 }}
               title={"이번 주 세션 " + sDone + "/" + sTgt + " — " + recs.map(r => r.text).join(", ")}>🔁 {sDone}/{sTgt}</span>}
             {rc > 0 && sTgt === 0 && <span style={{ fontSize: 10, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", padding: "0 5px", borderRadius: 6, fontWeight: 600, flexShrink: 0 }}
-              title={recs.map(r => r.text).join(", ")}>🔁{rc}</span>}
+              title={recsAll.map(r => r.text).join(", ")}>🔁{rc}</span>}
             {fc > 0 && <span style={{ fontSize: 11, color: "#F59E0B" }}>⭐{fc}</span>}
           </div>
 
