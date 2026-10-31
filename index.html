@@ -892,13 +892,16 @@ const sameEdit = (a, b) => {
 const tomorrowOf = (ymd) => { const d = new Date(ymd + "T00:00:00"); d.setDate(d.getDate() + 1); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 
 /* ─── SubRow (서브태스크 행) ─── */
-const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit, inToday }) => {
+const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit, inToday, dragKey, dh }) => {
   const [h, setH] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const isDone = sub.status === "done";
   const dl = sub.scheduledDate ? deadlineInfo(sub.scheduledDate) : null;
   return (
-    <div style={{ ...S.row, padding: "4px 8px", opacity: isDone ? 0.45 : 1 }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}>
+    <div className={dragKey ? "task-row" : undefined} style={{ ...S.row, padding: "4px 8px", opacity: isDone ? 0.45 : 1 }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}>
+      {/* 오늘 탭 하위 줄 손잡이(2026-10-31 · 소유자 「subtask도 오늘 할일에서 위치 조정가능하게」) — 움직임 규칙은 TodayView subDragReorder */}
+      {dragKey && dh && <span className="grip" style={{ color: "#9ca3af", fontSize: 13, cursor: "grab", flexShrink: 0, marginTop: 1, padding: "1px 3px", userSelect: "none", touchAction: "none" }} title="여기를 잡고 끌어 순서 변경"
+        onPointerDown={(e) => dh.onPointerDown(dragKey, e)} onPointerMove={dh.onPointerMove} onPointerUp={dh.onPointerUp} onPointerCancel={dh.onPointerCancel}>⠿</span>}
       <span style={{ color: "#9ca3af", fontSize: 12, fontWeight: 700, flexShrink: 0, marginTop: 1, userSelect: "none" }} title="하위 할일">↳</span>
       <StarBtn on={sub.focus} onClick={onToggleFocus} />
       <button className="hit-done" onClick={onToggleDone} title={isDone ? "되돌리기" : "완료"}
@@ -945,7 +948,7 @@ const SubAddForm = ({ onAdd, onCancel }) => {
       <input ref={r} style={{ ...S.inp, fontSize: 12 }} placeholder="하위 할일..." value={t} onChange={e => setT(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} />
       {full && <StSel value={s} onChange={setS} compact />}
       {full && <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>📆</span><input type="date" max={DATE_MAX} style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} title="📆 언제할지 (선택)" /><TodayBtn value={pd} onChange={setPd} /></div>}
-      {full && <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span><input type="date" max={DATE_MAX} style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={sd} onChange={e => setSd(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} title="마감일 (선택)" /></div>}
+      {full && WS.key !== "personal" && <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span><input type="date" max={DATE_MAX} style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={sd} onChange={e => setSd(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} title="마감일 (선택)" /></div>}
       <button style={S.btn()} onClick={go}>추가</button>
       {phone && <button style={S.gh} onClick={() => setMore(!more)} title="상태 · 날짜 · 마감">{more ? "▴" : "▾"}</button>}
       <button style={S.gh} onClick={onCancel}>닫기</button>
@@ -1123,7 +1126,8 @@ const AddForm = ({ projects, onAdd, defProj }) => {
         <input type="date" max={DATE_MAX} style={{ ...S.fld, width: 130, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} title="📆 언제할지 (선택)" />
         <TodayBtn value={pd} onChange={setPd} />
       </div>}
-      {full && <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+      {/* 마감일 칸은 개인 앱에서 걷었다(2026-10-31 · 소유자 「필요없는거 쓰지말자 (ex. 마감일 …) 기능적으로 최소화하기」) — 날짜는 「언제할지」 하나 */}
+      {full && WS.key !== "personal" && <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
         <span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span>
         <input type="date" max={DATE_MAX} style={{ ...S.fld, width: 130, flex: "none", fontSize: 11 }} value={sd} onChange={e => setSd(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} title="마감일 (선택)" />
       </div>}
@@ -1207,7 +1211,8 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
               <span style={{ fontSize: 11, color: "#6366F1" }}>🕒</span><input type="time" style={{ ...S.fld, width: 120, flex: "none" }} value={f.planTime || ""} onChange={e => u("planTime", e.target.value)} title="시간(선택)" />
             </div>
           </div>
-          <div>
+          {/* 개인 앱은 마감일 칸을 걷었다(2026-10-31) — 이미 값이 든 할 일만 지울 수 있게 보인다 */}
+          {(WS.key !== "personal" || f.scheduledDate || f.scheduledLabel) && <div>
             <div style={S.lbl}>마감일 (선택)</div>
             <div className="plan-fields" style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <input type="date" max={DATE_MAX} style={{ ...S.fld, width: 160, flex: "none" }} value={f.scheduledDate || ""} onChange={e => u("scheduledDate", e.target.value)} />
@@ -1215,13 +1220,14 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
               {f.scheduledDate && (() => { const dl = deadlineInfo(f.scheduledDate); return dl ? <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span> : null; })()}
               {f.scheduledDate && <button style={{ ...S.gh, fontSize: 10, color: "#EF4444" }} onClick={() => { u("scheduledDate", ""); u("scheduledLabel", ""); }}>✕</button>}
             </div>
-          </div>
+          </div>}
           {/* (2026-06-26) 채널 마커(🧠🎯✍️) 폐지 → 지식·교훈·글감 버킷(프로젝트)으로 대체. 예측 폐지. */}
           <div><div style={S.lbl}>📝 메모 / 맥락 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(할 때 볼 것 · 이 카드 안에만 남습니다)</span></div><textarea style={S.ta} rows={3} value={f.notes || ""} onChange={e => u("notes", e.target.value)} /></div>
           {/* ★메모와 회고를 두 칸으로 가른다. 한 칸이던 때는 「지금 참고할 것」과 「하고 나서 알게 된 것」이 섞여
               영역 카드에 참조용 메모까지 떠 있었다. */}
-          {!isSubtask && <div><div style={{ ...S.lbl, color: "#4338CA" }}>🪞 회고 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(하고 나서 남길 것 · 영역 카드에 쌓이고 주간 정리에서 수확됩니다)</span></div><textarea style={{ ...S.ta, borderColor: "#C7D2FE" }} rows={2} value={f.recap || ""} onChange={e => u("recap", e.target.value)} placeholder="코치가 고쳐 준 것, 하다가 발견한 것, 판단이 맞았는지" /></div>}
-          <div style={{ fontSize: 10, color: "#9ca3af" }}>완료한 뒤에도 <b>히스토리 탭</b>에서 그 항목의 <b>🪞＋</b>로 회고를 적을 수 있습니다.</div>
+          {/* ★할 일마다 붙던 회고 칸을 걷었다(2026-10-31 · 소유자 「매 할일들마다 "🪞 회고 …" 남아 있는데 이거 필요 없지 않나」).
+              회고는 영역·과제 카드의 「적기」 하나로 남긴다. 이미 회고가 든 할 일만 고칠 수 있게 보인다. */}
+          {!isSubtask && (task.recap || "").trim() && <div><div style={{ ...S.lbl, color: "#4338CA" }}>🪞 회고</div><textarea style={{ ...S.ta, borderColor: "#C7D2FE" }} rows={2} value={f.recap || ""} onChange={e => u("recap", e.target.value)} /></div>}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <button style={S.gh} onClick={cancel}>취소</button>
             <button style={S.btn()} onClick={commit}>저장</button>
@@ -1384,7 +1390,32 @@ const WeeklyRoutineStrip = ({ recurrings, projects, tasks, history, onAddSession
 
 /* ═══ 오늘 뷰 (서브태스크 집중 포함) ═══ */
 const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocus, onAdd, onEdit, onUpdate, onPlanToday, onClearToday, onReorder, onAddSession, onRemoveSession, onDelSub }) => {
-  const dragHandlers = useDragReorder(onReorder);
+  /* ★하위 줄도 끌어 옮긴다(2026-10-31 · 소유자 「subtask도 오늘 할일에서 위치 조정가능하게」). 하위 줄의 끌기 키 = "sub|상위id|하위id".
+     · 같은 상위의 하위끼리 = 그 상위의 하위 순서를 바꾼다.
+     · 상위가 오늘 목록에 없는 하위(「↳ 상위」 표시 줄) = 자리가 상위의 저장 순서로 정해지므로(아래 focusGroups) 상위를 옮긴다.
+     · 할 일을 하위 줄에 놓으면 그 하위의 상위 옆으로 옮긴다. 상위 밑에 붙은 하위를 다른 상위 쪽으로 끌면 움직이지 않는다(상위를 끌어 옮긴다). */
+  const subDragReorder = (fromKey, toKey, pos) => {
+    const pk = (k) => { const a = (k || "").split("|"); return a[0] === "sub" ? { sub: true, parentId: a[1], id: a[2] } : { sub: false, id: k }; };
+    const f = pk(fromKey), t = pk(toKey);
+    if (f.sub && t.sub && f.parentId === t.parentId) {
+      const par = tasks.find(x => x.id === f.parentId); if (!par || !onUpdate) return;
+      const arr = [...(par.subtasks || [])];
+      const fi = arr.findIndex(s => s.id === f.id); if (fi < 0) return;
+      const [it] = arr.splice(fi, 1);
+      let ti = arr.findIndex(s => s.id === t.id); if (ti < 0) return;
+      if (pos === "after") ti++;
+      arr.splice(ti, 0, it);
+      onUpdate({ ...par, subtasks: arr });
+      return;
+    }
+    const inToday = (pid) => focusedTasks.some(x => x.id === pid);
+    if (f.sub && inToday(f.parentId)) return; /* 상위 밑에 붙은 하위는 상위를 끌어 옮긴다 */
+    const fromId = f.sub ? f.parentId : f.id;
+    const toId = t.sub ? t.parentId : t.id;
+    if (fromId === toId) return;
+    onReorder(fromId, toId, pos);
+  };
+  const dragHandlers = useDragReorder(subDragReorder);
 
 
   /* 오늘 할 일 = 수행날짜가 오늘이거나 지난(미완료) — 별(집중)과 무관(2026-06-30). 지난 미완료 루틴 제외.
@@ -1424,17 +1455,26 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
        (업무 「기술전문위원회 과제설명회 발표자료 준비」 아래 「질문 리스트 정리, 공유」 1건이 그 경우).
        상위 밑에 붙이면 상위를 옮길 때 하위가 함께 따라가므로 그 자체로 해결된다.
        상위가 같은 상태 그룹에 없으면(상태가 다르거나 상위가 오늘 목록에 없으면) 종전대로 뒤에 붙인다. */
+    /* 상위가 이 무리에 없는 하위는 상위의 저장 순서 자리에 선다(2026-10-31 — 끝에 몰리면 옮길 수 없었다 · subDragReorder). */
+    const tIdx = new Map(tasks.map((t, i) => [t.id, i]));
+    const posOf = (x) => tIdx.get(x.type === "task" ? x.data.id : x.parent.id);
     focusedSubs.forEach(({ sub, parent }) => {
       const g = groups[sub.status];
       if (!g) return;
       const at = g.findIndex(x => x.type === "task" && x.data.id === parent.id);
-      if (at < 0) { g.push({ type: "sub", data: sub, parent, underParent: false }); return; }
+      if (at < 0) {
+        const mine = tIdx.get(parent.id);
+        let i = g.findIndex(x => posOf(x) > mine);
+        if (i < 0) i = g.length;
+        g.splice(i, 0, { type: "sub", data: sub, parent, underParent: false });
+        return;
+      }
       let i = at + 1; /* 이미 이 상위에 붙은 하위가 있으면 그 뒤로 */
       while (i < g.length && g[i].type === "sub" && g[i].parent.id === parent.id) i++;
       g.splice(i, 0, { type: "sub", data: sub, parent, underParent: true });
     });
     return SK.map(k => ({ k, label: STATUSES[k].label, items: groups[k] })).filter(g => g.items.length > 0);
-  }, [focusedTasks, focusedSubs]);
+  }, [focusedTasks, focusedSubs, tasks]);
   /* 오늘 목록에 따로 한 줄로 선 하위 id — 이 탭의 상위 카드(오늘 목록·전체 현황)는 펼쳐도 이 하위를 다시 그리지 않는다(2026-10-02 · TaskRow ★주석).
      focusedSubs 가 아니라 **실제로 그린 것**에서 모은다: 상태 무리가 없어 건너뛴 하위(groups[sub.status] 없음)는 숨기면 어디에도 안 보인다. */
   const todaySubIds = useMemo(() => {
@@ -1457,13 +1497,13 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
   const renderItem = (item) => {
     if (item.type === "task") return <TaskRow inToday onDelSub={onDelSub} key={item.data.id} task={item.data} projects={projects} showProj dragHandlers={dragHandlers} onDone={onDone} onDel={onDel} onFocus={onFocus} onEdit={onEdit} onUpdate={onUpdate} hideSubIds={todaySubIds} />;
     return (
-      <div key={item.data.id} style={item.underParent
+      <div key={item.data.id} data-task-card={"sub|" + item.parent.id + "|" + item.data.id} style={item.underParent
         /* ★상위 바로 아래에 붙은 하위는 카드를 펼쳤을 때와 **같은 모양**으로 보인다(2026-09-08):
            들여쓰기 + 왼쪽 세로선. 상위 이름을 다시 적는 대신 위치와 선으로 소속을 보인다. */
         ? { marginLeft: 20, borderLeft: "2px solid #d1d5db", paddingLeft: 4 }
         : { paddingLeft: 8 }}>
         {!item.underParent && <div style={{ fontSize: 10, color: "#9ca3af", paddingLeft: 30, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={item.parent.text}>↳ {item.parent.text}</div>}{/* 소속 표시라 한 줄로 자른다 — 상위 제목이 URL 이면 통째로 감겨 몇 줄을 먹었다(2026-10-02) */}
-        <SubRow sub={item.data} inToday
+        <SubRow sub={item.data} inToday dragKey={"sub|" + item.parent.id + "|" + item.data.id} dh={dragHandlers}
           onToggleFocus={() => toggleSubInParent(item.parent.id, item.data.id, "focus")}
           onToggleDone={() => toggleSubInParent(item.parent.id, item.data.id, "done")}
           onDel={() => onDelSub ? onDelSub(item.parent.id, item.data.id) : (onUpdate && onUpdate({ ...item.parent, subtasks: (item.parent.subtasks || []).filter(s => s.id !== item.data.id) }))}
@@ -2191,11 +2231,22 @@ function App({ onSwitchWs }) {
     const stale = tasks.filter(isStaleP);
     const staleS = []; tasks.forEach(t => { if (t.recurringId) return; (t.subtasks || []).forEach(s => { if (isStaleS(s)) staleS.push({ parent: t, s }); }); });
     if (!stale.length && !staleS.length) return;
+    /* ★개인 앱은 이월하지 않고 날짜를 비운다(2026-10-31 · 소유자 「매일 할 일이 연장되니까 taskmgr를 열어볼 생각을 안함 -
+       그냥 하루지나면 언제할지를 리셋 시켜버리는건 어떤지?」). 지난 날짜의 미완료는 오늘로 밀리지 않고 그 영역 카드로 돌아가며,
+       오늘 할 일에는 그날 고른 것만 선다. 비운 것은 히스토리에 한 줄씩 남는다(「📆 하루 지나 날짜 비움」). 업무 앱은 종전대로 이월한다. */
+    const reset = !isWork;
+    const nd = reset ? "" : TODAY;
     setTasks(p => p.map(t => {
-      let nt = isStaleP(t) ? { ...t, planDate: TODAY } : t;
-      if (!t.recurringId && (nt.subtasks || []).some(isStaleS)) nt = { ...nt, subtasks: nt.subtasks.map(s => isStaleS(s) ? { ...s, planDate: TODAY } : s) };
+      let nt = isStaleP(t) ? { ...t, planDate: nd } : t;
+      if (!t.recurringId && (nt.subtasks || []).some(isStaleS)) nt = { ...nt, subtasks: nt.subtasks.map(s => isStaleS(s) ? { ...s, planDate: nd } : s) };
       return nt;
     }));
+    if (reset) {
+      const pn = (pid) => (projects.find(x => x.id === pid) || {}).name || "";
+      stale.forEach(t => addHistItem({ type: "edited", text: t.text, projectName: pn(t.project), detail: "📆 하루 지나 날짜 비움(" + t.planDate + ")", time: nowTime() }));
+      staleS.forEach(({ parent, s }) => addHistItem({ type: "edited", text: s.text, projectName: pn(parent.project), detail: "📆 하루 지나 날짜 비움(" + s.planDate + " · 하위)", time: nowTime() }));
+      showT("지난 할 일 " + (stale.length + staleS.length) + "건 — 날짜를 비웠습니다(영역 카드에 있습니다)", null);
+    }
   }, [cloudLoaded, tasks]); /* eslint-disable-line */
 
   /* ★PDS 시스템 합치기(2026-10-11 소유자 「그냥 PDS 시스템이라고 프로젝트 명을 하고, 이 루프가 잘 돌게끔 하는 것을 목적으로한 프로젝트라고 정의」 ·
