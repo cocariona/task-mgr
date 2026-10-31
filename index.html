@@ -948,7 +948,6 @@ const SubAddForm = ({ onAdd, onCancel }) => {
       <input ref={r} style={{ ...S.inp, fontSize: 12 }} placeholder="하위 할일..." value={t} onChange={e => setT(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} />
       {full && <StSel value={s} onChange={setS} compact />}
       {full && <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#6366F1" }}>📆</span><input type="date" max={DATE_MAX} style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} title="📆 언제할지 (선택)" /><TodayBtn value={pd} onChange={setPd} /></div>}
-      {full && WS.key !== "personal" && <div style={{ display: "flex", gap: 3, alignItems: "center" }}><span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span><input type="date" max={DATE_MAX} style={{ ...S.fld, width: 118, flex: "none", fontSize: 11 }} value={sd} onChange={e => setSd(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onCancel(); }} title="마감일 (선택)" /></div>}
       <button style={S.btn()} onClick={go}>추가</button>
       {phone && <button style={S.gh} onClick={() => setMore(!more)} title="상태 · 날짜 · 마감">{more ? "▴" : "▾"}</button>}
       <button style={S.gh} onClick={onCancel}>닫기</button>
@@ -1126,11 +1125,7 @@ const AddForm = ({ projects, onAdd, defProj }) => {
         <input type="date" max={DATE_MAX} style={{ ...S.fld, width: 130, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} title="📆 언제할지 (선택)" />
         <TodayBtn value={pd} onChange={setPd} />
       </div>}
-      {/* 마감일 칸은 개인 앱에서 걷었다(2026-10-31 · 소유자 「필요없는거 쓰지말자 (ex. 마감일 …) 기능적으로 최소화하기」) — 날짜는 「언제할지」 하나 */}
-      {full && WS.key !== "personal" && <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-        <span style={{ fontSize: 10, color: "#9ca3af" }}>마감</span>
-        <input type="date" max={DATE_MAX} style={{ ...S.fld, width: 130, flex: "none", fontSize: 11 }} value={sd} onChange={e => setSd(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} title="마감일 (선택)" />
-      </div>}
+      {/* 마감일 칸은 걷었다(2026-10-31 · 소유자 「필요없는거 쓰지말자 (ex. 마감일 …) 기능적으로 최소화하기」 · 개인·업무 모두) — 날짜는 「언제할지」 하나 */}
       {full && <button className="star-btn" style={{ ...S.star(f), border: "1px solid #e5e7eb", borderRadius: 5, width: 28, height: 28 }} onClick={() => setF(!f)} title="지금 먼저 할 것으로 표시">
         {f ? "★" : "☆"}
       </button>}
@@ -1211,23 +1206,11 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
               <span style={{ fontSize: 11, color: "#6366F1" }}>🕒</span><input type="time" style={{ ...S.fld, width: 120, flex: "none" }} value={f.planTime || ""} onChange={e => u("planTime", e.target.value)} title="시간(선택)" />
             </div>
           </div>
-          {/* 개인 앱은 마감일 칸을 걷었다(2026-10-31) — 이미 값이 든 할 일만 지울 수 있게 보인다 */}
-          {(WS.key !== "personal" || f.scheduledDate || f.scheduledLabel) && <div>
-            <div style={S.lbl}>마감일 (선택)</div>
-            <div className="plan-fields" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <input type="date" max={DATE_MAX} style={{ ...S.fld, width: 160, flex: "none" }} value={f.scheduledDate || ""} onChange={e => u("scheduledDate", e.target.value)} />
-              <input style={{ ...S.fld, flex: 1 }} placeholder="시기 (예: 하반기, 9월 이후)" value={f.scheduledLabel || ""} onChange={e => u("scheduledLabel", e.target.value)} />
-              {f.scheduledDate && (() => { const dl = deadlineInfo(f.scheduledDate); return dl ? <span style={S.dlBdg(dl)}>{dl.icon} {dl.label}</span> : null; })()}
-              {f.scheduledDate && <button style={{ ...S.gh, fontSize: 10, color: "#EF4444" }} onClick={() => { u("scheduledDate", ""); u("scheduledLabel", ""); }}>✕</button>}
-            </div>
-          </div>}
+          {/* 마감일 칸은 걷었다(2026-10-31 · 개인·업무 모두 · 걷을 때 값이 든 할 일 0건) — 날짜는 「언제할지」 하나 */}
           {/* (2026-06-26) 채널 마커(🧠🎯✍️) 폐지 → 지식·교훈·글감 버킷(프로젝트)으로 대체. 예측 폐지. */}
           <div><div style={S.lbl}>📝 메모 / 맥락 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(할 때 볼 것 · 이 카드 안에만 남습니다)</span></div><textarea style={S.ta} rows={3} value={f.notes || ""} onChange={e => u("notes", e.target.value)} /></div>
-          {/* ★메모와 회고를 두 칸으로 가른다. 한 칸이던 때는 「지금 참고할 것」과 「하고 나서 알게 된 것」이 섞여
-              영역 카드에 참조용 메모까지 떠 있었다. */}
-          {/* ★할 일마다 붙던 회고 칸을 걷었다(2026-10-31 · 소유자 「매 할일들마다 "🪞 회고 …" 남아 있는데 이거 필요 없지 않나」).
-              회고는 영역·과제 카드의 「적기」 하나로 남긴다. 이미 회고가 든 할 일만 고칠 수 있게 보인다. */}
-          {!isSubtask && (task.recap || "").trim() && <div><div style={{ ...S.lbl, color: "#4338CA" }}>🪞 회고</div><textarea style={{ ...S.ta, borderColor: "#C7D2FE" }} rows={2} value={f.recap || ""} onChange={e => u("recap", e.target.value)} /></div>}
+          {/* ★할 일마다 붙던 회고 칸을 걷었다(2026-10-31 · 소유자 「매 할일들마다 "🪞 회고 …" 남아 있는데 이거 필요 없지 않나」 ·
+              「우리가 회고 탭이 있기 때문에 다 빼버리려고 했던거야」 · 걷을 때 회고가 든 할 일 0건). 회고는 카드 「적기」·히스토리 🪞＋ 로 남긴다. */}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <button style={S.gh} onClick={cancel}>취소</button>
             <button style={S.btn()} onClick={commit}>저장</button>
@@ -1523,7 +1506,6 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
       </div>
       {onAddSession && <WeeklyRoutineStrip recurrings={recurrings} projects={projects} tasks={tasks} history={history} onAddSession={onAddSession} onRemoveSession={onRemoveSession} />}
       <PlanDateSummary tasks={tasks} projects={projects} onEdit={onEdit} />
-      <ScheduleAlerts tasks={tasks} projects={projects} onEdit={onEdit} />
       <AddForm projects={projects} onAdd={onAdd} />
       {totalFocused > 0 ? (
         <div style={{ marginTop: 16 }}>
@@ -2231,11 +2213,11 @@ function App({ onSwitchWs }) {
     const stale = tasks.filter(isStaleP);
     const staleS = []; tasks.forEach(t => { if (t.recurringId) return; (t.subtasks || []).forEach(s => { if (isStaleS(s)) staleS.push({ parent: t, s }); }); });
     if (!stale.length && !staleS.length) return;
-    /* ★개인 앱은 이월하지 않고 날짜를 비운다(2026-10-31 · 소유자 「매일 할 일이 연장되니까 taskmgr를 열어볼 생각을 안함 -
-       그냥 하루지나면 언제할지를 리셋 시켜버리는건 어떤지?」). 지난 날짜의 미완료는 오늘로 밀리지 않고 그 영역 카드로 돌아가며,
-       오늘 할 일에는 그날 고른 것만 선다. 비운 것은 히스토리에 한 줄씩 남는다(「📆 하루 지나 날짜 비움」). 업무 앱은 종전대로 이월한다. */
-    const reset = !isWork;
-    const nd = reset ? "" : TODAY;
+    /* ★이월하지 않고 날짜를 비운다(2026-10-31 · 소유자 「매일 할 일이 연장되니까 taskmgr를 열어볼 생각을 안함 -
+       그냥 하루지나면 언제할지를 리셋 시켜버리는건 어떤지?」 · 같은 날 업무 앱도 「업무 앱도 할 일을 정하는거고 마감일은 걷을거니까 개인 앱처럼 똑같이」).
+       지난 날짜의 미완료는 오늘로 밀리지 않고 그 카드로 돌아가며, 오늘 할 일에는 그날 고른 것만 선다. 비운 것은 히스토리에 한 줄씩 남는다(「📆 하루 지나 날짜 비움」). */
+    const reset = true;
+    const nd = "";
     setTasks(p => p.map(t => {
       let nt = isStaleP(t) ? { ...t, planDate: nd } : t;
       if (!t.recurringId && (nt.subtasks || []).some(isStaleS)) nt = { ...nt, subtasks: nt.subtasks.map(s => isStaleS(s) ? { ...s, planDate: nd } : s) };
