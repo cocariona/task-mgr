@@ -1554,18 +1554,22 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
 /* ═══ 과제별 뷰 ═══ */
 /* ★새 세션 폼 — 영역 카드 안에서만 연다. 과제 드롭다운이 없는 것이 핵심이다:
    어디서 만들었는지가 곧 소속이라 「이게 어느 영역인가」를 따로 판단할 일이 없다.
-   영역 밖의 반복 할일(Weekly Review·업무 잡무)은 오늘 탭에서 만든다. */
-const NewSessionForm = ({ projectId, setRecurrings, onClose }) => {
-  const [nt, setNt] = useState(""); const [rType, setRType] = useState("count");
+   (2026-10-31 · 루틴이 아닌 반복(Weekly Review · 업무 잡무)도 그 카드에서 만든다 — 오늘 탭 「반복 설정」은 걷었다.) */
+/* ★2026-10-31 소유자 「영역/과제 탭에서 루틴을 표시하게 하자」 — 오늘 탭 「반복 설정」을 걷고 모든 반복을 카드에서 만든다.
+   루틴 카드가 아니면(routine=false) 실행방법 칸이 없고(잡무 반복은 루틴이 아니다 · 2026-09-26) 「매월」을 고를 수 있다. */
+const NewSessionForm = ({ projectId, setRecurrings, onClose, routine = true }) => {
+  const [nt, setNt] = useState(""); const [rType, setRType] = useState(routine ? "count" : "weekly");
   const [ndows, setNdows] = useState([]); const [freqN, setFreqN] = useState(3);
   const [rTime, setRTime] = useState(""); const [rProto, setRProto] = useState("");
+  const [dom, setDom] = useState(1); const [lastDay, setLastDay] = useState(false);
   const add = () => {
     if (!nt.trim()) return;
     if (rType === "weekly" && !ndows.length) return;
-    const base = { id: gid(), text: nt.trim(), project: projectId, time: rTime || "", protocol: rProto.trim() };
+    const base = { id: gid(), text: nt.trim(), project: projectId, time: rTime || "", ...(routine ? { protocol: rProto.trim() } : {}) };
     const rec = rType === "count"
       ? { ...base, type: "count", freqPerWeek: Math.max(1, parseInt(freqN) || 1), dows: [...ndows].sort((a, b) => a - b) }
       : rType === "weekly" ? { ...base, type: "weekly", dows: [...ndows].sort((a, b) => a - b) }
+      : rType === "monthly" ? { ...base, type: "monthly", dom: lastDay ? 0 : Math.min(31, Math.max(1, parseInt(dom) || 1)), lastDay }
       : { ...base, type: "daily" };
     setRecurrings(p => [...p, rec]);
     onClose();
@@ -1573,15 +1577,22 @@ const NewSessionForm = ({ projectId, setRecurrings, onClose }) => {
   return (
     <div style={{ ...S.card, marginTop: 6, background: "#F8FAFF" }}>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-        <input autoFocus value={nt} onChange={e => setNt(e.target.value)} placeholder="세션 이름 (예: 보컬 연습)" style={{ ...S.inp, fontSize: 12, maxWidth: 200 }} />
+        <input autoFocus value={nt} onChange={e => setNt(e.target.value)} placeholder={routine ? "세션 이름 (예: 보컬 연습)" : "반복할 할 일 (예: 위클리 작성)"} style={{ ...S.inp, fontSize: 12, maxWidth: 200 }} />
         <select value={rType} onChange={e => setRType(e.target.value)} style={{ ...S.sel, fontSize: 12 }}>
-          <option value="count">주 N회</option><option value="weekly">매주 (요일 고정)</option><option value="daily">매일</option>
+          <option value="count">주 N회</option><option value="weekly">매주 (요일 고정)</option><option value="daily">매일</option>{!routine && <option value="monthly">매월</option>}
         </select>
+        {rType === "monthly" && <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap" }}>
+            <input type="checkbox" checked={lastDay} onChange={e => setLastDay(e.target.checked)} /> 마지막일
+          </label>
+          {!lastDay && <input type="number" min={1} max={31} value={dom} onChange={e => setDom(e.target.value)} style={{ ...S.fld, width: 50, fontSize: 12, flexShrink: 0 }} />}
+          {!lastDay && <span style={{ fontSize: 11, color: "#6b7280" }}>일</span>}
+        </div>}
         {rType === "count" && <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
           <span style={{ fontSize: 11, color: "#6b7280" }}>주</span>
           <input type="number" min="1" max="7" value={freqN} onChange={e => setFreqN(e.target.value)} style={{ ...S.inp, fontSize: 12, width: 46 }} />
           <span style={{ fontSize: 11, color: "#6b7280" }}>회</span></div>}
-        {rType !== "daily" && <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+        {rType !== "daily" && rType !== "monthly" && <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
           {DAYS_KO.map((dn, i) => { const on = ndows.includes(i);
             return <button key={i} type="button" onClick={() => setNdows(on ? ndows.filter(x => x !== i) : [...ndows, i])}
               style={{ ...S.gh, fontSize: 11, padding: "2px 7px", background: on ? "#4338CA" : "#fff", color: on ? "#fff" : "#6b7280" }}>{dn}</button>; })}
@@ -1590,8 +1601,8 @@ const NewSessionForm = ({ projectId, setRecurrings, onClose }) => {
         <button style={{ ...S.btn("#4338CA"), fontSize: 12 }} onClick={add}>추가</button>
         <button style={{ ...S.gh, fontSize: 12 }} onClick={onClose}>취소</button>
       </div>
-      <textarea value={rProto} onChange={e => setRProto(e.target.value)} rows={2} placeholder="실행 방법 (선택) — 이 세션에서 무엇을 하는지"
-        style={{ ...S.ta, minHeight: 0, fontSize: 12, marginTop: 6 }} />
+      {routine && <textarea value={rProto} onChange={e => setRProto(e.target.value)} rows={2} placeholder="실행 방법 (선택) — 이 세션에서 무엇을 하는지"
+        style={{ ...S.ta, minHeight: 0, fontSize: 12, marginTop: 6 }} />}
     </div>
   );
 };
@@ -1683,11 +1694,12 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onDelSu
   const recOf = (pid) => (recurrings || []).filter(r => !r.disabled && r.project === pid);
   const renderProj = (p) => {
     const pt = tasks.filter(t => t.project === p.id && t.status !== "done" && !t.recurringId); /* 반복 인스턴스는 세션 줄이 맡는다 */
-    /* ★영역 카드의 「반복 세션」 줄은 루틴 반복만(2026-10-31 · 소유자 「영역 탭에서도, 오늘탭에서도 weekly review가 둘 다 있는 이유가 뭐지?
-       우리가 역할을 구분하기로 했던 것 같은데」). 루틴이 아닌 반복(PDS 시스템의 Weekly Review · PM 엔진 업데이트 · 잡무)은
-       오늘 할 일에 회차로 뜨고, 만들고 고치는 자리는 오늘 탭 아래 「반복 설정」이다(RecurringSettings ★주석) — 여기에 ＋ 를 또 두면 누르는 자리가 둘이 된다.
-       10-11 Weekly Review 를 PDS 시스템 카드로 옮기면서 그 카드에 ＋ 줄이 생겼던 것을 걷는다. 반복 개수(🔁)와 삭제 막기는 전부로 센다. */
+    /* ★반복은 모두 카드에서 보고 만들고 고친다(2026-10-31 · 소유자 「알기 쉽게 영역/과제 탭에서 루틴을 표시하게 하자. 어차피 루틴인 것만 +/-를 체크 하므로」).
+       오늘 탭 아래 「반복 설정」은 걷었다 — 모든 반복이 어느 카드엔가 속한다(10-11 Weekly Review 도 PDS 시스템 카드로 들어왔다).
+       · 루틴 카드(isRoutineProj) = 「루틴」 표시 · 줄마다 −/＋ (오늘 탭 「🔁 이번 주」 줄과 같은 기록)
+       · 그 밖의 카드(프로젝트 · 잡무) = 편집만 · 회차는 오늘 할 일에 뜬다(거기서 체크) · 실행방법 칸 없음(2026-09-26) */
     const recsAll = recOf(p.id);
+    const isRt = isRoutineProj(p);
     const recs = recsAll.filter(r => isRoutineRec(r, projects));
     const memo = areaRecaps(p.id, recurrings, history);
     const sess = recs.map(r => ({ tgt: routineWeekTarget(r), n: weekDoneCount(doneSet, r.id, wkNow) })).filter(x => x.tgt > 0);
@@ -1705,6 +1717,7 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onDelSu
                 바꾸는 단추는 카드를 펼친 안쪽 첫 줄에 있다. */}
             {p.focus && <span style={{ fontSize: 13, color: "#F59E0B" }} title="집중 — 루틴을 다 하고 남는 시간을 여기 쓴다">★</span>}
             <span style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</span>
+            {isRt && recs.length > 0 && <span style={{ fontSize: 9, color: "#4338CA", border: "1px solid #C7D2FE", padding: "0 4px", borderRadius: 4, flexShrink: 0 }} title="루틴 영역 — 반복은 ＋ 로 체크한다">루틴</span>}
             <span style={S.cnt(pt.length)}>{pt.length}</span>
             {sTgt > 0 && <span style={{ fontSize: 10, color: sDone >= sTgt ? "#059669" : "#4338CA", background: sDone >= sTgt ? "#ECFDF5" : "#EEF2FF", border: "1px solid " + (sDone >= sTgt ? "#A7F3D0" : "#C7D2FE"), padding: "0 5px", borderRadius: 6, fontWeight: 600, flexShrink: 0 }}
               title={"이번 주 세션 " + sDone + "/" + sTgt + " — " + recs.map(r => r.text).join(", ")}>🔁 {sDone}/{sTgt}</span>}
@@ -1715,29 +1728,26 @@ const AreaView = ({ tasks, projects, recurrings, history, onDone, onDel, onDelSu
 
         </div>
         {o && <div style={{ paddingLeft: 8, marginBottom: 12 }}>
-          {recs.length > 0 && <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#6366F1", marginBottom: 2 }}>반복 세션</div>
+          {recsAll.length > 0 && <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#6366F1", marginBottom: 2 }}>{isRt ? "🔁 루틴 — ＋ 로 체크" : "🔁 반복 — 회차는 오늘 할 일에 뜬다(여기서는 고치기만)"}</div>
             <div style={S.card}>
-              {recs.map(r => <RecurringRow key={r.id} r={r} projects={projects} onDelete={() => delRec(r.id)} onUpdate={onUpdateRecurring}
-                weekDone={weekDoneCount(doneSet, r.id, wkNow)} weekTarget={routineWeekTarget(r)}
-                onAddSession={onAddSession} onRemoveSession={onRemoveSession} />)}
-            </div>
-            {/* 「＋ 세션 추가」와 「☆ 집중으로」는 한 줄 양 끝(2026-10-08 · 소유자 「반복세션을 가운데 두고 상하로 따로 떨어져 어색」) */}
-            {newFor === p.id && <NewSessionForm projectId={p.id} setRecurrings={setRecurrings} onClose={() => setNewFor("")} />}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 4 }}>
-              {newFor !== p.id ? <button style={{ ...S.gh, fontSize: 11 }} onClick={() => setNewFor(p.id)}>＋ 세션 추가</button> : <span />}
-              <button style={{ ...S.gh, fontSize: 11, color: p.focus ? "#B45309" : "#6b7280" }} onClick={() => onSetFocus(p.id)}
-                  title={p.focus ? "집중 해제" : "집중으로 — 루틴을 다 하고 남는 시간을 여기 쓴다(하나만)"}>{p.focus ? "★ 집중 해제" : "☆ 집중으로"}</button>
+              {recsAll.map(r => isRoutineRec(r, projects)
+                ? <RecurringRow key={r.id} r={r} projects={projects} onDelete={() => delRec(r.id)} onUpdate={onUpdateRecurring}
+                    weekDone={weekDoneCount(doneSet, r.id, wkNow)} weekTarget={routineWeekTarget(r)}
+                    onAddSession={onAddSession} onRemoveSession={onRemoveSession} />
+                : <RecurringRow key={r.id} r={r} projects={projects} showProto={false} onDelete={() => delRec(r.id)} onUpdate={onUpdateRecurring}
+                    weekDone={weekDoneCount(doneSet, r.id, wkNow)} weekTarget={routineWeekTarget(r)} />)}
             </div>
           </div>}
-          {recs.length === 0 && <div style={{ marginBottom: 10 }}>
-            {newFor === p.id && <NewSessionForm projectId={p.id} setRecurrings={setRecurrings} onClose={() => setNewFor("")} />}
+          {/* 「＋ 추가」와 「☆ 집중으로」는 한 줄 양 끝(2026-10-08 · 소유자 「반복세션을 가운데 두고 상하로 따로 떨어져 어색」) */}
+          <div style={{ marginBottom: 10 }}>
+            {newFor === p.id && <NewSessionForm projectId={p.id} routine={isRt} setRecurrings={setRecurrings} onClose={() => setNewFor("")} />}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              {newFor !== p.id ? <button style={{ ...S.gh, fontSize: 11 }} onClick={() => setNewFor(p.id)}>＋ 세션 추가</button> : <span />}
+              {newFor !== p.id ? <button style={{ ...S.gh, fontSize: 11 }} onClick={() => setNewFor(p.id)}>{isRt ? "＋ 세션 추가" : "＋ 반복 추가"}</button> : <span />}
               <button style={{ ...S.gh, fontSize: 11, color: p.focus ? "#B45309" : "#6b7280" }} onClick={() => onSetFocus(p.id)}
                   title={p.focus ? "집중 해제" : "집중으로 — 루틴을 다 하고 남는 시간을 여기 쓴다(하나만)"}>{p.focus ? "★ 집중 해제" : "☆ 집중으로"}</button>
             </div>
-          </div>}
+          </div>
           <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#6366F1", marginBottom: 2 }}>🪞 회고 · 하고 나서 남긴 것</div>
             <div style={S.card}>
@@ -3024,7 +3034,7 @@ function App({ onSwitchWs }) {
       </div>
       <div ref={tabTopRef} style={{ marginTop: 8 }}>
         {/* B: 개인 루틴=매일 daily 반복 할일(TodayView). 옛 RoutineSection·setRoutineHist·sdToday 데드코드 제거(2026-06-23 ④-b). */}
-        {tab === "today" && <><TodayView onDelSub={delSub} tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} onReorder={reorderTask} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} /><RecurringSettings recurrings={recurrings} setRecurrings={setRecurrings} projects={projects} onUpdateRecurring={updateRecurring} tasks={tasks} history={history} /></>}
+        {tab === "today" && <><TodayView onDelSub={delSub} tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} onPlanToday={planToday} onClearToday={clearToday} onReorder={reorderTask} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} />{/* 「반복 설정」은 걷었다(2026-10-31) — 반복은 영역·과제 탭 카드에서 만들고 고친다(AreaView ★주석) */}</>}
         {tab === "areas" && <AreaView onDelSub={delSub} tasks={tasks} projects={projects} recurrings={recurrings} history={history} onDone={doneTask} onDel={delTask} onFocus={toggleFocus} onAdd={addTask} onEdit={handleEdit} onUpdate={updateTask} isWork={isWork} setRecurrings={setRecurrings} onUpdateRecurring={updateRecurring} onAddSession={addRoutineSession} onRemoveSession={removeRoutineSession} onAddMemo={addAreaRecap} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
         {tab === "history" && <HistoryView history={history} onRestore={restoreHist} onUncancel={uncancelHist} onEditMemo={editHistMemo} onDeleteMemo={deleteHistMemo} onSetFocus={setFocusArea} />}
       </div>
