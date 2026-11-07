@@ -68,6 +68,9 @@
       .form-row > .add-actions { flex-direction: row !important; }
       .form-row > .add-actions > .star-btn { width: 40px !important; flex: none !important; }
       .form-row > .add-actions > button:not(.star-btn) { flex: 1 1 auto !important; width: auto !important; }
+      /* 새 할일 입력의 「오늘」·「내일」도 세로로 쌓지 않고 한 줄에 반씩(2026-11-07 · 오늘 탭에 「내일」을 붙이며) */
+      .form-row .day-btns { flex-direction: row !important; gap: 6px !important; }
+      .form-row .day-btns > button { flex: 1 1 0 !important; width: auto !important; }
       /* 체크박스는 위 100% 규칙에서 뺀다(2026-10-08 · 소유자 「매월 선택시 마지막일 체크하는 부분이 밖으로 튕겨」).
          상자가 칸 너비만큼 늘어나 「마지막일」 글자를 칸 밖으로 밀어냈다. 누르기 쉽게 20px 로 둔다. */
       .form-row input[type="checkbox"] { width: 20px !important; height: 20px; min-height: 0; flex: none !important; margin: 0; }
@@ -894,6 +897,16 @@ const sameEdit = (a, b) => {
 };
 /* 내일 날짜(YYYY-MM-DD) — 수정 창의 「내일」 단추(하루 끝에 남은 일을 넘길 때 ✏️ → 내일 → 저장) */
 const tomorrowOf = (ymd) => { const d = new Date(ymd + "T00:00:00"); d.setDate(d.getDate() + 1); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+/* 「내일」 단추 — 「오늘」(TodayBtn)과 같은 모양·같은 규칙: 누르면 내일, 한 번 더 누르면 비운다.
+   수정 창과 오늘 탭 「새 할일 입력」이 함께 쓴다(2026-11-07 · 소유자 「오늘 탭에 할일 작성할 때 오늘말고 내일버튼도 같이 보이게」).
+   영역/과제 카드의 입력칸에는 붙이지 않는다 — 요청 범위가 오늘 탭이고, 단추는 늘리지 않는 것이 기본이다. */
+const TomorrowBtn = ({ value, onChange }) => {
+  const tmr = tomorrowOf(TODAY); const on = value === tmr;
+  return (
+    <button type="button" onClick={() => onChange(on ? "" : tmr)} title={on ? "수행날짜 비우기" : "수행날짜를 내일로"}
+      style={{ ...S.gh, fontSize: 11, padding: "2px 7px", flexShrink: 0, background: on ? "#EEF2FF" : "#fff", color: on ? "#4338CA" : "#6b7280", fontWeight: on ? 700 : 400 }}>내일</button>
+  );
+};
 
 /* ─── SubRow (서브태스크 행) ─── */
 const SubRow = ({ sub, onToggleFocus, onToggleDone, onDel, onEdit, inToday, dragKey, dh }) => {
@@ -1106,7 +1119,7 @@ const TaskRow = ({ task, onDone, onDel, onFocus, showProj, projects, onEdit, onU
    → Pointer Events 로 바꾼다. 마우스·터치·펜이 같은 코드를 타므로 PC 와 휴대폰이 한 경로가 된다.
    손잡이(⠿)를 잡을 때만 시작한다: 카드 아무 데나 잡으면 목록 스크롤과 싸우게 된다.
    버튼은 늘리지 않는다(소유자 요청) — 이미 있는 손잡이를 휴대폰에서도 보이게 하는 것으로 끝낸다. */
-const AddForm = ({ projects, onAdd, defProj }) => {
+const AddForm = ({ projects, onAdd, defProj, tmrBtn }) => {
   const [t, setT] = useState(""); const [s, setS] = useState("action"); const [p, setP] = useState(defProj || ""); const [f, setF] = useState(false); const [sd, setSd] = useState(""); const [sl, setSl] = useState(""); const [pd, setPd] = useState(""); const r = useRef();
   /* 프로젝트/과제 미선택 상태로 시작(2026-07-04, 소유자) — 첫 항목 자동선택 안 함. 고르지 않으면 추가 안 됨(오분류 방지). */
   /* ★휴대폰에서는 접힌 한 줄(입력칸 + 추가)로 시작하고 입력칸을 누르면 지금 칸들이 그대로 펼쳐진다(2026-10-07).
@@ -1129,7 +1142,11 @@ const AddForm = ({ projects, onAdd, defProj }) => {
       {full && <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
         <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600 }}>📆</span>
         <input type="date" max={DATE_MAX} style={{ ...S.fld, width: 130, flex: "none", fontSize: 11 }} value={pd} onChange={e => setPd(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} title="📆 언제할지 (선택)" />
-        <TodayBtn value={pd} onChange={setPd} />
+        {/* 「오늘」·「내일」은 한 묶음(.day-btns) — 휴대폰에서 칸이 세로로 쌓여도 둘은 한 줄에 반씩 선다(수정 창과 같은 모양) */}
+        <div className="day-btns" style={{ display: "flex", gap: 4 }}>
+          <TodayBtn value={pd} onChange={setPd} />
+          {tmrBtn && <TomorrowBtn value={pd} onChange={setPd} />}
+        </div>
       </div>}
       {/* 마감일 칸은 걷었다(2026-10-31 · 소유자 「필요없는거 쓰지말자 (ex. 마감일 …) 기능적으로 최소화하기」 · 개인·업무 모두) — 날짜는 「언제할지」 하나 */}
       {/* ☆ 와 「추가」는 한 묶음(2026-10-31 · 소유자 「별표가 한칸을 다 차지하고 있어서 어색」) — 휴대폰 세로 쌓기에서도 한 줄(.add-actions) */}
@@ -1180,7 +1197,6 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
     onClose(); return true;
   };
   useBackClose(softClose);
-  const tmr = tomorrowOf(TODAY);
   return (
     <div style={S.mod} onMouseDown={e => { overlayDown.current = e.target === e.currentTarget; }} onClick={e => { if (e.target === e.currentTarget && overlayDown.current) softClose(); }}>
       <div className="modal-content" style={S.modC} onClick={e => e.stopPropagation()}>
@@ -1212,8 +1228,7 @@ const EditModal = ({ task, projects, onSave, onClose, isSubtask, isWork }) => {
                   「내일」(2026-10-07) = 하루 끝에 남은 일을 다음 날로 넘길 때 ✏️ → 내일 → 저장 */}
               <div style={{ display: "flex", gap: 6 }}>
                 <TodayBtn value={f.planDate || ""} onChange={v => u("planDate", v)} />
-                <button type="button" onClick={() => u("planDate", f.planDate === tmr ? "" : tmr)} title={f.planDate === tmr ? "수행날짜 비우기" : "수행날짜를 내일로"}
-                  style={{ ...S.gh, fontSize: 11, padding: "2px 7px", flexShrink: 0, background: f.planDate === tmr ? "#EEF2FF" : "#fff", color: f.planDate === tmr ? "#4338CA" : "#6b7280", fontWeight: f.planDate === tmr ? 700 : 400 }}>내일</button>
+                <TomorrowBtn value={f.planDate || ""} onChange={v => u("planDate", v)} />
               </div>
               <span style={{ fontSize: 11, color: "#6366F1" }}>🕒</span><input type="time" style={{ ...S.fld, width: 120, flex: "none" }} value={f.planTime || ""} onChange={e => u("planTime", e.target.value)} title="시간(선택)" />
             </div>
@@ -1338,6 +1353,7 @@ const WeeklyRoutineStrip = ({ recurrings, projects, tasks, history, onAddSession
   const pool = (recurrings || []).filter(r => !r.disabled && isStripRec(r, projects));
   if (!pool.length) return null;
   const doneSet = routineDoneSet(tasks, history);
+  const daysLeft = 7 - new Date(TODAY + "T00:00:00").getDay(); /* 이번 주 남은 날(오늘 포함 · 일요일 7 … 토요일 1) */
   const left = (r) => routineWeekTarget(r) - weekDoneCount(doneSet, r.id, wk);
   const rankCmp = (a, b) => {
     const la = left(a), lb = left(b);
@@ -1368,13 +1384,17 @@ const WeeklyRoutineStrip = ({ recurrings, projects, tasks, history, onAddSession
   return (
     <div style={{ ...S.card, marginBottom: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "8px 10px" }}>
       <span style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", flexShrink: 0 }}>🔁 이번 주</span>
+      {/* ★빠듯함 = 색으로만 알린다(2026-11-07 · 소유자 「남은날은 이미 알고 있으므로 굳이 보여줄 필요 없고, 색깔로만 · 빨간색은 너무 강렬하고, 경고만」).
+          이번 주 남은 날(오늘 포함 · 일~토 주)이 남은 회차 이하가 되면 노랑(미달) → 주황(빠듯). 숫자·글자는 더하지 않는다.
+          판정 기준이 아니라 표시다 — 수행률 판정은 여전히 01 현황의 ★안 굴러감 하나(03 기각 대장 「번아웃 가드」). */}
       {items.map(r => { const tgt = routineWeekTarget(r); const n = weekDoneCount(doneSet, r.id, wk); const hit = n >= tgt;
+        const tight = !hit && tgt - n >= daysLeft;
         return (
-          <span key={r.id} className="wk-chip" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 12, background: hit ? "#ECFDF5" : "#FFFBEB", border: "1px solid " + (hit ? "#A7F3D0" : "#FDE68A"), borderRadius: 14, padding: "2px 4px 2px 9px" }}>
+          <span key={r.id} className="wk-chip" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 12, background: hit ? "#ECFDF5" : tight ? "#FFEDD5" : "#FFFBEB", border: "1px solid " + (hit ? "#A7F3D0" : tight ? "#FB923C" : "#FDE68A"), borderRadius: 14, padding: "2px 4px 2px 9px" }}>
             <span style={{ maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.text}</span>
             {/* − 자리는 늘 잡아 둔다: 0→1 에서 − 가 새로 생기면 ＋ 가 손가락 밑에서 밀려 연타가 엉뚱한 데를 누른다(미리보기 실측) */}
             <button onClick={() => n > 0 && onRemoveSession(r.id)} disabled={n === 0} title="이번 주 최근 완료 1건 취소(잘못 체크 정정)" style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "1px 6px", borderRadius: 10, color: "#DC2626", visibility: n > 0 ? "visible" : "hidden" }}>−</button>
-            <b style={{ fontVariantNumeric: "tabular-nums", color: n > tgt ? "#4338CA" : hit ? "#059669" : "#D97706" }} title={n > tgt ? "목표보다 " + (n - tgt) + "회 더 했다" : ""}>{n}/{tgt}</b>
+            <b style={{ fontVariantNumeric: "tabular-nums", color: n > tgt ? "#4338CA" : hit ? "#059669" : tight ? "#C2410C" : "#D97706" }} title={n > tgt ? "목표보다 " + (n - tgt) + "회 더 했다" : ""}>{n}/{tgt}</b>
             <button onClick={() => onAddSession(r.id, "")} title={hit ? "한 번 더 했다 — 초과로 기록" : "했음 기록"} style={{ ...S.gh, fontSize: 13, lineHeight: 1, padding: "1px 6px", borderRadius: 10, color: "#059669" }}>＋</button>
           </span>
         );
@@ -1518,7 +1538,7 @@ const TodayView = ({ tasks, projects, recurrings, history, onDone, onDel, onFocu
       </div>
       {onAddSession && <WeeklyRoutineStrip recurrings={recurrings} projects={projects} tasks={tasks} history={history} onAddSession={onAddSession} onRemoveSession={onRemoveSession} />}
       <PlanDateSummary tasks={tasks} projects={projects} onEdit={onEdit} />
-      <AddForm projects={projects} onAdd={onAdd} />
+      <AddForm projects={projects} onAdd={onAdd} tmrBtn />
       {totalFocused > 0 ? (
         <div style={{ marginTop: 16 }}>
           <div style={S.focusBanner}>
