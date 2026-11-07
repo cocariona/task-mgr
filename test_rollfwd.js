@@ -1,4 +1,7 @@
-/* 자동 이월 검증 — 로직을 index.html 에서 문자열로 추출해 실행한다(테스트가 소스를 흉내내지 않게). */
+/* 하루 지난 날짜 정리 검증 — 로직을 index.html 에서 문자열로 추출해 실행한다(테스트가 소스를 흉내내지 않게).
+   2026-10-31 부터 지난 날짜의 미완료는 오늘로 이월하지 않고 날짜를 비운다(그 카드로 돌아간다) ·
+   비운 것마다 히스토리 한 줄(「📆 하루 지나 날짜 비움」) · 알림 한 번. 이 테스트도 그 동작을 기준으로 바꿨다(2026-11-07).
+   남은 날짜 정리가 도착 순서와 상관없이 끝까지 되는지(2026-09-07 잠금 제거)는 그대로 본다. */
 const fs = require("fs");
 const SRC = fs.readFileSync(require("path").join(__dirname, "index.html"), "utf8");
 
@@ -28,11 +31,15 @@ function simulate(opt) {
   let lock = false;
   let deferSet = false;
   let setCalls = 0;
+  const hist = [], toasts = [];
   const ctx = {
     TODAY: today,
     projects: [],
     get tasks() { return tasks; },
     setTasks: function (fn) { setCalls++; if (deferSet) return; tasks = typeof fn === "function" ? fn(tasks) : fn; },
+    addHistItem: function (it) { hist.push(it); },
+    showT: function (msg) { toasts.push(msg); },
+    nowTime: function () { return "00:00"; },
   };
   const effect = makeEffect(ctx);
   let prev = null, runs = 0;
@@ -57,7 +64,7 @@ function simulate(opt) {
   }
   flush();
   for (const batch of arrivals) { tasks = tasks.concat(batch); flush(); }
-  return { tasks: tasks, runs: runs, setCalls: setCalls };
+  return { tasks: tasks, runs: runs, setCalls: setCalls, hist: hist, toasts: toasts };
 }
 
 /* 4) 판정 헬퍼 */
@@ -86,7 +93,8 @@ console.log("\n[1] 실측 재현 — 업무 15건이 4덩이로 나뉘어 도착
   const rest = [[T(4), T(5), T(6), T(7), T(8), T(9)], [T(10), T(11), T(12)], [T(13), T(14), T(15)]];
   const nw = simulate({ initial: first, arrivals: rest });
   ok("새 코드: 잔존 0", leftover(nw.tasks) === 0, "잔존 " + leftover(nw.tasks));
-  ok("새 코드: 15건 전부 오늘", nw.tasks.filter(function (t) { return t.planDate === TODAY; }).length === 15);
+  ok("새 코드: 15건 전부 날짜 비움", nw.tasks.filter(function (t) { return t.planDate === ""; }).length === 15);
+  ok("히스토리는 한 건에 한 줄(15줄)", nw.hist.length === 15 && nw.hist.every(function (h) { return /하루 지나 날짜 비움/.test(h.detail); }), nw.hist.length + "줄");
   const old = simulate({ initial: first, arrivals: rest, oldLock: true });
   ok("옛 코드는 실제로 흘린다(회귀 증명)", leftover(old.tasks) === 12, "잔존 " + leftover(old.tasks));
 }
@@ -106,7 +114,8 @@ console.log("\n[2] 이월 대상이 아닌 것은 안 건드린다");
   ok("미래 예약 유지", g(2).planDate === "2026-09-20");
   ok("완료 유지", g(3).planDate === "2026-09-04");
   ok("날짜 없음 유지", g(4).planDate === null);
-  ok("대상만 이월", g(5).planDate === TODAY);
+  ok("대상만 날짜 비움", g(5).planDate === "");
+  ok("히스토리도 대상만(1줄)", r.hist.length === 1, r.hist.length + "줄");
 }
 
 console.log("\n[3] 서브태스크도 늦게 도착하면 이월된다");
@@ -116,7 +125,8 @@ console.log("\n[3] 서브태스크도 늦게 도착하면 이월된다");
   const rt = T(3, { recurringId: "rt_x", planDate: null, subtasks: [{ id: "s4", status: "action", planDate: "2026-09-02" }] });
   const r = simulate({ initial: [p1], arrivals: [[p2], [rt]] });
   ok("잔존 0", leftover(r.tasks) === 0);
-  ok("s1·s2 이월", r.tasks[0].subtasks[0].planDate === TODAY && r.tasks[1].subtasks[0].planDate === TODAY);
+  ok("s1·s2 날짜 비움", r.tasks[0].subtasks[0].planDate === "" && r.tasks[1].subtasks[0].planDate === "");
+  ok("하위 히스토리 표시", r.hist.length === 2 && r.hist.every(function (h) { return /· 하위\)/.test(h.detail); }), r.hist.length + "줄");
   ok("완료 서브 유지", r.tasks[1].subtasks[1].planDate === "2026-09-02");
   ok("루틴 하위 서브 유지", r.tasks[2].subtasks[0].planDate === "2026-09-02");
 }

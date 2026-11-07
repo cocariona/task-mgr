@@ -7,7 +7,8 @@ const SRC = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
 /* 1) 그룹 구성 본문 추출 */
 const anchor = SRC.indexOf("const focusGroups = useMemo(() => {");
 if (anchor < 0) throw new Error("focusGroups 를 못 찾음");
-const endMark = "\n  }, [focusedTasks, focusedSubs]);";
+/* 2026-10-31 부터 하위 자리를 상위의 저장 순서(tasks)로 정한다 — 의존성에 tasks 가 붙었다(subDragReorder) */
+const endMark = "\n  }, [focusedTasks, focusedSubs, tasks]);";
 const end = SRC.indexOf(endMark, anchor);
 if (end < 0) throw new Error("focusGroups 끝을 못 찾음");
 const BODY = SRC.slice(SRC.indexOf("{", anchor + 30) + 1, end);
@@ -20,8 +21,9 @@ const skLine = SRC.slice(SRC.indexOf("const SK = ", sb), SRC.indexOf(";", SRC.in
 const { STATUSES, SK } = new Function(SRC.slice(sa, sb) + "\n" + skLine + "\nreturn { STATUSES, SK };")();
 if (!SK.length) throw new Error("SK 추출 실패");
 
-function makeGroups(focusedTasks, focusedSubs) {
-  const ctx = { SK, STATUSES, focusedTasks, focusedSubs };
+/* tasks = 앱의 저장 순서 전체. 주지 않으면 오늘 목록(focusedTasks)과 같다고 본다. */
+function makeGroups(focusedTasks, focusedSubs, tasks) {
+  const ctx = { SK, STATUSES, focusedTasks, focusedSubs, tasks: tasks || focusedTasks };
   return new Function("ctx", "with (ctx) {\n" + BODY + "\n}")(ctx);
 }
 
@@ -66,6 +68,14 @@ console.log("\n[4] 상위가 오늘 목록에 없으면 종전대로 뒤에");
   const orphan = T("X");
   const gs = makeGroups([T("A")], [S("o", orphan)]);
   ok("맨 뒤에 붙음", flat(gs) === "action:TA,so", flat(gs));
+  ok("상위 아래 아님 표시", flagOf(gs, "so") === false);
+}
+
+console.log("\n[4-b] 상위가 오늘 목록에 없으면 그 상위의 저장 순서 자리에 선다(2026-10-31)");
+{
+  const a = T("A"), x = T("X"), b = T("B");
+  const gs = makeGroups([a, b], [S("o", x)], [a, x, b]);
+  ok("A 와 B 사이", flat(gs) === "action:TA,so,TB", flat(gs));
   ok("상위 아래 아님 표시", flagOf(gs, "so") === false);
 }
 
